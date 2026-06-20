@@ -77,6 +77,11 @@ static cl::opt<unsigned> TaokariMirSubProb(
     "taokari-mir-sub-prob", cl::init(100), cl::Hidden,
     cl::desc("Percent of MIR-enabled functions receiving MIR substitution."));
 
+static cl::opt<unsigned> TaokariMirSseProb(
+    "taokari-mir-sse-prob", cl::init(100), cl::Hidden,
+    cl::desc("Percent of MIR-SSE-enabled functions receiving body-walking "
+             "anti-microcode-lift guards."));
+
 struct MirSubpasses {
   bool Marker = false;
   bool DirtyBytes = false;
@@ -85,10 +90,11 @@ struct MirSubpasses {
   bool Unmodelled = false;
   bool FakeBounds = false;
   bool FunctionSplit = false;
+  bool Sse = false; // Fortress-only body-walking anti-microcode-lift pass.
 
   bool any() const {
     return Marker || DirtyBytes || Junk || Substitution || Unmodelled ||
-           FakeBounds || FunctionSplit;
+           FakeBounds || FunctionSplit || Sse;
   }
   void enableAll() {
     Marker = true;
@@ -139,6 +145,12 @@ static MirSubpasses parseMirFlag() {
     if (Token == "unmodelled" || Token == "unmodeled" ||
         Token == "privileged" || Token == "simd") {
       Passes.Unmodelled = true;
+      SawKnownToken = true;
+      continue;
+    }
+    if (Token == "sse" || Token == "simdbody" || Token == "anti-lift" ||
+        Token == "antilift") {
+      Passes.Sse = true;
       SawKnownToken = true;
       continue;
     }
@@ -243,6 +255,8 @@ static MirSubpasses resolveSubpasses(const Function &F) {
     if (annotationHas(A, "+mir:unmodelled") ||
         annotationHas(A, "+mir:unmodeled"))
       Passes.Unmodelled = true;
+    if (annotationHas(A, "+mir:sse"))
+      Passes.Sse = true;
     if (annotationHas(A, "+mir:fakebounds") ||
         annotationHas(A, "+mir:fakeboundaries") ||
         annotationHas(A, "+mir:fakeprologue") ||
@@ -262,6 +276,8 @@ static MirSubpasses resolveSubpasses(const Function &F) {
     if (annotationHas(A, "-mir:unmodelled") ||
         annotationHas(A, "-mir:unmodeled"))
       Passes.Unmodelled = false;
+    if (annotationHas(A, "-mir:sse"))
+      Passes.Sse = false;
     if (annotationHas(A, "-mir:fakebounds") ||
         annotationHas(A, "-mir:fakeboundaries") ||
         annotationHas(A, "-mir:fakeprologue") ||
@@ -287,6 +303,7 @@ static MirSubpasses resolveSubpasses(const Function &F) {
   Passes.DirtyBytes &= stablePercentHit(F, "dirtybytes", TaokariMirDirtyProb);
   Passes.Junk &= stablePercentHit(F, "junk", TaokariMirJunkProb);
   Passes.Substitution &= stablePercentHit(F, "sub", TaokariMirSubProb);
+  Passes.Sse &= stablePercentHit(F, "sse", TaokariMirSseProb);
   return Passes;
 }
 
@@ -326,6 +343,84 @@ static MachineBasicBlock *splitEntryBlock(MachineFunction &MF,
   insertSideEffectAsm(EntryMBB, EntryMBB.end(), TII, ".byte 0x9c,0x9d");
   TII.insertUnconditionalBranch(EntryMBB, BodyMBB, DebugLoc());
   return BodyMBB;
+}
+
+// Fortress `+mir:sse` body-walking anti-microcode-lift guard.
+//
+// The byte blob below is a NON-FOLDABLE opaque-true predicate whose dead arm
+// contains the exact SSE opcodes Hex-Rays models cleanly for the SSE string
+// weakness (psrldq / pcmpeqb / pmovmskb). Decoded:
+//
+//     pushfq                         ; preserve RFLAGS
+//     push rax ; push rcx            ; preserve scratch GPRs
+//     rdrand eax           ; 0F C7 F0 -- genuine runtime entropy
+//     lea ecx, [rax+1]     ; 8D 48 01
+//     imul eax, ecx        ; 0F AF C1 -- eax = rax*(rax+1), algebraically even
+//     test al, 1           ; A8 01    -- low bit always 0
+//     je +13               ; 74 0D    -- always taken, NOT statically foldable
+//       psrldq xmm0, 7     ; 66 0F 73 D8 07  (= _mm_srli_si128, the complaint)
+//       pcmpeqb xmm0,xmm0  ; 66 0F 74 C0      (= _mm_cmpeq_epi8)
+//       pmovmskb eax,xmm0  ; 66 0F D7 C0      (= _mm_movemask_epi8)
+//     pop rcx ; pop rax ; popfq      ; restore scratch + flags
+//
+// Why non-foldable: rdrand supplies a value no static analysis can predict,
+// and `x*(x+1) & 1 == 0` holds for ANY x (including rdrand's undefined-on-
+// CF=0 output), so semantics never change but the lifter cannot prove the
+// branch taken. This is the MIR-level analogue of the unfoldable
+// `makeUnfoldableTruePredicate` family in the IR OpaquePredicate library.
+//
+// The dead SSE bytes force a CFG-directed microcode lifter that scans into
+// the body to either include wrong dataflow or solve the rdrand-evenness
+// predicate to prune -- which it cannot. Fortress-only assumption: rdrand
+// is present (SSE2-class CPUs since Ivy Bridge all have it).
+static const char *const MirSseGuardBytes =
+    ".byte 0x9c,0x50,0x51,0x0f,0xc7,0xf0,0x8d,0x48,0x01,0x0f,0xaf,0xc1,"
+    "0xa8,0x01,0x74,0x0d,0x66,0x0f,0x73,0xd8,0x07,0x66,0x0f,0x74,0xc0,"
+    "0x66,0x0f,0xd7,0xc0,0x59,0x58,0x9d";
+
+// Scatter the +mir:sse nonce guard across the function BODY (not just entry).
+// This is the structural fix: the existing entry-only unmodelled blob is
+// isolated from the SSE body by push/pop framing and skipped by Hex-Rays'
+// CFG-directed microcode lifter. Body scattering puts the noise where the
+// lifter actually operates.
+//
+// Eligibility (post-RA-safe): insert at the first non-PHI instruction of
+// every basic block except:
+//   * the entry (already covered by the entry-blob block above, and touching
+//     it here could interfere with prologue-anchored live-ins);
+//   * EH pads / landing pads (isEhScope / isEHPad) -- their first instrs are
+//     constrained by the unwind tables and must not move;
+//   * empty blocks or blocks containing only PHIs (nothing to anchor to);
+//   * beyond a per-function block budget (default 8) to bound binary bloat --
+//     a handful of well-placed guards already defeats the lifter.
+static void scatterSseGuards(MachineFunction &MF, const TargetInstrInfo &TII) {
+  constexpr unsigned MaxGuardsPerFn = 8;
+  unsigned Placed = 0;
+  for (MachineBasicBlock &MBB : MF) {
+    if (Placed >= MaxGuardsPerFn)
+      break;
+    if (&MBB == &MF.front())
+      continue;
+    if (MBB.empty())
+      continue;
+    // Skip EH-related blocks: their first instructions are constrained by the
+    // unwind tables and the personality-fn funclet ABI, and moving them is
+    // unsafe post-RA. isEHPad covers landing/catch pads; isEHFuncletEntry
+    // covers funclet prologues; isEHScopeReturnBlock covers cleanup returns.
+    if (MBB.isEHPad() || MBB.isEHFuncletEntry() || MBB.isEHScopeEntry() ||
+        MBB.isEHScopeReturnBlock())
+      continue;
+    // Find the first non-PHI, non-debug insertion point.
+    MachineBasicBlock::iterator It = MBB.begin();
+    while (It != MBB.end() && (It->isPHI() || It->isDebugInstr()))
+      ++It;
+    if (It == MBB.end())
+      continue;
+    insertSideEffectAsm(MBB, It, TII, MirSseGuardBytes);
+    ++Placed;
+  }
+  LLVM_DEBUG(dbgs() << "taokari-mir: scattered " << Placed
+                    << " +mir:sse guard(s) in " << MF.getName() << "\n");
 }
 
 // Level 1 transform: insert one semantically-neutral marker at the entry of
@@ -394,6 +489,13 @@ bool TaokariMachineObf::run(MachineFunction &MF) {
   if (Passes.Marker)
     insertSideEffectAsm(*InsertMBB, InsertMBB->begin(), *TII,
                         ".byte 0x48,0x8d,0x40,0x00");
+
+  // Fortress `+mir:sse`: body-walking anti-microcode-lift. Distinct from the
+  // entry-only Unmodelled blob -- scatters non-foldable rdrand-seeded guards
+  // with modeled-SSE dead bytes across the function body where the Hex-Rays
+  // microcode lifter actually operates.
+  if (Passes.Sse)
+    scatterSseGuards(MF, *TII);
 
   LLVM_DEBUG(dbgs() << "taokari-mir: inserted MIR obfuscation in "
                     << MF.getName() << "\n");
