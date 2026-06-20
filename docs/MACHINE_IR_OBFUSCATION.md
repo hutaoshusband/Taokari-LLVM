@@ -258,6 +258,8 @@ Hex-Rays before/after snapshot:
 - the verifier uses `TAOKARI_IDA` when set, otherwise the local IDA install.
 - `--require-ida92-d810` turns the smoke test into the exact lab gate and fails
   unless IDA reports kernel version 9.2 and D810 is visible to IDAPython.
+- `--require-function-confusion` gates the final DoD shape: the protected
+  export must stop being recognized as a function or must fail decompilation.
 
 `testing/scripts/verify_machine_obf_l3_cross_pass.py` checks cross-pass
 integration:

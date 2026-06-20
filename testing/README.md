@@ -100,7 +100,7 @@ decompiler noise.
 For the exact IDA 9.2 + D810 lab gate:
 
 ```powershell
-python testing\scripts\verify_machine_obf_l3_ida_snapshot.py --require-ida92-d810
+python testing\scripts\verify_machine_obf_l3_ida_snapshot.py --require-ida92-d810 --require-function-confusion
 ```
 
 Run the MIR + IR cross-pass gate:

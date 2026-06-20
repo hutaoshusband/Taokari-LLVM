@@ -168,7 +168,12 @@ def require_ida92_d810(snapshots: list[dict]) -> None:
         raise SystemExit("strict IDA gate requires D810 plugin visible to IDAPython")
 
 
-def run_checks(tmp: Path, require_exact_lab: bool) -> int:
+def require_function_confusion(obf_func: dict) -> None:
+    if obf_func.get("func") and not obf_func.get("error"):
+        raise SystemExit("strict function-confusion gate requires IDA function recognition or decompilation to fail")
+
+
+def run_checks(tmp: Path, require_exact_lab: bool, require_confusion: bool) -> int:
     ida = ida_path()
     if not ida.exists():
         print(f"missing IDA: {ida} (set TAOKARI_IDA)", file=sys.stderr)
@@ -194,8 +199,14 @@ def run_checks(tmp: Path, require_exact_lab: bool) -> int:
     obf_func = obf_snap.get("guarded") or {}
     if not plain_snap.get("hexrays") or not obf_snap.get("hexrays"):
         raise SystemExit("Hex-Rays unavailable in IDA snapshot")
-    if not plain_func.get("func") or not obf_func.get("func"):
-        raise SystemExit("guarded export was not recognized as a function")
+    if not plain_func.get("func"):
+        raise SystemExit("plain guarded export was not recognized as a function")
+    if require_confusion:
+        require_function_confusion(obf_func)
+        print("verify_machine_obf_l3_ida_snapshot: ok function-confusion")
+        return 0
+    if not obf_func.get("func"):
+        raise SystemExit("obfuscated guarded export was not recognized as a function")
 
     plain_pseudo = plain_func.get("pseudocode", "")
     obf_pseudo = obf_func.get("pseudocode", "")
@@ -225,13 +236,18 @@ def main() -> int:
         action="store_true",
         help="fail unless the snapshot ran under IDA 9.2 with D810 visible to IDAPython",
     )
+    parser.add_argument(
+        "--require-function-confusion",
+        action="store_true",
+        help="fail unless IDA cannot recognize or decompile the protected function",
+    )
     args = parser.parse_args()
     if not CLANG.exists():
         print(f"missing tool: {CLANG}", file=sys.stderr)
         return 2
     tmp = Path(tempfile.mkdtemp(prefix="taokari-mir-l3-ida-"))
     try:
-        return run_checks(tmp, args.require_ida92_d810)
+        return run_checks(tmp, args.require_ida92_d810, args.require_function_confusion)
     finally:
         if args.keep:
             print(f"kept temp dir: {tmp}")
