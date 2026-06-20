@@ -38,6 +38,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
@@ -170,6 +171,8 @@ bool TaokariMachineObf::run(MachineFunction &MF) {
 
   const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
   if (!TII)
+    return false;
+  if (!MF.getTarget().getTargetTriple().isX86_64())
     return false;
 
   // INLINEASM operand encoding in LLVM 22 (see FastIsel::lowerCallTo):

@@ -137,13 +137,16 @@ def compile_exe(
 
 
 def compile_obj(
-    src: Path, out: Path, *, mir_flag: bool
+    src: Path, out: Path, *, mir_flag: bool, extra_flags: list[str] | None = None
 ) -> None:
     # Compile to a relocatable object (.obj). The object retains full symbol
     # names, so llvm-objdump -d prints "<name>:" headers we can slice on.
     # This is the direct output of the codegen pipeline, so it is the most
     # faithful place to look for the MIR pass's entry nop.
-    cmd = [str(CLANG), str(src), "-std=c++17", "-O1", "-c", "-o", str(out)]
+    cmd = [str(CLANG), str(src), "-std=c++17", "-O1"]
+    if extra_flags:
+        cmd += extra_flags
+    cmd += ["-c", "-o", str(out)]
     if mir_flag:
         cmd += ["-mllvm", "-taokari-mir=1"]
     must(run_vs(cmd, src.parent), f"compile {out.name}")
@@ -171,13 +174,14 @@ def function_body(disasm: str, func: str) -> str:
     blank-line-delimited symbol or end of file."""
     # llvm-objdump prints: 0000000... <name>:\n  ... instructions ...\n\n
     # Match from the "<func>:" header to the next blank line.
-    pat = re.compile(
-        r"<" + re.escape(func) + r">:\n(.*?)(?:\n\n|\Z)", re.DOTALL
-    )
-    m = pat.search(disasm)
-    if not m:
-        raise SystemExit(f"could not locate <{func}> in disassembly")
-    return m.group(1)
+    for name in (func, "_" + func):
+        pat = re.compile(
+            r"<" + re.escape(name) + r">:\n(.*?)(?:\n\n|\Z)", re.DOTALL
+        )
+        m = pat.search(disasm)
+        if m:
+            return m.group(1)
+    raise SystemExit(f"could not locate <{func}> in disassembly")
 
 
 def entry_has_marker(body: str) -> bool:
@@ -219,6 +223,7 @@ def run_checks(tmp: Path) -> int:
     obf = tmp / "obf.exe"
     obj_no_flag = tmp / "no_flag.obj"
     obj_with_flag = tmp / "with_flag.obj"
+    obj_x86_32 = tmp / "x86_32.obj"
     src.write_text(SOURCE, encoding="utf-8")
 
     # --- Functional correctness: linked executables must agree on stdout. ---
@@ -239,8 +244,10 @@ def run_checks(tmp: Path) -> int:
     # --- Gate checks: disassemble object files (which keep symbols). ---
     compile_obj(src, obj_no_flag, mir_flag=False)
     compile_obj(src, obj_with_flag, mir_flag=True)
+    compile_obj(src, obj_x86_32, mir_flag=True, extra_flags=["-m32"])
     no_flag_dis = disassemble(obj_no_flag)
     with_flag_dis = disassemble(obj_with_flag)
+    x86_32_dis = disassemble(obj_x86_32)
 
     def marker(disasm: str, fn: str) -> bool:
         return entry_has_marker(function_body(disasm, fn))
@@ -282,6 +289,15 @@ def run_checks(tmp: Path) -> int:
             "with_flag build: flag_sum did NOT get the marker despite the "
             "global flag being on -- flag opt-in gate is broken"
         )
+
+    # Axis 4 -- 32-bit x86 safety: the Level-1 marker bytes are x86-64-only.
+    # On i386, 0x48 decodes as "dec eax", so the pass must no-op there.
+    for fn in ("annotated_sum", "plain_sum", "flag_sum"):
+        if marker(x86_32_dis, fn):
+            failures.append(
+                f"32-bit x86 build: {fn} got the x86-64 marker -- pass must "
+                "skip non-x86-64 targets"
+            )
 
     if failures:
         for f in failures:
