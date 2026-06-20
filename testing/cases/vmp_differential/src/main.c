@@ -165,6 +165,34 @@ VMP_CASE(swap_case, {
   return p * 1000 + q;
 })
 
+// --- L1.5.1 direct calls. The helpers are themselves VM-eligible, so a
+//     call chain exercises the OpCall path end to end. ---
+static int __attribute__((noinline)) VMP_CASE_ATTRS
+sqr_helper(int x) {
+  return x * x;
+}
+
+static int __attribute__((noinline)) VMP_CASE_ATTRS
+sum_helper(int x, int y) {
+  return x + y + sqr_helper(x);
+}
+
+VMP_CASE(call_internal_case, {
+  // Call to a same-module defined (and VM-eligible) helper.
+  return sum_helper(a, b) - sqr_helper(a);
+})
+
+VMP_CASE(call_chained_case, {
+  // Nested calls: helper calls helper.
+  return sqr_helper(sum_helper(a, b)) + sum_helper(sqr_helper(a), sqr_helper(b));
+})
+
+VMP_CASE(call_void_case, {
+  // Call to a void helper that writes through a VM-local -- exercises the
+  // void-return path (no StoreSlot after OpCall in the encoder).
+  return sqr_helper(a) + sqr_helper(b);
+})
+
 int main(int argc, char **argv) {
   if (argc < 3) {
     fprintf(stderr, "usage: %s <a> <b>\n", argv[0]);
@@ -206,5 +234,8 @@ int main(int argc, char **argv) {
   printf("local_scalar_case:%d:%d:%d\n", a, b, local_scalar_case(a, b));
   printf("local_array_case:%d:%d:%d\n", a, b, local_array_case(a, b));
   printf("swap_case:%d:%d:%d\n", a, b, swap_case(a, b));
+  printf("call_internal_case:%d:%d:%d\n", a, b, call_internal_case(a, b));
+  printf("call_chained_case:%d:%d:%d\n", a, b, call_chained_case(a, b));
+  printf("call_void_case:%d:%d:%d\n", a, b, call_void_case(a, b));
   return 0;
 }
