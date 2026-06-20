@@ -34,6 +34,7 @@
 #include "llvm/CodeGen/MIRYamlMapping.h"
 #include "llvm/CodeGen/MachineScheduler.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/CodeGen/TaokariMachineObf.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/DataLayout.h"
@@ -554,6 +555,13 @@ void X86PassConfig::addPreSched2() {
 }
 
 void X86PassConfig::addPreEmitPass() {
+  // Taokari Machine IR (backend) obfuscation runs first in pre-emit, so its
+  // emitted code reaches the assembler unchanged and is invisible to every
+  // IR-level tool. Off unless -mllvm -taokari-mir=<passes> or a `mir`
+  // annotation opts a function in; the pass itself no-ops when the gate says
+  // skip.
+  addPass(createTaokariMachineObfLegacyPass());
+
   if (getOptLevel() != CodeGenOptLevel::None) {
     addPass(new X86ExecutionDomainFix());
     addPass(createBreakFalseDeps());

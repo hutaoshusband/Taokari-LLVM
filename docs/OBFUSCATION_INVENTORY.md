@@ -20,6 +20,18 @@ Current pass surface:
 - `ConstantFPEncryption.cpp` - floating-point constant encryption.
 - `MicrosoftRTTIEraser.cpp` - MS C++ RTTI name erasure.
 
+A second obfuscation component runs below the IR layer, in the codegen
+pipeline (after register allocation and scheduling) — invisible to IR-level
+tools and to the Hex-Rays microcode lifter in clean form. See
+`docs/MACHINE_IR_OBFUSCATION.md`:
+
+- `lib/CodeGen/TaokariMachineObf/TaokariMachineObf.cpp` - MachineFunctionPass
+  scheduled via `X86PassConfig::addPreEmitPass()`, gated by
+  `-mllvm -taokari-mir=<passes>` and the `mir` annotation. Level 1 is the
+  infrastructure (flag, annotation reader, per-function gate, pipeline hook);
+  the real transforms (dirty bytes, junk instructions, machine instruction
+  substitution) are Level 2.
+
 Strong base points:
 
 - The obfuscator is integrated into LLVM's normal pass pipeline instead of a loose plugin.

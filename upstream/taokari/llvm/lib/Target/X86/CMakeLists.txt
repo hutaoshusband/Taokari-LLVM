@@ -110,6 +110,7 @@ add_llvm_target(X86CodeGen ${sources}
   Scalar
   SelectionDAG
   Support
+  TaokariMachineObf
   Target
   TargetParser
   TransformUtils

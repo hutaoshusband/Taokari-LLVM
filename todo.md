@@ -978,3 +978,61 @@ The final identity should be:
 * Hard to fingerprint
 * Hard to patch
 * Still testable and maintainable
+
+---
+
+# 21. Machine IR (CodeGen) Obfuscation
+
+Current status: Level 1 infrastructure done.
+This is the layer categorically absent from earlier sections — every other
+section runs on LLVM IR and is therefore visible to IR-level tools and to the
+Hex-Rays microcode lifter in clean form. D810's default rule sets recognise
+and collapse classic OLLVM-class IR patterns; the MIR layer survives because
+it runs in the codegen pipeline, after register allocation and scheduling, so
+its output reaches the binary below the point Hex-Rays lifts from. See
+`docs/MACHINE_IR_OBFUSCATION.md`.
+
+## Level 1 — Infrastructure
+
+* [x] Add `TaokariMachineObf` directory under `llvm/lib/CodeGen/`
+* [x] Add `MachineFunctionPass` base helper (dual legacy + new-PM, mirroring `lib/CodeGen/FEntryInserter.cpp`)
+* [x] Add X86 `TargetPassConfig` hook in `addPreEmitPass()`
+* [x] Add `-mllvm -taokari-mir=<passes>` flag
+* [x] Add annotation: `mir`
+* [x] Add per-function enable/disable (`+mir` opt-in, `-mir` opt-out)
+* [x] Add smoke test: pass runs, binary still executes correctly (`testing/scripts/verify_machine_obf_level1.py`)
+* [x] Document MIR pass registration for legacy PM (`docs/MACHINE_IR_OBFUSCATION.md`)
+
+**Definition of done for L1:**
+The MIR pass is scheduled in the X86 codegen pipeline, gated by the flag and
+the annotation, emits a semantically-neutral marker that survives to the
+binary, and a no-op on program behavior is verified end to end. The full
+obfuscation regression matrix stays green (57 PASS / 0 FAIL).
+
+## Level 2 — Core MIR Passes
+
+* [ ] Parse the `-taokari-mir=<passes>` comma-list into individual sub-passes
+* [ ] Add dirty bytes insertion (anti-disassembly)
+* [ ] Add junk instructions with real side effects (anti-dataflow)
+* [ ] Add machine-level instruction substitution (anti-microcode-lift, e.g. add -> lea)
+* [ ] Add opaque predicate engine at MIR level for the dirty-bytes guard
+* [ ] Add per-pass probability
+* [ ] Add config keys per MIR sub-pass
+* [ ] Add annotation: per-sub-pass (`mir:dirtybytes`, etc.)
+* [ ] Add correctness tests for each sub-pass
+* [ ] Add binary-level survival tests (not stripped by AsmPrinter / peephole)
+
+## Level 3 — Fortress MIR
+
+* [ ] Add function splitting / boundary corruption (anti-function-recognition)
+* [ ] Add fake prologue / epilogue byte patterns between real functions
+* [ ] Add unmodelled instruction emission (anti-microcode-lift, Fortress only)
+* [ ] Add cross-pass integration with flattening / indirect-branch
+* [ ] Add decompiler snapshot tests (Hex-Rays output before/after)
+* [ ] Add CFG fragmentation metric
+* [ ] Add performance budget for the Fortress profile
+
+**Definition of done for L3:**
+A protected function should produce garbage microcode for Hex-Rays and should
+not be cleanly liftable without emulation. The protection must survive D810's
+default rule sets because it is below the layer D810 operates on.
