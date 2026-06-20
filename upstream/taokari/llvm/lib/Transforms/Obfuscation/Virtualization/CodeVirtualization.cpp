@@ -58,6 +58,13 @@ enum Opcode : int64_t {
   OpUDiv = 25,
   OpSRem = 26,
   OpURem = 27,
+  // ponytail: L1.5.1 unsigned compares. Operands stay in canonical zext form;
+  // unsigned comparison is width-agnostic, so these carry no VmTy immediate
+  // (like EQ/NE).
+  OpCmpUgt = 28,
+  OpCmpUlt = 29,
+  OpCmpUge = 30,
+  OpCmpUle = 31,
 };
 
 // ponytail: How many operand-stack pops and bytecode immediates a handler
@@ -217,6 +224,10 @@ struct CodeVirtualization : public ModulePass {
           case CmpInst::ICMP_SLT:
           case CmpInst::ICMP_SGE:
           case CmpInst::ICMP_SLE:
+          case CmpInst::ICMP_UGT:
+          case CmpInst::ICMP_ULT:
+          case CmpInst::ICMP_UGE:
+          case CmpInst::ICMP_ULE:
             break;
           default:
             return true;
@@ -390,6 +401,20 @@ struct CodeVirtualization : public ModulePass {
             P.Words.push_back(OpCmpSle);
             P.Words.push_back(packVmTy(OperandTy));
             break;
+          // ponytail: unsigned compares. Operands are already canonical zext;
+          // unsigned comparison needs no width info and no immediate.
+          case CmpInst::ICMP_UGT:
+            P.Words.push_back(OpCmpUgt);
+            break;
+          case CmpInst::ICMP_ULT:
+            P.Words.push_back(OpCmpUlt);
+            break;
+          case CmpInst::ICMP_UGE:
+            P.Words.push_back(OpCmpUge);
+            break;
+          case CmpInst::ICMP_ULE:
+            P.Words.push_back(OpCmpUle);
+            break;
           default:
             return false;
           }
@@ -469,6 +494,10 @@ struct CodeVirtualization : public ModulePass {
     case OpCmpSlt:
     case OpCmpSge:
     case OpCmpSle:
+    case OpCmpUgt:
+    case OpCmpUlt:
+    case OpCmpUge:
+    case OpCmpUle:
     case OpMul:
     case OpAnd:
     case OpOr:
@@ -770,6 +799,12 @@ struct CodeVirtualization : public ModulePass {
     addCmp(OpCmpSlt, "cmpslt", CmpInst::ICMP_SLT, /*Signed=*/true);
     addCmp(OpCmpSge, "cmpsge", CmpInst::ICMP_SGE, /*Signed=*/true);
     addCmp(OpCmpSle, "cmpsle", CmpInst::ICMP_SLE, /*Signed=*/true);
+    // ponytail: unsigned compares. Operands stay canonical zext; unsigned
+    // ICmp is width-agnostic, no immediate, no sign-extend.
+    addCmp(OpCmpUgt, "cmpugt", CmpInst::ICMP_UGT, /*Signed=*/false);
+    addCmp(OpCmpUlt, "cmpult", CmpInst::ICMP_ULT, /*Signed=*/false);
+    addCmp(OpCmpUge, "cmpuge", CmpInst::ICMP_UGE, /*Signed=*/false);
+    addCmp(OpCmpUle, "cmpule", CmpInst::ICMP_ULE, /*Signed=*/false);
 
     H.push_back({OpSelect, "select", shapeOf(OpSelect),
                  [this, &C](IRBuilder<> &B) {

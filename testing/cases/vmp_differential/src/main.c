@@ -57,6 +57,12 @@ VMP_CASE(cmpslt_case, { return (a < b); })
 VMP_CASE(cmpsge_case, { return (a >= b); })
 VMP_CASE(cmpsle_case, { return (a <= b); })
 
+// --- L1.5.1 unsigned compares. ---
+VMP_CASE(cmpugt_case, { return ((unsigned int)a > (unsigned int)b); })
+VMP_CASE(cmpult_case, { return ((unsigned int)a < (unsigned int)b); })
+VMP_CASE(cmpuge_case, { return ((unsigned int)a >= (unsigned int)b); })
+VMP_CASE(cmpule_case, { return ((unsigned int)a <= (unsigned int)b); })
+
 // --- select ---
 VMP_CASE(select_case, { return (a > b) ? a + 7 : b - 3; })
 
@@ -105,6 +111,10 @@ int main(int argc, char **argv) {
   printf("cmpslt_case:%d:%d:%d\n",  a, b, cmpslt_case(a, b));
   printf("cmpsge_case:%d:%d:%d\n",  a, b, cmpsge_case(a, b));
   printf("cmpsle_case:%d:%d:%d\n",  a, b, cmpsle_case(a, b));
+  printf("cmpugt_case:%d:%d:%d\n",  a, b, cmpugt_case(a, b));
+  printf("cmpult_case:%d:%d:%d\n",  a, b, cmpult_case(a, b));
+  printf("cmpuge_case:%d:%d:%d\n",  a, b, cmpuge_case(a, b));
+  printf("cmpule_case:%d:%d:%d\n",  a, b, cmpule_case(a, b));
   printf("select_case:%d:%d:%d\n",  a, b, select_case(a, b));
   printf("branch_case:%d:%d:%d\n",  a, b, branch_case(a, b));
   printf("mixed_case:%d:%d:%d\n",   a, b, mixed_case(a, b));
