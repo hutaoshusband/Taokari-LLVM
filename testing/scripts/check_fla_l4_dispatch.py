@@ -57,6 +57,7 @@ def main() -> int:
         assert "switch i" not in ir, "level-4 dispatcher still emits LLVM switch"
         assert "br i1" in ir, "level-4 compare/branch dispatcher missing"
         assert "switchBucket" in ir, "level-4 bucket dispatcher missing"
+        assert ir.count("switchHit") >= 20, "level-4 sparse/fake case density too low"
 
         check(run([str(CLANG), str(SOURCE), *FLAGS, "-o", str(exe)]), "compile exe")
         result = run([str(exe)])

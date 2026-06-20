@@ -456,11 +456,23 @@ bool Flattening::flatten(Function *f) {
     DispatchCases.push_back({CaseVal[bb], bb});
   }
 
-  const size_t fakeCaseCount = std::max<size_t>(1, origBB.size() / 2);
+  constexpr size_t DispatchBucketCount = 4;
+  const uint64_t dispatchBucketSalt = randWord();
+  auto forceDispatchBucket = [&](uint64_t value, uint64_t bucket) {
+    return (value & ~(DispatchBucketCount - 1)) |
+           ((bucket ^ dispatchBucketSalt) & (DispatchBucketCount - 1));
+  };
+
+  const size_t fakeCaseCount =
+      flaLevel >= 4 ? std::max<size_t>(origBB.size(), 4)
+                    : std::max<size_t>(1, origBB.size() / 2);
   for (size_t i = 0; i < fakeCaseCount; ++i) {
     uint64_t v;
+    const uint64_t bucket =
+        (CaseVal[origBB[i % origBB.size()]]->getLimitedValue() ^
+         dispatchBucketSalt) & (DispatchBucketCount - 1);
     do {
-      v = randWord();
+      v = flaLevel >= 4 ? forceDispatchBucket(randWord(), bucket) : randWord();
     } while (v == 0 || UsedCases.count(v));
     UsedCases.insert(v);
     DispatchCases.push_back({ConstantInt::get(IntTy, v), fakeCaseTarget});
@@ -468,8 +480,8 @@ bool Flattening::flatten(Function *f) {
 
   auto emitNoJumpTableDispatcher =
       [&](const SmallVectorImpl<std::pair<ConstantInt *, BasicBlock *>> &Cases) {
-    constexpr size_t BucketCount = 4;
-    const uint64_t bucketSalt = randWord();
+    constexpr size_t BucketCount = DispatchBucketCount;
+    const uint64_t bucketSalt = dispatchBucketSalt;
     SmallVector<std::pair<ConstantInt *, BasicBlock *>, 16> Buckets[BucketCount];
     SmallVector<size_t, BucketCount> LiveBuckets;
 

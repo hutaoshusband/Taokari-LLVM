@@ -108,7 +108,7 @@ Static analysis should see fake paths, fake states and misleading edges.
 
 * [x] Add no-jump-table dispatcher lowering mode
 * [x] Add split two-stage dispatcher buckets
-* [ ] Add sparse/colliding fake case layout
+* [x] Add sparse/colliding fake case layout
 * [ ] Add optional `indirectbr`-backed dispatcher
 * [ ] Add IDA switch-recovery regression check
 
