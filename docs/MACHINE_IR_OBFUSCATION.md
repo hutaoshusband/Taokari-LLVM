@@ -226,6 +226,9 @@ integration:
 - the final object still contains all requested MIR byte signatures after the
   IR passes run.
 
+`testing/scripts/verify_machine_obf_l3_aarch64_plan.py` checks the tracked
+AArch64 parity plan in `docs/MACHINE_IR_AARCH64_PARITY.md`.
+
 ## Level 3 roadmap (backlog)
 
 The remaining MIR transforms that attack Hex-Rays function recovery, per the
@@ -242,5 +245,7 @@ IDA-Pro research doc §A Level 3:
   emission survives alongside IR flattening, BCF and indirect branches.
 - **Budget gate** — `verify_machine_obf_l3_budget.py` blocks pathological
   compile-time and binary-size growth while Fortress MIR expands.
+- **AArch64 parity plan** — `docs/MACHINE_IR_AARCH64_PARITY.md` defines the
+  target-native port sequence and safety gates.
 
 These remain gated future work, not part of the current Level 2 pass.

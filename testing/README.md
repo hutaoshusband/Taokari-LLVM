@@ -77,3 +77,12 @@ python testing\scripts\verify_machine_obf_l3_cross_pass.py
 
 It checks that MIR `dirtybytes,junk,sub` survives with IR flattening, BCF and
 indirect-branch obfuscation enabled.
+
+Run the AArch64 MIR parity-plan gate:
+
+```powershell
+python testing\scripts\verify_machine_obf_l3_aarch64_plan.py
+```
+
+It checks that the AArch64 port plan names the target hook, sub-pass mapping,
+safety rules and verification gates.
