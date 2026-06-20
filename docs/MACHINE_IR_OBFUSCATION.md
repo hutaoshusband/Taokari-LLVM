@@ -89,6 +89,7 @@ a comma-separated list of MIR sub-passes:
 - `dirtybytes`
 - `junk`
 - `sub`
+- `unmodelled` (`unmodeled`, `privileged`, `simd` aliases)
 - `marker`
 - `1`, `on`, `all`, `max` for all Level 2 passes plus the legacy marker
 
@@ -106,7 +107,9 @@ Per-function control via the standard `llvm.global.annotations` mechanism
 - `+mir` — opt the function in, even when the global flag is off.
 - `-mir` — opt the function out, overriding a globally-on flag.
 - `+mir:dirtybytes`, `+mir:junk`, `+mir:sub` — opt into one MIR sub-pass.
-- `-mir:dirtybytes`, `-mir:junk`, `-mir:sub` — opt out of one MIR sub-pass.
+- `+mir:unmodelled` — opt into Fortress-only unmodelled instruction emission.
+- `-mir:dirtybytes`, `-mir:junk`, `-mir:sub`, `-mir:unmodelled` — opt out of
+  one MIR sub-pass.
 - Both on the same function — the pass logs a warning and skips (conservative).
 
 The annotation reader (`readMirAnnotations`) mirrors the IR-layer
@@ -165,6 +168,9 @@ and RFLAGS they touch while still surviving as side-effecting machine code.
 - **Substitution:** `pushfq; push rax; mov rax, rsp; lea rax, [rax+0x13]; sub
   rax, 0x13; pop rax; popfq`. The `lea` performs machine-level add-like address
   arithmetic below the IR simplifier.
+- **Unmodelled instructions:** explicit `unmodelled` opt-in emits a skipped
+  `vmcall` plus VEX-coded SIMD byte sequence. The guard preserves runtime
+  behavior; the bytes exist only to poison lifters that decode through them.
 
 ## Verification
 
@@ -204,6 +210,13 @@ dirty-byte guard:
 - the object contains the runtime stack-byte guard.
 - the old fixed `cmp rsp, rsp` guard is absent.
 
+`testing/scripts/verify_machine_obf_l3_unmodelled.py` checks the Fortress
+unmodelled-instruction gate:
+
+- plain and MIR-obfuscated executables produce identical stdout.
+- `+mir:unmodelled` emits the privileged/SIMD byte sequence.
+- the normal `dirtybytes,junk,sub` MIR set does not emit it.
+
 ## Level 3 roadmap (backlog)
 
 The remaining MIR transforms that attack Hex-Rays function recovery, per the
@@ -212,8 +225,8 @@ IDA-Pro research doc §A Level 3:
 - **Function splitting / boundary corruption** — split one function into a
   dispatcher plus shards reachable only via computed jumps, with fake
   prologue/epilogue byte patterns between real functions.
-- **Unmodelled instruction emission** — Fortress-profile only; emit
-  instructions the microcode lifter has no rule for.
+- **Unmodelled instruction emission** — explicit `unmodelled` opt-in emits
+  skipped privileged/SIMD bytes the microcode lifter may not model.
 - **Runtime-dependent dirty-byte guards** — dirty-byte branches depend on live
   architectural state instead of a fixed `cmp rsp, rsp` signature.
 - **Budget gate** — `verify_machine_obf_l3_budget.py` blocks pathological

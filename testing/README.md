@@ -59,3 +59,12 @@ python testing\scripts\verify_machine_obf_l3_dirty_guard.py
 
 It checks that dirty-byte emission uses the runtime stack-byte guard and no
 longer emits the old fixed `cmp rsp, rsp` guard.
+
+Run the unmodelled-instruction gate:
+
+```powershell
+python testing\scripts\verify_machine_obf_l3_unmodelled.py
+```
+
+It checks explicit `+mir:unmodelled` emission and proves the normal MIR set does
+not emit the privileged/SIMD bytes.

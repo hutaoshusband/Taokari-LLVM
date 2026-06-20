@@ -81,8 +81,11 @@ struct MirSubpasses {
   bool DirtyBytes = false;
   bool Junk = false;
   bool Substitution = false;
+  bool Unmodelled = false;
 
-  bool any() const { return Marker || DirtyBytes || Junk || Substitution; }
+  bool any() const {
+    return Marker || DirtyBytes || Junk || Substitution || Unmodelled;
+  }
   void enableAll() {
     Marker = true;
     DirtyBytes = true;
@@ -126,6 +129,12 @@ static MirSubpasses parseMirFlag() {
     }
     if (Token == "sub" || Token == "subst" || Token == "substitution") {
       Passes.Substitution = true;
+      SawKnownToken = true;
+      continue;
+    }
+    if (Token == "unmodelled" || Token == "unmodeled" ||
+        Token == "privileged" || Token == "simd") {
+      Passes.Unmodelled = true;
       SawKnownToken = true;
       continue;
     }
@@ -215,12 +224,18 @@ static MirSubpasses resolveSubpasses(const Function &F) {
       Passes.Junk = true;
     if (annotationHas(A, "+mir:sub"))
       Passes.Substitution = true;
+    if (annotationHas(A, "+mir:unmodelled") ||
+        annotationHas(A, "+mir:unmodeled"))
+      Passes.Unmodelled = true;
     if (annotationHas(A, "-mir:dirtybytes"))
       Passes.DirtyBytes = false;
     if (annotationHas(A, "-mir:junk"))
       Passes.Junk = false;
     if (annotationHas(A, "-mir:sub"))
       Passes.Substitution = false;
+    if (annotationHas(A, "-mir:unmodelled") ||
+        annotationHas(A, "-mir:unmodeled"))
+      Passes.Unmodelled = false;
   }
 
   if (EnableAll && DisableAll) {
@@ -303,6 +318,11 @@ bool TaokariMachineObf::run(MachineFunction &MF) {
                         ".byte 0x9c,0x50,0x8a,0x04,0x24,0x34,0xa7,0x34,"
                         "0xa7,0x3a,0x04,0x24,0x74,0x08,0x0f,0x0b,0xeb,"
                         "0xfe,0xcc,0xf1,0x0f,0x0b,0x58,0x9d");
+  if (Passes.Unmodelled)
+    insertSideEffectAsm(EntryMBB, EntryMBB.begin(), *TII,
+                        ".byte 0x9c,0x50,0x8a,0x04,0x24,0x34,0x3d,0x34,"
+                        "0x3d,0x3a,0x04,0x24,0x74,0x08,0x0f,0x01,0xc1,"
+                        "0xc4,0xe2,0x7d,0x18,0xc0,0x58,0x9d");
   if (Passes.Marker)
     insertSideEffectAsm(EntryMBB, EntryMBB.begin(), *TII,
                         ".byte 0x48,0x8d,0x40,0x00");
