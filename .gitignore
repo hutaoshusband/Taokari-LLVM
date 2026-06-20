@@ -1,5 +1,6 @@
 build/
 build-logs/
+artifacts/
 *.rar
 TODO.md
 testing/cases/*/build/
@@ -10,3 +11,4 @@ testing/ida_l3/
 testing/ida_l4/
 imgui.ini
 INFORMATION/private/
+xy_follow_guideline.md
