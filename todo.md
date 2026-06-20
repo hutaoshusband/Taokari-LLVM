@@ -347,9 +347,9 @@ Main weakness: plaintext decrypt status and predictable decrypt flow.
 * [x] Randomize key length
 * [x] Randomize decryptor shape
 * [x] Add position-dependent key mixing
-* [ ] Add optional local stack decrypt
-* [ ] Add optional heap decrypt
-* [ ] Add optional re-encrypt-after-use
+* [x] Add optional local stack decrypt
+* [x] Add optional heap decrypt
+* [x] Add optional re-encrypt-after-use
 
 ## Level 3 — Fortress StringEnc
 

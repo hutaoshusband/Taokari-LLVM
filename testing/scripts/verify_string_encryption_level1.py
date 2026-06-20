@@ -3,7 +3,8 @@
 Checks the existing StringEnc surface without touching the main test runner:
 UTF-8, UTF-16, and wide strings decrypt correctly; minStringLength/skipStrings
 leave harmless strings alone; status slots no longer use plain 0/1 sentinels;
-decryptors carry build nonce and position-dependent key mixing.
+decryptors carry build nonce and position-dependent key mixing; optional
+stack, heap, and re-encrypt-after-use modes emit their expected IR shapes.
 """
 from __future__ import annotations
 
@@ -113,7 +114,7 @@ def emit_ir(src: Path, out: Path, cfg: Path) -> str:
   return out.read_text(encoding="utf-8")
 
 
-def check_ir(ir: str) -> None:
+def check_ir(ir: str, *, require_global_status: bool = True) -> None:
   required = ["goron_decrypt_string_i8", "goron_decrypt_string_i16",
               "harmless", "tiny"]
   for needle in required:
@@ -127,7 +128,7 @@ def check_ir(ir: str) -> None:
       raise SystemExit(f"secret string leaked in IR: {needle}")
 
   status_values = re.findall(r"@dec_status_[^=]*=.*global i32 (-?\d+)", ir)
-  if not status_values:
+  if require_global_status and not status_values:
     raise SystemExit("no dec_status globals found")
   bad = [value for value in status_values if value in {"0", "1"}]
   if bad:
@@ -152,7 +153,24 @@ def check_ir(ir: str) -> None:
   if not all(needle in i8_body.group(0) for needle in ["lshr", "59", "17"]):
     raise SystemExit("i8 decryptor lacks nonce/position key mixing")
   if not all(needle in i16_body.group(0) for needle in ["lshr", "40503", "257"]):
-    raise SystemExit("i16 decryptor lacks nonce/position key mixing")
+      raise SystemExit("i16 decryptor lacks nonce/position key mixing")
+
+
+def check_optional_ir(ir: str, mode: str) -> None:
+  if mode == "stack":
+    if not re.search(r"alloca \[\d+ x i8\]", ir):
+      raise SystemExit("stack mode missing i8 alloca")
+    if not re.search(r"alloca \[\d+ x i16\]", ir):
+      raise SystemExit("stack mode missing i16 alloca")
+  elif mode == "heap":
+    if "@malloc" not in ir or "@free" not in ir:
+      raise SystemExit("heap mode missing malloc/free")
+  elif mode == "reencrypt":
+    required = ["goron_scrub_string_i8", "goron_scrub_string_i16",
+                "call void @goron_scrub_string"]
+    for needle in required:
+      if needle not in ir:
+        raise SystemExit(f"reencrypt mode missing {needle}")
 
 
 def decryptor_shape(ir: str) -> tuple[str, str]:
@@ -165,6 +183,18 @@ def decryptor_shape(ir: str) -> tuple[str, str]:
   return shapes[0], shapes[1]
 
 
+def write_cfg(path: Path, **extra: bool) -> None:
+    cfg = {
+        "cse": {
+            "enable": True,
+            "minStringLength": 5,
+            "skipStrings": ["harmless"],
+        }
+    }
+    cfg["cse"].update(extra)
+    path.write_text(json.dumps(cfg), encoding="utf-8")
+
+
 def run_checks(tmp: Path) -> int:
     src = tmp / "stringenc_level1.cpp"
     plain = tmp / "plain.exe"
@@ -172,13 +202,7 @@ def run_checks(tmp: Path) -> int:
     ll = tmp / "obf.ll"
     cfg = tmp / "stringenc.json"
     src.write_text(SOURCE, encoding="utf-8")
-    cfg.write_text(json.dumps({
-        "cse": {
-            "enable": True,
-            "minStringLength": 5,
-            "skipStrings": ["harmless"],
-        }
-    }), encoding="utf-8")
+    write_cfg(cfg)
 
     compile_exe(src, plain, None)
     compile_exe(src, obf, cfg)
@@ -200,6 +224,23 @@ def run_checks(tmp: Path) -> int:
         break
     if len(shapes) < 2:
       raise SystemExit("decryptor shape did not vary across builds")
+    for mode, extra in {
+        "stack": {"localStackDecrypt": True},
+        "heap": {"heapDecrypt": True},
+        "reencrypt": {"reencryptAfterUse": True},
+    }.items():
+      mode_cfg = tmp / f"{mode}.json"
+      mode_exe = tmp / f"{mode}.exe"
+      mode_ll = tmp / f"{mode}.ll"
+      write_cfg(mode_cfg, **extra)
+      compile_exe(src, mode_exe, mode_cfg)
+      mode_run = run([str(mode_exe)])
+      must(mode_run, f"{mode} run")
+      if mode_run.stdout != plain_run.stdout:
+        raise SystemExit(f"{mode} stdout mismatch: {mode_run.stdout!r}")
+      mode_ir = emit_ir(src, mode_ll, mode_cfg)
+      check_ir(mode_ir, require_global_status=(mode == "reencrypt"))
+      check_optional_ir(mode_ir, mode)
     print("string encryption verifier: ok")
     return 0
 

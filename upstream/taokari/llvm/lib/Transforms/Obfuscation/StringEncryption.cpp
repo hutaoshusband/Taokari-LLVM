@@ -67,6 +67,8 @@ struct StringEncryption : public ModulePass {
   GlobalVariable *EncryptedStringTable = nullptr;
   Function *SharedDecFuncI8 = nullptr;
   Function *SharedDecFuncI16 = nullptr;
+  Function *SharedScrubFuncI8 = nullptr;
+  Function *SharedScrubFuncI16 = nullptr;
   std::set<GlobalVariable *> MaybeDeadGlobalVars;
   uint32_t BuildNonce = 0;
 
@@ -109,6 +111,7 @@ struct StringEncryption : public ModulePass {
   void deleteUnusedGlobalVariable();
   static Function *buildSharedDecryptFunction(Module *M, bool IsUTF16,
                                               bool InvertBranchShape);
+  static Function *buildSharedScrubFunction(Module *M, bool IsUTF16);
   Function *buildInitFunction(Module *M, const CSUser *User);
   uint32_t getRandomStatusValue();
   uint8_t mixKey8(uint8_t Key, uint32_t KeyIndex, uint32_t Position,
@@ -243,6 +246,12 @@ bool StringEncryption::runOnModule(Module &M) {
   if (hasI16Strings)
     SharedDecFuncI16 =
         buildSharedDecryptFunction(&M, true, (BuildNonce & 2) != 0);
+  if (ArgsOptions->cseOpt()->stringReencryptAfterUse()) {
+    if (hasI8Strings)
+      SharedScrubFuncI8 = buildSharedScrubFunction(&M, false);
+    if (hasI16Strings)
+      SharedScrubFuncI16 = buildSharedScrubFunction(&M, true);
+  }
 
   for (CSPEntry *Entry : ConstantStringPool) {
     if (!Entry->IsUTF16) {
@@ -682,6 +691,75 @@ Function *StringEncryption::buildSharedDecryptFunction(Module *M, bool IsUTF16,
   return DecFunc;
 }
 
+Function *StringEncryption::buildSharedScrubFunction(Module *M, bool IsUTF16) {
+  LLVMContext &Ctx = M->getContext();
+  IRBuilder<> IRB(Ctx);
+
+  Type *PlainEltTy = IsUTF16 ? Type::getInt16Ty(Ctx) : Type::getInt8Ty(Ctx);
+  PointerType *PtrTy = PointerType::getUnqual(Ctx);
+  Type *I32Ty = Type::getInt32Ty(Ctx);
+  FunctionType *FuncTy = FunctionType::get(
+      Type::getVoidTy(Ctx), {PtrTy, PtrTy, I32Ty, I32Ty, PtrTy, I32Ty}, false);
+  Function *ScrubFunc = Function::Create(
+      FuncTy, GlobalValue::PrivateLinkage,
+      IsUTF16 ? "goron_scrub_string_i16" : "goron_scrub_string_i8", M);
+  ScrubFunc->addFnAttr(Attribute::NoInline);
+  ScrubFunc->addFnAttr(Attribute::OptimizeForSize);
+
+  auto ArgIt = ScrubFunc->arg_begin();
+  Argument *PlainString = ArgIt++;
+  Argument *Data = ArgIt++;
+  Argument *KeyElemSizeArg = ArgIt++;
+  Argument *DataSizeArg = ArgIt++;
+  Argument *DecStatusArg = ArgIt++;
+  Argument *PendingStatusArg = ArgIt;
+
+  PlainString->setName("plain_string");
+  Data->setName("data");
+  KeyElemSizeArg->setName("key_elem_size");
+  DataSizeArg->setName("data_size");
+  DecStatusArg->setName("dec_status");
+  PendingStatusArg->setName("pending_status");
+
+  BasicBlock *Enter = BasicBlock::Create(Ctx, "Enter", ScrubFunc);
+  BasicBlock *LoopBody = BasicBlock::Create(Ctx, "LoopBody", ScrubFunc);
+  BasicBlock *Exit = BasicBlock::Create(Ctx, "Exit", ScrubFunc);
+
+  IRB.SetInsertPoint(Enter);
+  Value *KeySizeBytesVal = IsUTF16 ? IRB.CreateShl(KeyElemSizeArg, 1)
+                                   : static_cast<Value *>(KeyElemSizeArg);
+  Value *EncPtr = IRB.CreateInBoundsGEP(IRB.getInt8Ty(), Data, KeySizeBytesVal);
+  IRB.CreateBr(LoopBody);
+
+  IRB.SetInsertPoint(LoopBody);
+  PHINode *LoopCounter = IRB.CreatePHI(IRB.getInt32Ty(), 2);
+  LoopCounter->addIncoming(IRB.getInt32(0), Enter);
+  Value *EncChar = nullptr;
+  if (!IsUTF16) {
+    Value *EncCharPtr =
+        IRB.CreateInBoundsGEP(IRB.getInt8Ty(), EncPtr, LoopCounter);
+    EncChar = IRB.CreateLoad(IRB.getInt8Ty(), EncCharPtr, true);
+  } else {
+    Value *IdxBytes = IRB.CreateShl(LoopCounter, 1);
+    Value *EncCharBytePtr =
+        IRB.CreateInBoundsGEP(IRB.getInt8Ty(), EncPtr, IdxBytes);
+    EncChar = IRB.CreateLoad(Type::getInt16Ty(Ctx), EncCharBytePtr, true);
+  }
+  Value *OutPtr =
+      IRB.CreateInBoundsGEP(PlainEltTy, PlainString, LoopCounter);
+  IRB.CreateStore(EncChar, OutPtr);
+  Value *NewCounter =
+      IRB.CreateAdd(LoopCounter, IRB.getInt32(1), "", true, true);
+  LoopCounter->addIncoming(NewCounter, LoopBody);
+  Value *Cond = IRB.CreateICmpEQ(NewCounter, DataSizeArg);
+  IRB.CreateCondBr(Cond, Exit, LoopBody);
+
+  IRB.SetInsertPoint(Exit);
+  IRB.CreateStore(PendingStatusArg, DecStatusArg);
+  IRB.CreateRetVoid();
+  return ScrubFunc;
+}
+
 Function *
 StringEncryption::buildInitFunction(Module *M,
                                     const StringEncryption::CSUser *User) {
@@ -770,6 +848,99 @@ bool StringEncryption::processConstantStringUse(Function *F) {
   SmallPtrSet<GlobalVariable *, 16> DecryptedGV;
   // if GV has multiple use in a block, decrypt only at the first use
   bool Changed = false;
+  Module *M = F->getParent();
+  LLVMContext &Ctx = M->getContext();
+  Type *I32Ty = Type::getInt32Ty(Ctx);
+  Type *I64Ty = Type::getInt64Ty(Ctx);
+  PointerType *PtrTy = PointerType::getUnqual(Ctx);
+  const bool UseHeap = opt.stringHeapDecrypt();
+  const bool UseStack = opt.stringLocalStackDecrypt() && !UseHeap;
+  const bool ReencryptAfterUse = opt.stringReencryptAfterUse();
+  FunctionCallee MallocFn;
+  FunctionCallee FreeFn;
+  SmallVector<Value *, 16> HeapAllocs;
+  if (UseHeap) {
+    MallocFn = M->getOrInsertFunction(
+        "malloc", FunctionType::get(PtrTy, {I64Ty}, false));
+    FreeFn = M->getOrInsertFunction("free",
+                                    FunctionType::get(Type::getVoidTy(Ctx),
+                                                      {PtrTy}, false));
+  }
+
+  auto emitDecrypt = [&](IRBuilder<> &IRB, CSPEntry *Entry, Value *&Data,
+                         bool Temporary) -> Value * {
+    Data = IRB.CreateInBoundsGEP(
+        EncryptedStringTable->getValueType(), EncryptedStringTable,
+        {IRB.getInt32(0), IRB.getInt32(Entry->Offset)});
+    Function *DecFunc = Entry->IsUTF16 ? SharedDecFuncI16 : SharedDecFuncI8;
+    uint32_t KeyElemSize = Entry->IsUTF16
+                               ? static_cast<uint32_t>(Entry->EncKey16.size())
+                               : static_cast<uint32_t>(Entry->EncKey.size());
+    uint32_t DataSize = Entry->IsUTF16
+                            ? static_cast<uint32_t>(Entry->Data16.size())
+                            : static_cast<uint32_t>(Entry->Data.size());
+    Value *OutBuf = Entry->DecGV;
+    Value *StatusPtr = Entry->DecStatus;
+    if (Temporary) {
+      StatusPtr = IRB.CreateAlloca(I32Ty);
+      IRB.CreateStore(IRB.getInt32(Entry->PendingStatus), StatusPtr);
+      if (UseHeap) {
+        uint64_t Bytes = DataSize * (Entry->IsUTF16 ? 2ull : 1ull);
+        IRBuilder<> EntryIRB(&*F->getEntryBlock().getFirstInsertionPt());
+        OutBuf = EntryIRB.CreateCall(MallocFn, {EntryIRB.getInt64(Bytes)});
+        HeapAllocs.push_back(OutBuf);
+      } else {
+        OutBuf = IRB.CreateAlloca(Entry->DecGV->getValueType());
+      }
+    }
+    fixEH(IRB.CreateCall(DecFunc, {OutBuf, Data, IRB.getInt32(KeyElemSize),
+                                   IRB.getInt32(DataSize), StatusPtr,
+                                   IRB.getInt32(Entry->DoneStatus),
+                                   IRB.getInt32(Entry->ID),
+                                   IRB.getInt32(BuildNonce)}));
+    return OutBuf;
+  };
+
+  auto emitAfterUse = [&](Instruction &Inst, CSPEntry *Entry, Value *OutBuf,
+                          Value *Data, bool Temporary) {
+    Instruction *Next = Inst.getNextNode();
+    if (!Next)
+      return;
+    Instruction *InsertAfter = &Inst;
+    if (ReencryptAfterUse && Inst.getType()->isPointerTy()) {
+      Instruction *OnlyConsumer = nullptr;
+      for (User *U : Inst.users()) {
+        auto *UserInst = dyn_cast<Instruction>(U);
+        if (!UserInst || UserInst->getType()->isPointerTy())
+          return;
+        if (OnlyConsumer && OnlyConsumer != UserInst)
+          return;
+        OnlyConsumer = UserInst;
+      }
+      if (!OnlyConsumer)
+        return;
+      InsertAfter = OnlyConsumer;
+      Next = InsertAfter->getNextNode();
+      if (!Next)
+        return;
+    }
+    IRBuilder<> IRB(Next);
+    uint32_t KeyElemSize = Entry->IsUTF16
+                               ? static_cast<uint32_t>(Entry->EncKey16.size())
+                               : static_cast<uint32_t>(Entry->EncKey.size());
+    uint32_t DataSize = Entry->IsUTF16
+                            ? static_cast<uint32_t>(Entry->Data16.size())
+                            : static_cast<uint32_t>(Entry->Data.size());
+    if (!Temporary && ReencryptAfterUse) {
+      Function *ScrubFunc =
+          Entry->IsUTF16 ? SharedScrubFuncI16 : SharedScrubFuncI8;
+      fixEH(IRB.CreateCall(ScrubFunc,
+                           {OutBuf, Data, IRB.getInt32(KeyElemSize),
+                            IRB.getInt32(DataSize), Entry->DecStatus,
+                            IRB.getInt32(Entry->PendingStatus)}));
+    }
+  };
+
   for (BasicBlock &BB : *F) {
     DecryptedGV.clear();
     for (Instruction &Inst : BB) {
@@ -856,7 +1027,9 @@ bool StringEncryption::processConstantStringUse(Function *F) {
               Changed = true;
             } else if (Iter1 != CSPEntryMap.end()) {
               CSPEntry *Entry = Iter1->second;
-              if (DecryptedGV.count(GV) > 0) {
+              const bool Temporary = UseStack || UseHeap;
+              const bool CacheGlobal = !Temporary && !ReencryptAfterUse;
+              if (CacheGlobal && DecryptedGV.count(GV) > 0) {
                 Inst.replaceUsesOfWith(GV, Entry->DecGV);
               } else {
                 IRBuilder<> IRB(Inst.isEHPad() ? &*Inst.getParent()
@@ -864,34 +1037,28 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                                                        ->getFirstInsertionPt()
                                                : &Inst);
 
-                Value *OutBuf = Entry->DecGV;
-                Value *Data = IRB.CreateInBoundsGEP(
-                    EncryptedStringTable->getValueType(), EncryptedStringTable,
-                    {IRB.getInt32(0), IRB.getInt32(Entry->Offset)});
-                Function *DecFunc =
-                    Entry->IsUTF16 ? SharedDecFuncI16 : SharedDecFuncI8;
-                uint32_t KeyElemSize =
-                    Entry->IsUTF16
-                        ? static_cast<uint32_t>(Entry->EncKey16.size())
-                        : static_cast<uint32_t>(Entry->EncKey.size());
-                uint32_t DataSize =
-                    Entry->IsUTF16 ? static_cast<uint32_t>(Entry->Data16.size())
-                                   : static_cast<uint32_t>(Entry->Data.size());
-                fixEH(IRB.CreateCall(DecFunc,
-                                     {OutBuf, Data, IRB.getInt32(KeyElemSize),
-                                      IRB.getInt32(DataSize), Entry->DecStatus,
-                                      IRB.getInt32(Entry->DoneStatus),
-                                      IRB.getInt32(Entry->ID),
-                                      IRB.getInt32(BuildNonce)}));
+                Value *Data = nullptr;
+                Value *OutBuf = emitDecrypt(IRB, Entry, Data, Temporary);
 
-                Inst.replaceUsesOfWith(GV, Entry->DecGV);
+                Inst.replaceUsesOfWith(GV, OutBuf);
+                emitAfterUse(Inst, Entry, OutBuf, Data, Temporary);
                 MaybeDeadGlobalVars.insert(GV);
-                DecryptedGV.insert(GV);
+                if (CacheGlobal)
+                  DecryptedGV.insert(GV);
               }
               Changed = true;
             }
           }
         }
+      }
+    }
+  }
+  if (UseHeap) {
+    for (BasicBlock &BB : *F) {
+      if (ReturnInst *Ret = dyn_cast<ReturnInst>(BB.getTerminator())) {
+        IRBuilder<> IRB(Ret);
+        for (Value *HeapAlloc : HeapAllocs)
+          IRB.CreateCall(FreeFn, {HeapAlloc});
       }
     }
   }

@@ -30,6 +30,9 @@ protected:
   uint32_t MinConstSize = 0;
   uint32_t MinStringLength = 0;
   std::vector<std::string> SkipStrings;
+  uint32_t StringLocalStackDecrypt = 0;
+  uint32_t StringHeapDecrypt = 0;
+  uint32_t StringReencryptAfterUse = 0;
   uint32_t VolatileSeed = 1;
   uint32_t ConstDecryptorMBA = 0;
 
@@ -110,6 +113,28 @@ public:
     return this->SkipStrings;
   }
 
+  void setStringLocalStackDecrypt(bool localStackDecrypt) {
+    this->StringLocalStackDecrypt = localStackDecrypt;
+  }
+
+  bool stringLocalStackDecrypt() const {
+    return this->StringLocalStackDecrypt;
+  }
+
+  void setStringHeapDecrypt(bool heapDecrypt) {
+    this->StringHeapDecrypt = heapDecrypt;
+  }
+
+  bool stringHeapDecrypt() const { return this->StringHeapDecrypt; }
+
+  void setStringReencryptAfterUse(bool reencryptAfterUse) {
+    this->StringReencryptAfterUse = reencryptAfterUse;
+  }
+
+  bool stringReencryptAfterUse() const {
+    return this->StringReencryptAfterUse;
+  }
+
   void setVolatileSeed(bool volatileSeed) { this->VolatileSeed = volatileSeed; }
 
   bool volatileSeed() const { return this->VolatileSeed; }
@@ -132,6 +157,9 @@ public:
     Result.setMinConstSize(MinConstSize);
     Result.setMinStringLength(MinStringLength);
     Result.setSkipStrings(SkipStrings);
+    Result.setStringLocalStackDecrypt(StringLocalStackDecrypt);
+    Result.setStringHeapDecrypt(StringHeapDecrypt);
+    Result.setStringReencryptAfterUse(StringReencryptAfterUse);
     Result.setVolatileSeed(VolatileSeed);
     Result.setConstDecryptorMBA(ConstDecryptorMBA);
     return Result;

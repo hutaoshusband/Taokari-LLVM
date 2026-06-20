@@ -189,6 +189,30 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
         }
         obfOpt->setSkipStrings(std::move(skipStrings));
       }
+      if (const auto *localStackValue = optObj->get("localStackDecrypt")) {
+        auto localStack = localStackValue->getAsBoolean();
+        if (!localStack) {
+          reportConfigError(FileName, obfOpt->attributeName() +
+                                          ".localStackDecrypt must be boolean");
+        }
+        obfOpt->setStringLocalStackDecrypt(*localStack);
+      }
+      if (const auto *heapDecryptValue = optObj->get("heapDecrypt")) {
+        auto heapDecrypt = heapDecryptValue->getAsBoolean();
+        if (!heapDecrypt) {
+          reportConfigError(FileName, obfOpt->attributeName() +
+                                          ".heapDecrypt must be boolean");
+        }
+        obfOpt->setStringHeapDecrypt(*heapDecrypt);
+      }
+      if (const auto *reencryptValue = optObj->get("reencryptAfterUse")) {
+        auto reencrypt = reencryptValue->getAsBoolean();
+        if (!reencrypt) {
+          reportConfigError(FileName, obfOpt->attributeName() +
+                                          ".reencryptAfterUse must be boolean");
+        }
+        obfOpt->setStringReencryptAfterUse(*reencrypt);
+      }
       if (const auto *volatileSeedValue = optObj->get("volatileSeed")) {
         auto volatileSeed = volatileSeedValue->getAsBoolean();
         if (!volatileSeed) {
@@ -357,6 +381,9 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
   result.setMinConstSize(option->minConstSize());
   result.setMinStringLength(option->minStringLength());
   result.setSkipStrings(option->skipStrings());
+  result.setStringLocalStackDecrypt(option->stringLocalStackDecrypt());
+  result.setStringHeapDecrypt(option->stringHeapDecrypt());
+  result.setStringReencryptAfterUse(option->stringReencryptAfterUse());
   result.setVolatileSeed(option->volatileSeed());
   result.setConstDecryptorMBA(option->constDecryptorMBA());
   return result;
