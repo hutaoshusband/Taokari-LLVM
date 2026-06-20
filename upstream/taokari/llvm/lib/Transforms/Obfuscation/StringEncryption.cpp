@@ -107,7 +107,8 @@ struct StringEncryption : public ModulePass {
   static bool isValidToEncrypt(GlobalVariable *GV);
   bool processConstantStringUse(Function *F);
   void deleteUnusedGlobalVariable();
-  static Function *buildSharedDecryptFunction(Module *M, bool IsUTF16);
+  static Function *buildSharedDecryptFunction(Module *M, bool IsUTF16,
+                                              bool InvertBranchShape);
   Function *buildInitFunction(Module *M, const CSUser *User);
   uint32_t getRandomStatusValue();
   uint8_t mixKey8(uint8_t Key, uint32_t KeyIndex, uint32_t Position,
@@ -237,9 +238,11 @@ bool StringEncryption::runOnModule(Module &M) {
       hasI8Strings = true;
   }
   if (hasI8Strings)
-    SharedDecFuncI8 = buildSharedDecryptFunction(&M, false);
+    SharedDecFuncI8 =
+        buildSharedDecryptFunction(&M, false, (BuildNonce & 1) != 0);
   if (hasI16Strings)
-    SharedDecFuncI16 = buildSharedDecryptFunction(&M, true);
+    SharedDecFuncI16 =
+        buildSharedDecryptFunction(&M, true, (BuildNonce & 2) != 0);
 
   for (CSPEntry *Entry : ConstantStringPool) {
     if (!Entry->IsUTF16) {
@@ -502,8 +505,8 @@ void StringEncryption::getRandomBytes(std::vector<T> &Bytes, uint32_t MinSize,
 //  }
 //}
 
-Function *StringEncryption::buildSharedDecryptFunction(Module *M,
-                                                       bool IsUTF16) {
+Function *StringEncryption::buildSharedDecryptFunction(Module *M, bool IsUTF16,
+                                                       bool InvertBranchShape) {
   LLVMContext &Ctx = M->getContext();
   IRBuilder<> IRB(Ctx);
 
@@ -565,6 +568,9 @@ Function *StringEncryption::buildSharedDecryptFunction(Module *M,
 
   Value *EncPtr = IRB.CreateInBoundsGEP(IRB.getInt8Ty(), Data, KeySizeBytesVal);
   Value *DecStatus = IRB.CreateLoad(I32Ty, DecStatusArg);
+  if (InvertBranchShape) {
+    IRB.CreateLoad(I32Ty, DecStatusArg, true);
+  }
   Value *IsDecrypted = IRB.CreateICmpEQ(DecStatus, DoneStatusArg);
   IRB.CreateCondBr(IsDecrypted, Exit, LoopBody);
 
@@ -624,8 +630,11 @@ Function *StringEncryption::buildSharedDecryptFunction(Module *M,
   KeyCharZext = IRB.CreateZExt(KeyChar, IRB.getInt32Ty());
   Value *Mul = IRB.CreateMul(KeyIdxZext, KeyCharZext);
   Value *BrKey = IRB.CreateAnd(Mul, IRB.getInt32(1));
-  Value *BrCond = IRB.CreateICmpEQ(BrKey, IRB.getInt32(0));
-  IRB.CreateCondBr(BrCond, LoopBr0, LoopBr1);
+  Value *BrCond = InvertBranchShape
+                      ? IRB.CreateICmpNE(BrKey, IRB.getInt32(0))
+                      : IRB.CreateICmpEQ(BrKey, IRB.getInt32(0));
+  IRB.CreateCondBr(BrCond, InvertBranchShape ? LoopBr1 : LoopBr0,
+                   InvertBranchShape ? LoopBr0 : LoopBr1);
 
   IRB.SetInsertPoint(LoopBr0);
   {

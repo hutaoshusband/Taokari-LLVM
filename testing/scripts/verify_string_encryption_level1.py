@@ -155,6 +155,16 @@ def check_ir(ir: str) -> None:
     raise SystemExit("i16 decryptor lacks nonce/position key mixing")
 
 
+def decryptor_shape(ir: str) -> tuple[str, str]:
+  shapes: list[str] = []
+  for suffix in ("i8", "i16"):
+    body = re.search(rf"define private void @goron_decrypt_string_{suffix}\b[\s\S]*?\n}}", ir)
+    if not body:
+      raise SystemExit(f"missing {suffix} decryptor body")
+    shapes.append("volatile-status" if "load volatile i32" in body.group(0) else "plain-status")
+  return shapes[0], shapes[1]
+
+
 def run_checks(tmp: Path) -> int:
     src = tmp / "stringenc_level1.cpp"
     plain = tmp / "plain.exe"
@@ -181,7 +191,15 @@ def run_checks(tmp: Path) -> int:
           f"stdout mismatch\nplain={plain_run.stdout!r}\nobf={obf_run.stdout!r}"
       )
 
-    check_ir(emit_ir(src, ll, cfg))
+    first_ir = emit_ir(src, ll, cfg)
+    check_ir(first_ir)
+    shapes = {decryptor_shape(first_ir)}
+    for i in range(7):
+      shapes.add(decryptor_shape(emit_ir(src, tmp / f"shape_{i}.ll", cfg)))
+      if len(shapes) >= 2:
+        break
+    if len(shapes) < 2:
+      raise SystemExit("decryptor shape did not vary across builds")
     print("string encryption verifier: ok")
     return 0
 

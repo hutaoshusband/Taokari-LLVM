@@ -345,7 +345,7 @@ Main weakness: plaintext decrypt status and predictable decrypt flow.
 * [x] Add per-build nonce
 * [x] Add per-string key schedule
 * [x] Randomize key length
-* [ ] Randomize decryptor shape
+* [x] Randomize decryptor shape
 * [x] Add position-dependent key mixing
 * [ ] Add optional local stack decrypt
 * [ ] Add optional heap decrypt
