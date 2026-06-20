@@ -1,13 +1,13 @@
+#include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/ErrorOr.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
-#include "llvm/ADT/SmallString.h"
-#include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/IR/Constants.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/DiagnosticInfo.h"
-#include "llvm/Support/JSON.h"
 
 using namespace llvm;
 
@@ -20,8 +20,8 @@ static void reportConfigError(const Twine &FileName, const Twine &Message) {
 SmallVector<std::string> readAnnotate(Function *f) {
   SmallVector<std::string> annotations;
 
-  auto *Annotations = f->getParent()->getGlobalVariable(
-      "llvm.global.annotations");
+  auto *Annotations =
+      f->getParent()->getGlobalVariable("llvm.global.annotations");
   auto *C = dyn_cast_or_null<Constant>(Annotations);
   if (!C || C->getNumOperands() != 1)
     return annotations;
@@ -50,11 +50,11 @@ SmallVector<std::string> readAnnotate(Function *f) {
   return annotations;
 }
 
-std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
-    const Twine &FileName) {
+std::shared_ptr<ObfuscationOptions>
+ObfuscationOptions::readConfigFile(const Twine &FileName) {
 
-  std::shared_ptr<ObfuscationOptions> result = std::make_shared<
-    ObfuscationOptions>();
+  std::shared_ptr<ObfuscationOptions> result =
+      std::make_shared<ObfuscationOptions>();
   if (FileName.str().empty()) {
     return result;
   }
@@ -67,7 +67,7 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
     reportConfigError(FileName, "cannot read file: " + ErrCode.message());
   }
 
-  const auto &    buf = *BufOrErr.get();
+  const auto &buf = *BufOrErr.get();
   llvm::SourceMgr sm;
 
   auto jsonRoot = json::parse(buf.getBuffer());
@@ -80,10 +80,10 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
     reportConfigError(FileName, "JSON root must be an object");
   }
 
-  auto procObj = [&FileName](
-      const std::shared_ptr<ObfOpt> &obfOpt,
-      const detail::DenseMapPair<json::ObjectKey, json::Value> &obj) -> bool {
-
+  auto procObj =
+      [&FileName](const std::shared_ptr<ObfOpt> &obfOpt,
+                  const detail::DenseMapPair<json::ObjectKey, json::Value> &obj)
+      -> bool {
     auto procOptValue = [&FileName](const std::shared_ptr<ObfOpt> &obfOpt,
                                     const json::Value &value) {
       auto optObj = value.getAsObject();
@@ -94,8 +94,8 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
       if (const auto *enableValue = optObj->get("enable")) {
         auto enable = enableValue->getAsBoolean();
         if (!enable) {
-          reportConfigError(FileName,
-                            obfOpt->attributeName() + ".enable must be boolean");
+          reportConfigError(FileName, obfOpt->attributeName() +
+                                          ".enable must be boolean");
         }
         obfOpt->setEnable(*enable);
       }
@@ -112,7 +112,7 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
         if (!maxInsts || *maxInsts < 0) {
           reportConfigError(FileName,
                             obfOpt->attributeName() +
-                            ".maxInsts must be non-negative integer");
+                                ".maxInsts must be non-negative integer");
         }
         obfOpt->setMaxInsts(static_cast<uint32_t>(*maxInsts));
       }
@@ -121,7 +121,7 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
         if (!maxBlocks || *maxBlocks < 0) {
           reportConfigError(FileName,
                             obfOpt->attributeName() +
-                            ".maxBlocks must be non-negative integer");
+                                ".maxBlocks must be non-negative integer");
         }
         obfOpt->setMaxBlocks(static_cast<uint32_t>(*maxBlocks));
       }
@@ -130,7 +130,7 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
         if (!maxAllocas || *maxAllocas < 0) {
           reportConfigError(FileName,
                             obfOpt->attributeName() +
-                            ".maxAllocas must be non-negative integer");
+                                ".maxAllocas must be non-negative integer");
         }
         obfOpt->setMaxAllocas(static_cast<uint32_t>(*maxAllocas));
       }
@@ -139,7 +139,7 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
         if (!probability || *probability < 0 || *probability > 100) {
           reportConfigError(FileName,
                             obfOpt->attributeName() +
-                            ".probability must be integer from 0 to 100");
+                                ".probability must be integer from 0 to 100");
         }
         obfOpt->setProbability(static_cast<uint32_t>(*probability));
       }
@@ -148,7 +148,7 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
         if (!loopCount || *loopCount < 0) {
           reportConfigError(FileName,
                             obfOpt->attributeName() +
-                            ".loopCount must be non-negative integer");
+                                ".loopCount must be non-negative integer");
         }
         obfOpt->setLoopCount(static_cast<uint32_t>(*loopCount));
       }
@@ -157,32 +157,58 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
         if (!minConstSize || *minConstSize < 0) {
           reportConfigError(FileName,
                             obfOpt->attributeName() +
-                            ".minConstSize must be non-negative integer");
+                                ".minConstSize must be non-negative integer");
         }
         obfOpt->setMinConstSize(static_cast<uint32_t>(*minConstSize));
+      }
+      if (const auto *minStringLengthValue = optObj->get("minStringLength")) {
+        auto minStringLength = minStringLengthValue->getAsInteger();
+        if (!minStringLength || *minStringLength < 0) {
+          reportConfigError(
+              FileName, obfOpt->attributeName() +
+                            ".minStringLength must be non-negative integer");
+        }
+        obfOpt->setMinStringLength(static_cast<uint32_t>(*minStringLength));
+      }
+      if (const auto *skipStringsValue = optObj->get("skipStrings")) {
+        auto skipStringsArray = skipStringsValue->getAsArray();
+        if (!skipStringsArray) {
+          reportConfigError(FileName,
+                            obfOpt->attributeName() +
+                                ".skipStrings must be an array of strings");
+        }
+        std::vector<std::string> skipStrings;
+        for (const auto &skipStringValue : *skipStringsArray) {
+          auto skipString = skipStringValue.getAsString();
+          if (!skipString) {
+            reportConfigError(FileName,
+                              obfOpt->attributeName() +
+                                  ".skipStrings must be an array of strings");
+          }
+          skipStrings.emplace_back(skipString->str());
+        }
+        obfOpt->setSkipStrings(std::move(skipStrings));
       }
       if (const auto *volatileSeedValue = optObj->get("volatileSeed")) {
         auto volatileSeed = volatileSeedValue->getAsBoolean();
         if (!volatileSeed) {
-          reportConfigError(FileName,
-                            obfOpt->attributeName() +
-                            ".volatileSeed must be boolean");
+          reportConfigError(FileName, obfOpt->attributeName() +
+                                          ".volatileSeed must be boolean");
         }
         obfOpt->setVolatileSeed(*volatileSeed);
       }
       if (const auto *decryptorMbaValue = optObj->get("decryptorMba")) {
         auto decryptorMba = decryptorMbaValue->getAsBoolean();
         if (!decryptorMba) {
-          reportConfigError(FileName,
-                            obfOpt->attributeName() +
-                            ".decryptorMba must be boolean");
+          reportConfigError(FileName, obfOpt->attributeName() +
+                                          ".decryptorMba must be boolean");
         }
         obfOpt->setConstDecryptorMBA(*decryptorMba);
       }
     };
 
     std::string key = obj.getFirst().str();
-    auto &      value = obj.getSecond();
+    auto &value = obj.getSecond();
 
     if (key == obfOpt->attributeName()) {
       procOptValue(obfOpt, value);
@@ -196,7 +222,7 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
     if (obj.getFirst().str() == "randomSeed") {
       if (auto objStr = obj.getSecond().getAsString()) {
         const auto &seedStr = objStr.value();
-        auto &      seed = result->randomSeed();
+        auto &seed = result->randomSeed();
         seed = seedStr;
         seed.resize(32, 0);
       } else {
@@ -212,18 +238,18 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
     }
     if (!objHit) {
       llvm::errs() << "warning: unknown hikari config node: "
-          << obj.getFirst().str() << '\n';
+                   << obj.getFirst().str() << '\n';
     }
   }
   return result;
 }
 
 ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
-                                       Function *                     f) {
+                                       Function *f) {
   const auto attrEnable = "+" + option->attributeName();
   const auto attrDisable = "-" + option->attributeName();
   const auto attrLevel = "^" + option->attributeName();
-  ObfOpt     result = option->none();
+  ObfOpt result = option->none();
   if (f->isDeclaration()) {
     return result;
   }
@@ -236,7 +262,7 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
   bool annotationDisableFound = false;
 
   auto annotations = readAnnotate(f);
-  int  levelSet = 0;
+  int levelSet = 0;
   if (!annotations.empty()) {
     for (const auto &annotation : annotations) {
       if (annotation.find(attrDisable) != std::string::npos) {
@@ -248,22 +274,20 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
         annotationEnableFound = true;
       }
       if (const auto levelPos = annotation.find(attrLevel);
-        levelPos != std::string::npos) {
+          levelPos != std::string::npos) {
         if (annotation.find(attrLevel, levelPos + 1) != std::string::npos) {
           f->getContext().diagnose(DiagnosticInfoUnsupported{
-              *f,
-              f->getName() + " has multiple annotations for setting " + result.
-              attributeName() +
-              " factors, What are you the fucking want to do?"});
+              *f, f->getName() + " has multiple annotations for setting " +
+                      result.attributeName() +
+                      " factors, What are you the fucking want to do?"});
           return result.none();
         }
-        int32_t    level = -1;
+        int32_t level = -1;
         const auto equalPos = annotation.find('=', levelPos + 1);
         if (equalPos == std::string::npos) {
           f->getContext().diagnose(DiagnosticInfoUnsupported{
-              *f,
-              f->getName() + ": " + annotation +
-              " missing equal sign, sample: " + attrLevel + " = 0"});
+              *f, f->getName() + ": " + annotation +
+                      " missing equal sign, sample: " + attrLevel + " = 0"});
           return result.none();
         }
 
@@ -272,9 +296,8 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
             continue;
           }
           f->getContext().diagnose(DiagnosticInfoUnsupported{
-              *f,
-              f->getName() + ": " + annotation +
-              " unexpected characters, sample: " + attrLevel + " = 0"});
+              *f, f->getName() + ": " + annotation +
+                      " unexpected characters, sample: " + attrLevel + " = 0"});
           return result.none();
         }
 
@@ -285,19 +308,17 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
           level = annotation[i] - '0';
           if (level < 0 || level > 9) {
             f->getContext().diagnose(DiagnosticInfoUnsupported{
-                *f,
-                f->getName() + ": " + annotation +
-                " unexpected character: " + std::string{annotation[i]} +
-                ", sample: " + attrLevel + " = 0"});
+                *f, f->getName() + ": " + annotation +
+                        " unexpected character: " + std::string{annotation[i]} +
+                        ", sample: " + attrLevel + " = 0"});
             return result.none();
           }
           break;
         }
         if (level == -1) {
           f->getContext().diagnose(DiagnosticInfoUnsupported{
-              *f,
-              f->getName() + ": " + annotation +
-              " level value not found, sample: " + attrLevel + " = 0"});
+              *f, f->getName() + ": " + annotation +
+                      " level value not found, sample: " + attrLevel + " = 0"});
           return result.none();
         }
 
@@ -309,17 +330,16 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
 
   if (annotationDisableFound && annotationEnableFound) {
     f->getContext().diagnose(DiagnosticInfoUnsupported{
-        *f,
-        f->getName() +
-        " having both enable annotation and disable annotation, What are you the fucking want to do?"});
+        *f, f->getName() + " having both enable annotation and disable "
+                           "annotation, What are you the fucking want to do?"});
     return result.none();
   }
 
   if (levelSet > 1) {
     f->getContext().diagnose(DiagnosticInfoUnsupported{
-        *f,
-        f->getName() + " has multiple annotations for setting " + result.
-        attributeName() + " factors, What are you the fucking want to do?"});
+        *f, f->getName() + " has multiple annotations for setting " +
+                result.attributeName() +
+                " factors, What are you the fucking want to do?"});
     return result.none();
   }
 
@@ -335,9 +355,11 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
   result.setMaxBlocks(option->maxBlocks());
   result.setMaxAllocas(option->maxAllocas());
   result.setMinConstSize(option->minConstSize());
+  result.setMinStringLength(option->minStringLength());
+  result.setSkipStrings(option->skipStrings());
   result.setVolatileSeed(option->volatileSeed());
   result.setConstDecryptorMBA(option->constDecryptorMBA());
   return result;
 }
 
-}
+} // namespace llvm

@@ -1,11 +1,13 @@
 #ifndef OBFUSCATION_OBFUSCATIONOPTIONS_H
 #define OBFUSCATION_OBFUSCATIONOPTIONS_H
 
-#include "llvm/Support/YAMLParser.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/ADT/SmallString.h"
+#include "llvm/Support/YAMLParser.h"
 
+#include <utility>
+#include <vector>
 
 namespace llvm {
 
@@ -13,21 +15,23 @@ SmallVector<std::string> readAnnotate(Function *f);
 
 class ObfOpt {
 protected:
-  uint32_t    Enabled : 1;
-  uint32_t    Level   : 3;
+  uint32_t Enabled : 1;
+  uint32_t Level : 3;
   std::string AttributeName;
-  uint32_t    MaxInsts = 0;
-  uint32_t    MaxBlocks = 0;
-  uint32_t    MaxAllocas = 0;
+  uint32_t MaxInsts = 0;
+  uint32_t MaxBlocks = 0;
+  uint32_t MaxAllocas = 0;
   // 101 means unset; valid configured probability is 0..100.
-  uint32_t    Probability = 101;
-  uint32_t    LoopCount = 0;
+  uint32_t Probability = 101;
+  uint32_t LoopCount = 0;
   // Minimum bit-width of a constant worth encrypting. Constants narrower
   // than this are skipped (cheap, low-value, blows up code size). 0 = use
   // the pass's built-in floor (currently 8 bits).
-  uint32_t    MinConstSize = 0;
-  uint32_t    VolatileSeed = 1;
-  uint32_t    ConstDecryptorMBA = 0;
+  uint32_t MinConstSize = 0;
+  uint32_t MinStringLength = 0;
+  std::vector<std::string> SkipStrings;
+  uint32_t VolatileSeed = 1;
+  uint32_t ConstDecryptorMBA = 0;
 
 public:
   ObfOpt(bool enable, uint32_t level, const std::string &attributeName) {
@@ -48,7 +52,7 @@ public:
     }
   }
 
-  void readOpt(const cl::opt<bool> &    enableOpt,
+  void readOpt(const cl::opt<bool> &enableOpt,
                const cl::opt<uint32_t> &levelOpt) {
     readOpt(enableOpt);
     if (levelOpt.getNumOccurrences()) {
@@ -56,89 +60,67 @@ public:
     }
   }
 
-  void setEnable(bool enabled) {
-    this->Enabled = enabled;
-  }
+  void setEnable(bool enabled) { this->Enabled = enabled; }
 
-  void setLevel(uint32_t level) {
-    this->Level = std::min<uint32_t>(level, 4);
-  }
+  void setLevel(uint32_t level) { this->Level = std::min<uint32_t>(level, 4); }
 
-  bool isEnabled() const {
-    return this->Enabled;
-  }
+  bool isEnabled() const { return this->Enabled; }
 
-  uint32_t level() const {
-    return this->Level;
-  }
+  uint32_t level() const { return this->Level; }
 
-  void setMaxInsts(uint32_t maxInsts) {
-    this->MaxInsts = maxInsts;
-  }
+  void setMaxInsts(uint32_t maxInsts) { this->MaxInsts = maxInsts; }
 
-  uint32_t maxInsts() const {
-    return this->MaxInsts;
-  }
+  uint32_t maxInsts() const { return this->MaxInsts; }
 
-  void setMaxBlocks(uint32_t maxBlocks) {
-    this->MaxBlocks = maxBlocks;
-  }
+  void setMaxBlocks(uint32_t maxBlocks) { this->MaxBlocks = maxBlocks; }
 
-  uint32_t maxBlocks() const {
-    return this->MaxBlocks;
-  }
+  uint32_t maxBlocks() const { return this->MaxBlocks; }
 
-  void setMaxAllocas(uint32_t maxAllocas) {
-    this->MaxAllocas = maxAllocas;
-  }
+  void setMaxAllocas(uint32_t maxAllocas) { this->MaxAllocas = maxAllocas; }
 
-  uint32_t maxAllocas() const {
-    return this->MaxAllocas;
-  }
+  uint32_t maxAllocas() const { return this->MaxAllocas; }
 
   void setProbability(uint32_t probability) {
     this->Probability = probability <= 100 ? probability : 101;
   }
 
-  uint32_t probability() const {
-    return this->Probability;
-  }
+  uint32_t probability() const { return this->Probability; }
 
-  void setLoopCount(uint32_t loopCount) {
-    this->LoopCount = loopCount;
-  }
+  void setLoopCount(uint32_t loopCount) { this->LoopCount = loopCount; }
 
-  uint32_t loopCount() const {
-    return this->LoopCount;
-  }
+  uint32_t loopCount() const { return this->LoopCount; }
 
   void setMinConstSize(uint32_t minConstSize) {
     this->MinConstSize = minConstSize;
   }
 
-  uint32_t minConstSize() const {
-    return this->MinConstSize;
+  uint32_t minConstSize() const { return this->MinConstSize; }
+
+  void setMinStringLength(uint32_t minStringLength) {
+    this->MinStringLength = minStringLength;
   }
 
-  void setVolatileSeed(bool volatileSeed) {
-    this->VolatileSeed = volatileSeed;
+  uint32_t minStringLength() const { return this->MinStringLength; }
+
+  void setSkipStrings(std::vector<std::string> skipStrings) {
+    this->SkipStrings = std::move(skipStrings);
   }
 
-  bool volatileSeed() const {
-    return this->VolatileSeed;
+  const std::vector<std::string> &skipStrings() const {
+    return this->SkipStrings;
   }
+
+  void setVolatileSeed(bool volatileSeed) { this->VolatileSeed = volatileSeed; }
+
+  bool volatileSeed() const { return this->VolatileSeed; }
 
   void setConstDecryptorMBA(bool constDecryptorMBA) {
     this->ConstDecryptorMBA = constDecryptorMBA;
   }
 
-  bool constDecryptorMBA() const {
-    return this->ConstDecryptorMBA;
-  }
+  bool constDecryptorMBA() const { return this->ConstDecryptorMBA; }
 
-  const std::string &attributeName() const {
-    return this->AttributeName;
-  }
+  const std::string &attributeName() const { return this->AttributeName; }
 
   ObfOpt none() const {
     ObfOpt Result{false, 0, this->attributeName()};
@@ -148,11 +130,12 @@ public:
     Result.setProbability(Probability);
     Result.setLoopCount(LoopCount);
     Result.setMinConstSize(MinConstSize);
+    Result.setMinStringLength(MinStringLength);
+    Result.setSkipStrings(SkipStrings);
     Result.setVolatileSeed(VolatileSeed);
     Result.setConstDecryptorMBA(ConstDecryptorMBA);
     return Result;
   }
-
 };
 
 class ObfuscationOptions {
@@ -208,8 +191,8 @@ public:
     this->RttiOpt = rttiOpt;
   }
 
-  ObfuscationOptions() : ObfuscationOptions{
-                           std::make_shared<ObfOpt>("indbr"),
+  ObfuscationOptions()
+      : ObfuscationOptions{std::make_shared<ObfOpt>("indbr"),
                            std::make_shared<ObfOpt>("icall"),
                            std::make_shared<ObfOpt>("indgv"),
                            std::make_shared<ObfOpt>("fla"),
@@ -218,60 +201,36 @@ public:
                            std::make_shared<ObfOpt>("cfe"),
                            std::make_shared<ObfOpt>("bcf"),
                            std::make_shared<ObfOpt>("mba"),
-                           std::make_shared<ObfOpt>("rtti")
-                       } {}
+                           std::make_shared<ObfOpt>("rtti")} {}
 
-  auto indBrOpt() const {
-    return IndBrOpt;
-  }
+  auto indBrOpt() const { return IndBrOpt; }
 
-  auto iCallOpt() const {
-    return ICallOpt;
-  }
+  auto iCallOpt() const { return ICallOpt; }
 
-  auto indGvOpt() const {
-    return IndGvOpt;
-  }
+  auto indGvOpt() const { return IndGvOpt; }
 
-  auto flaOpt() const {
-    return FlaOpt;
-  }
+  auto flaOpt() const { return FlaOpt; }
 
-  auto cseOpt() const {
-    return CseOpt;
-  }
+  auto cseOpt() const { return CseOpt; }
 
-  auto cieOpt() const {
-    return CieOpt;
-  }
+  auto cieOpt() const { return CieOpt; }
 
-  auto cfeOpt() const {
-    return CfeOpt;
-  }
+  auto cfeOpt() const { return CfeOpt; }
 
-  auto bcfOpt() const {
-    return BcfOpt;
-  }
+  auto bcfOpt() const { return BcfOpt; }
 
-  auto mbaOpt() const {
-    return MbaOpt;
-  }
+  auto mbaOpt() const { return MbaOpt; }
 
-  auto rttiOpt() const {
-    return RttiOpt;
-  }
+  auto rttiOpt() const { return RttiOpt; }
 
-  auto &randomSeed() {
-    return RandomSeed;
-  }
+  auto &randomSeed() { return RandomSeed; }
 
-  static std::shared_ptr<ObfuscationOptions> readConfigFile(
-      const Twine &FileName);
+  static std::shared_ptr<ObfuscationOptions>
+  readConfigFile(const Twine &FileName);
 
   static ObfOpt toObfuscate(const std::shared_ptr<ObfOpt> &option, Function *f);
-
 };
 
-}
+} // namespace llvm
 
 #endif
