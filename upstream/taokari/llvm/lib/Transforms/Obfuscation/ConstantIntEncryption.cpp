@@ -52,6 +52,9 @@ struct ConstantIntEncryption : public FunctionPass {
       if (!opt.isEnabled()) {
         continue;
       }
+      // Effective minimum constant width: built-in floor (8 bits) raised by
+      // the user-configured minConstSize. Narrower constants are skipped.
+      const unsigned MinBits = std::max(8u, opt.minConstSize());
       Changed |= expandConstantExpr(F);
       for (auto &BB : F) {
         for (auto &I : BB) {
@@ -79,7 +82,7 @@ struct ConstantIntEncryption : public FunctionPass {
             }
             Value *Opr = PHI ? PHI->getIncomingValue(i) : I.getOperand(i);
             auto   CTI = dyn_cast<ConstantInt>(Opr);
-            if (CTI && CTI->getBitWidth() > 7) {
+            if (CTI && CTI->getBitWidth() >= MinBits) {
               FunctionModifyIRs[&F].insert(&I);
               break;
             }
@@ -99,6 +102,7 @@ struct ConstantIntEncryption : public FunctionPass {
     if (FuncModifyIRs.empty()) {
       return false;
     }
+    const unsigned MinBits = std::max(8u, opt.minConstSize());
 
     // Count constant occurrences for deduplication
     DenseMap<ConstantInt *, unsigned> ConstUseCount;
@@ -112,7 +116,7 @@ struct ConstantIntEncryption : public FunctionPass {
         if (GEP && i < 2)
           continue;
         if (auto CTI = dyn_cast<ConstantInt>(I->getOperand(i))) {
-          if (CTI->getBitWidth() < 4)
+          if (CTI->getBitWidth() < MinBits)
             continue;
           if (PHI &&
               isa<SwitchInst>(PHI->getIncomingBlock(i)->getTerminator()))
@@ -133,7 +137,7 @@ struct ConstantIntEncryption : public FunctionPass {
       auto *CTI = KV.first;
       auto *Ty = CTI->getType();
       auto BitWidth = Ty->getPrimitiveSizeInBits().getFixedValue();
-      if (BitWidth < 8)
+      if (BitWidth < MinBits)
         continue;
       IRBuilder<NoFolder> AIB(AllocaInsertPt);
       DedupCache[CTI] = AIB.CreateAlloca(Ty, nullptr);
@@ -170,7 +174,7 @@ struct ConstantIntEncryption : public FunctionPass {
         }
         Value *Opr = I->getOperand(i);
         if (auto CTI = dyn_cast<ConstantInt>(Opr)) {
-          if (CTI->getBitWidth() < 4) {
+          if (CTI->getBitWidth() < MinBits) {
             continue;
           }
           if (PHI && isa<

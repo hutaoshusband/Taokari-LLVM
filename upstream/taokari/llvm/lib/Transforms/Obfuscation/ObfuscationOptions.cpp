@@ -134,6 +134,15 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
         }
         obfOpt->setMaxAllocas(static_cast<uint32_t>(*maxAllocas));
       }
+      if (const auto *minConstSizeValue = optObj->get("minConstSize")) {
+        auto minConstSize = minConstSizeValue->getAsInteger();
+        if (!minConstSize || *minConstSize < 0) {
+          reportConfigError(FileName,
+                            obfOpt->attributeName() +
+                            ".minConstSize must be non-negative integer");
+        }
+        obfOpt->setMinConstSize(static_cast<uint32_t>(*minConstSize));
+      }
     };
 
     std::string key = obj.getFirst().str();

@@ -98,6 +98,9 @@ struct ConstantFPEncryption : public FunctionPass {
     if (FuncModifyIRs.empty()) {
       return false;
     }
+    // Effective minimum constant width: built-in floor (8 bits) raised by
+    // the user-configured minConstSize. Narrower FP types are skipped.
+    const unsigned MinBits = std::max(8u, opt.minConstSize());
 
     // Count constant occurrences for deduplication
     DenseMap<ConstantFP *, unsigned> ConstUseCount;
@@ -130,7 +133,7 @@ struct ConstantFPEncryption : public FunctionPass {
       auto *CFP = KV.first;
       auto *Ty = CFP->getType();
       auto BitWidth = Ty->getPrimitiveSizeInBits().getFixedValue();
-      if (BitWidth < 8)
+      if (BitWidth < MinBits)
         continue;
       IRBuilder<NoFolder> AIB(AllocaInsertPt);
       DedupCache[CFP] = AIB.CreateAlloca(Ty, nullptr);

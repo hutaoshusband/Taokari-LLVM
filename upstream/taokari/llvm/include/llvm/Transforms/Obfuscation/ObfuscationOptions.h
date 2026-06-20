@@ -19,6 +19,10 @@ protected:
   uint32_t    MaxInsts = 0;
   uint32_t    MaxBlocks = 0;
   uint32_t    MaxAllocas = 0;
+  // Minimum bit-width of a constant worth encrypting. Constants narrower
+  // than this are skipped (cheap, low-value, blows up code size). 0 = use
+  // the pass's built-in floor (currently 8 bits).
+  uint32_t    MinConstSize = 0;
 
 public:
   ObfOpt(bool enable, uint32_t level, const std::string &attributeName) {
@@ -85,6 +89,14 @@ public:
 
   uint32_t maxAllocas() const {
     return this->MaxAllocas;
+  }
+
+  void setMinConstSize(uint32_t minConstSize) {
+    this->MinConstSize = minConstSize;
+  }
+
+  uint32_t minConstSize() const {
+    return this->MinConstSize;
   }
 
   const std::string &attributeName() const {
