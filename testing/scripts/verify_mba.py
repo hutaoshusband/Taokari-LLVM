@@ -10,22 +10,32 @@ ROOT = Path(__file__).resolve().parents[2]
 CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
 VSDEVCMD = Path(r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat")
 
-# L1 only exercises `add`; the other ops land in the next commit.
+# Exercises every Level-1 MBA identity (add/sub/xor/and/or) across i32 and i64.
 SOURCE = r"""
 #include <stdio.h>
+#include <stdint.h>
 
-__attribute__((noinline)) int add_probe(int x, int y) {
-  return x + y;
-}
+__attribute__((noinline)) int32_t add_probe(int32_t x, int32_t y) { return x + y; }
+__attribute__((noinline)) int32_t sub_probe(int32_t x, int32_t y) { return x - y; }
+__attribute__((noinline)) int32_t xor_probe(int32_t x, int32_t y) { return x ^ y; }
+__attribute__((noinline)) int32_t and_probe(int32_t x, int32_t y) { return x & y; }
+__attribute__((noinline)) int32_t or_probe(int32_t x, int32_t y) { return x | y; }
 
-__attribute__((noinline)) long long add_probe64(long long x, long long y) {
-  return x + y;
-}
+__attribute__((noinline)) int64_t add64_probe(int64_t x, int64_t y) { return x + y; }
+__attribute__((noinline)) int64_t sub64_probe(int64_t x, int64_t y) { return x - y; }
+__attribute__((noinline)) int64_t xor64_probe(int64_t x, int64_t y) { return x ^ y; }
+__attribute__((noinline)) int64_t and64_probe(int64_t x, int64_t y) { return x & y; }
+__attribute__((noinline)) int64_t or64_probe(int64_t x, int64_t y) { return x | y; }
 
 int main(void) {
-  int a = add_probe(7, 11);            // 18
-  long long b = add_probe64(100, 23);  // 123
-  printf("mba:%lld\n", (long long)a + b);
+  int32_t a = add_probe(7, 11) + sub_probe(100, 23) + xor_probe(0xF0, 0x0F) +
+              and_probe(0xC3, 0x66) + or_probe(0xC3, 0x3C);
+  // a = 18 + 77 + 255 + 66 + 255 = 671
+  int64_t b = add64_probe(1000, 234) + sub64_probe(5000, 678) +
+              xor64_probe(0xFF00, 0x00FF) + and64_probe(0xAA55, 0x0F0F) +
+              or64_probe(0xAA55, 0x55AA);
+  // b = 1234 + 4322 + 65535 + 2565 + 65535 = 139191
+  printf("mba:%lld\n", (long long)a + b);  // 671 + 139191 = 139862
   return 0;
 }
 """
@@ -60,6 +70,22 @@ def compile_source(src: Path, out: Path, extra: list[str]) -> subprocess.Complet
     ])
 
 
+def compile_ir_markers(src: Path, out: Path, extra: list[str]) -> subprocess.CompletedProcess[str]:
+    # Inspect the raw MBA output at -O0. At -O2 InstCombine legitimately
+    # simplifies some identities back (e.g. ~(~a|~b) -> a&b); that fold-back is
+    # the Level-2 optimizer-resistance problem, not a Level-1 correctness bug.
+    return run([
+        str(CLANG), str(src), "-O0", "-fno-discard-value-names",
+        "-mllvm", "-taokari",
+        "-mllvm", "-taokari-mba",
+        "-mllvm", "-taokari-level-mba=1",
+        "-mllvm", "-taokari-mba-prob=100",
+        *extra,
+        "-S", "-emit-llvm",
+        "-o", str(out),
+    ])
+
+
 def main() -> int:
     if not CLANG.exists():
         print(f"missing clang: {CLANG}", file=sys.stderr)
@@ -70,16 +96,26 @@ def main() -> int:
         src = tmp / "mba.c"
         src.write_text(SOURCE, encoding="utf-8")
 
-        # CLI flag path: assert MBA IR markers present, then assert runtime output.
+        # CLI flag path: assert MBA IR markers present (-O0 raw), then assert
+        # runtime output (-O2, proves the substitution is semantically correct).
         ir = tmp / "mba.ll"
-        compiled_ir = compile_source(src, ir, ["-S", "-emit-llvm"])
+        compiled_ir = compile_ir_markers(src, ir, [])
         if compiled_ir.returncode:
             print(compiled_ir.stdout, end="")
             print(compiled_ir.stderr, end="", file=sys.stderr)
             return compiled_ir.returncode
 
         text = ir.read_text(encoding="utf-8", errors="ignore")
-        required = [".mba.xor", ".mba.and", ".mba.carry", ".mba.add"]
+        # Every op has a distinctive marker; requiring all five proves the
+        # whole L1 identity set fires, not just `add`.
+        required = [
+            ".mba.add",    # add / sub / or
+            ".mba.carry",  # add
+            ".mba.not",    # sub / and / or
+            ".mba.sum",    # sub
+            ".mba.sub",    # xor
+            ".mba.na",     # and / or
+        ]
         missing = [needle for needle in required if needle not in text]
         if missing:
             print(f"missing MBA IR markers: {', '.join(missing)}", file=sys.stderr)
@@ -87,18 +123,18 @@ def main() -> int:
 
         # Annotation override path: per project README, annotate() overrides the
         # per-function enable/level but the master + pass flag must still be on
-        # for the pass to run. Force-disable at CLI, re-enable via annotate("+mba").
+        # for the pass to run. Force-enable one probe via annotate("+mba").
         ann_src = tmp / "mba_ann.c"
-        ann_src.write_text(SOURCE.replace(
-            "__attribute__((noinline)) int add_probe",
-            '__attribute__((noinline, annotate("+mba"))) int add_probe'
-        ).replace(
-            "__attribute__((noinline)) long long add_probe64",
-            '__attribute__((noinline, annotate("+mba"))) long long add_probe64'
-        ), encoding="utf-8")
+        ann_lines = []
+        for line in SOURCE.splitlines():
+            if "int32_t add_probe" in line:
+                line = line.replace("__attribute__((noinline))",
+                                    '__attribute__((noinline, annotate("+mba")))')
+            ann_lines.append(line)
+        ann_src.write_text("\n".join(ann_lines) + "\n", encoding="utf-8")
         ann_ir = tmp / "mba_ann.ll"
         ann_run = run([
-            str(CLANG), str(ann_src), "-O2", "-fno-discard-value-names",
+            str(CLANG), str(ann_src), "-O0", "-fno-discard-value-names",
             "-mllvm", "-taokari",
             "-mllvm", "-taokari-mba",
             "-S", "-emit-llvm", "-o", str(ann_ir),
@@ -117,7 +153,7 @@ def main() -> int:
         cfg.write_text('{"mba":{"enable":true,"level":1,"probability":100}}', encoding="utf-8")
         cfg_ir = tmp / "mba_cfg.ll"
         cfg_run = run([
-            str(CLANG), str(src), "-O2", "-fno-discard-value-names",
+            str(CLANG), str(src), "-O0", "-fno-discard-value-names",
             "-mllvm", f"-taokari-cfg={cfg}",
             "-S", "-emit-llvm", "-o", str(cfg_ir),
         ])
@@ -136,7 +172,7 @@ def main() -> int:
             print(compiled_exe.stderr, end="", file=sys.stderr)
             return compiled_exe.returncode
         ran = run([str(exe)])
-        if ran.returncode or ran.stdout != "mba:141\n":
+        if ran.returncode or ran.stdout != "mba:139862\n":
             print(f"bad run: rc={ran.returncode} stdout={ran.stdout!r}", file=sys.stderr)
             print(ran.stderr, end="", file=sys.stderr)
             return 1

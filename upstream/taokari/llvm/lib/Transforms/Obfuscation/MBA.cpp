@@ -63,8 +63,17 @@ struct MBA : public FunctionPass {
         auto *BO = dyn_cast<BinaryOperator>(&I);
         if (!BO || !BO->getType()->isIntegerTy())
           continue;
-        if (BO->getOpcode() == Instruction::Add)
+        switch (BO->getOpcode()) {
+        case Instruction::Add:
+        case Instruction::Sub:
+        case Instruction::Xor:
+        case Instruction::And:
+        case Instruction::Or:
           Candidates.push_back(BO);
+          break;
+        default:
+          break;
+        }
       }
     }
 
@@ -73,7 +82,25 @@ struct MBA : public FunctionPass {
     for (BinaryOperator *BO : Candidates) {
       if ((FuncRNG() % 100) >= Probability)
         continue;
-      Changed |= substituteAdd(*BO);
+      switch (BO->getOpcode()) {
+      case Instruction::Add:
+        Changed |= substituteAdd(*BO);
+        break;
+      case Instruction::Sub:
+        Changed |= substituteSub(*BO);
+        break;
+      case Instruction::Xor:
+        Changed |= substituteXor(*BO);
+        break;
+      case Instruction::And:
+        Changed |= substituteAnd(*BO);
+        break;
+      case Instruction::Or:
+        Changed |= substituteOr(*BO);
+        break;
+      default:
+        break;
+      }
     }
     return Changed;
   }
@@ -89,6 +116,71 @@ struct MBA : public FunctionPass {
     Value *Carry =
         IRB.CreateShl(And, ConstantInt::get(Ty, 1), BO.getName() + ".mba.carry");
     Value *Res = IRB.CreateAdd(Xor, Carry, BO.getName() + ".mba.add");
+    BO.replaceAllUsesWith(Res);
+    BO.eraseFromParent();
+    return true;
+  }
+
+  // a - b = (a + ~b) + 1
+  static bool substituteSub(BinaryOperator &BO) {
+    IRBuilder<NoFolder> IRB(&BO);
+    Type *Ty = BO.getType();
+    Value *A = BO.getOperand(0);
+    Value *B = BO.getOperand(1);
+    Value *NotB = IRB.CreateXor(B, ConstantInt::getAllOnesValue(Ty),
+                                BO.getName() + ".mba.not");
+    Value *Sum = IRB.CreateAdd(A, NotB, BO.getName() + ".mba.sum");
+    Value *Res = IRB.CreateAdd(Sum, ConstantInt::get(Ty, 1),
+                               BO.getName() + ".mba.add");
+    BO.replaceAllUsesWith(Res);
+    BO.eraseFromParent();
+    return true;
+  }
+
+  // a ^ b = (a | b) - (a & b)
+  static bool substituteXor(BinaryOperator &BO) {
+    IRBuilder<NoFolder> IRB(&BO);
+    Value *A = BO.getOperand(0);
+    Value *B = BO.getOperand(1);
+    Value *Or = IRB.CreateOr(A, B, BO.getName() + ".mba.or");
+    Value *And = IRB.CreateAnd(A, B, BO.getName() + ".mba.and");
+    Value *Res = IRB.CreateSub(Or, And, BO.getName() + ".mba.sub");
+    BO.replaceAllUsesWith(Res);
+    BO.eraseFromParent();
+    return true;
+  }
+
+  // a & b = ~(~a | ~b)  (De Morgan)
+  static bool substituteAnd(BinaryOperator &BO) {
+    IRBuilder<NoFolder> IRB(&BO);
+    Type *Ty = BO.getType();
+    Value *A = BO.getOperand(0);
+    Value *B = BO.getOperand(1);
+    Value *NA = IRB.CreateXor(A, ConstantInt::getAllOnesValue(Ty),
+                              BO.getName() + ".mba.na");
+    Value *NB = IRB.CreateXor(B, ConstantInt::getAllOnesValue(Ty),
+                              BO.getName() + ".mba.nb");
+    Value *Or = IRB.CreateOr(NA, NB, BO.getName() + ".mba.or");
+    Value *Res = IRB.CreateXor(Or, ConstantInt::getAllOnesValue(Ty),
+                               BO.getName() + ".mba.not");
+    BO.replaceAllUsesWith(Res);
+    BO.eraseFromParent();
+    return true;
+  }
+
+  // a | b = ~(~a & ~b)  (De Morgan)
+  static bool substituteOr(BinaryOperator &BO) {
+    IRBuilder<NoFolder> IRB(&BO);
+    Type *Ty = BO.getType();
+    Value *A = BO.getOperand(0);
+    Value *B = BO.getOperand(1);
+    Value *NA = IRB.CreateXor(A, ConstantInt::getAllOnesValue(Ty),
+                              BO.getName() + ".mba.na");
+    Value *NB = IRB.CreateXor(B, ConstantInt::getAllOnesValue(Ty),
+                              BO.getName() + ".mba.nb");
+    Value *And = IRB.CreateAnd(NA, NB, BO.getName() + ".mba.and");
+    Value *Res = IRB.CreateXor(And, ConstantInt::getAllOnesValue(Ty),
+                               BO.getName() + ".mba.not");
     BO.replaceAllUsesWith(Res);
     BO.eraseFromParent();
     return true;
