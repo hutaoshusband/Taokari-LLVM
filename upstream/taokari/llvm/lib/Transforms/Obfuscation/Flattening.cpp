@@ -384,8 +384,7 @@ bool Flattening::flatten(Function *f) {
     }
   }
 
-  // Create switch instruction itself and set condition
-  auto switchI = SwitchInst::Create(switchCondition, swDefault, 0, switchBlock);
+  SmallVector<std::pair<ConstantInt *, BasicBlock *>, 64> DispatchCases;
 
   auto isCloneableForFakePath = [](BasicBlock *BB) -> bool {
     if (BB->isEHPad()) {
@@ -454,7 +453,7 @@ bool Flattening::flatten(Function *f) {
     // Move the BB inside the switch (only visual, no code logic)
     bb->moveBefore(bbLoopEnd);
 
-    switchI->addCase(CaseVal[bb], bb);
+    DispatchCases.push_back({CaseVal[bb], bb});
   }
 
   const size_t fakeCaseCount = std::max<size_t>(1, origBB.size() / 2);
@@ -464,7 +463,32 @@ bool Flattening::flatten(Function *f) {
       v = randWord();
     } while (v == 0 || UsedCases.count(v));
     UsedCases.insert(v);
-    switchI->addCase(ConstantInt::get(IntTy, v), fakeCaseTarget);
+    DispatchCases.push_back({ConstantInt::get(IntTy, v), fakeCaseTarget});
+  }
+
+  auto emitNoJumpTableDispatcher =
+      [&](const SmallVectorImpl<std::pair<ConstantInt *, BasicBlock *>> &Cases) {
+    BasicBlock *probe = switchBlock;
+    for (size_t i = 0; i < Cases.size(); ++i) {
+      IRB.SetInsertPoint(probe);
+      BasicBlock *next =
+          i + 1 == Cases.size()
+              ? swDefault
+              : BasicBlock::Create(Ctx, "switchDispatchProbe", f, bbLoopEnd);
+      Value *hit =
+          IRB.CreateICmpEQ(switchCondition, Cases[i].first, "switchHit");
+      IRB.CreateCondBr(hit, Cases[i].second, next);
+      probe = next;
+    }
+  };
+
+  if (flaLevel >= 4) {
+    emitNoJumpTableDispatcher(DispatchCases);
+  } else {
+    auto switchI = SwitchInst::Create(switchCondition, swDefault, 0, switchBlock);
+    for (const auto &Case : DispatchCases) {
+      switchI->addCase(Case.first, Case.second);
+    }
   }
 
   // Recalculate switchVar

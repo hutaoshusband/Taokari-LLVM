@@ -14,7 +14,7 @@ SmallVector<std::string> readAnnotate(Function *f);
 class ObfOpt {
 protected:
   uint32_t    Enabled : 1;
-  uint32_t    Level   : 2;
+  uint32_t    Level   : 3;
   std::string AttributeName;
   uint32_t    MaxInsts = 0;
   uint32_t    MaxBlocks = 0;
@@ -27,7 +27,7 @@ protected:
 public:
   ObfOpt(bool enable, uint32_t level, const std::string &attributeName) {
     this->Enabled = enable;
-    this->Level = std::min<uint32_t>(level, 3);
+    this->Level = std::min<uint32_t>(level, 4);
     this->AttributeName = attributeName;
   }
 
@@ -47,7 +47,7 @@ public:
                const cl::opt<uint32_t> &levelOpt) {
     readOpt(enableOpt);
     if (levelOpt.getNumOccurrences()) {
-      Level = levelOpt.getValue();
+      setLevel(levelOpt.getValue());
     }
   }
 
@@ -56,7 +56,7 @@ public:
   }
 
   void setLevel(uint32_t level) {
-    this->Level = std::min<uint32_t>(level, 3);
+    this->Level = std::min<uint32_t>(level, 4);
   }
 
   bool isEnabled() const {
