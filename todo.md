@@ -1032,7 +1032,7 @@ obfuscation regression matrix stays green (57 PASS / 0 FAIL).
 * [ ] Add cross-pass integration with flattening / indirect-branch
 * [ ] Add decompiler snapshot tests (Hex-Rays output before/after)
 * [ ] Add CFG fragmentation metric
-* [ ] Add performance budget for the Fortress profile
+* [x] Add performance budget for the Fortress profile
 
 **Definition of done for L3:**
 A protected function should produce garbage microcode for Hex-Rays and should

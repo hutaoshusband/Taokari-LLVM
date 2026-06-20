@@ -187,6 +187,14 @@ and checks the first instruction of each function.
 - optimized LLVM IR contains none of the MIR byte signatures, while the object
   file does.
 
+`testing/scripts/verify_machine_obf_l3_budget.py` gates the Fortress MIR budget:
+
+- plain and MIR-obfuscated executables produce identical stdout.
+- the MIR path compiles with `-verify-machineinstrs`.
+- obfuscated compile time must stay under `6x + 15s` versus plain by default.
+- obfuscated binary size must stay under `1.25x + 32 KiB` versus plain by
+  default.
+
 ## Level 3 roadmap (backlog)
 
 The remaining MIR transforms that attack Hex-Rays function recovery, per the
@@ -197,5 +205,7 @@ IDA-Pro research doc §A Level 3:
   prologue/epilogue byte patterns between real functions.
 - **Unmodelled instruction emission** — Fortress-profile only; emit
   instructions the microcode lifter has no rule for.
+- **Budget gate** — `verify_machine_obf_l3_budget.py` blocks pathological
+  compile-time and binary-size growth while Fortress MIR expands.
 
 These remain gated future work, not part of the current Level 2 pass.

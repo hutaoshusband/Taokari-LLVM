@@ -39,3 +39,14 @@ python testing\run_obfuscation_tests.py --keep-going
 
 `--benchmark-out report.csv` compiles each case plain and obfuscated and records
 compile time, runtime and binary-size overhead.
+
+## MIR Budget
+
+Run the Level-3 MIR budget gate:
+
+```powershell
+python testing\scripts\verify_machine_obf_l3_budget.py
+```
+
+It compares plain vs `-taokari-mir=dirtybytes,junk,sub`, checks identical output,
+and fails if compile time or binary size exceeds the default budget.
