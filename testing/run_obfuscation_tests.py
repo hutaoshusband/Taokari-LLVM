@@ -57,6 +57,12 @@ CASES = [
     Case("cpp_templates", (case_path("cpp_templates") / "src" / "main.cpp",), "templates:55:29\n"),
     Case("cpp_mixed", (case_path("cpp_mixed") / "src" / "main.cpp",), "mixed:3628800:1.4142:301\n"),
     Case(
+        "realworld_c",
+        (case_path("realworld_c") / "src" / "main.cpp",),
+        # Ported from FireflyProtector/test64/realworld_c. Output is deterministic.
+        "FireflyRealWorldFixture:bf3bec2ca306c59b:d0029f74\n",
+    ),
+    Case(
         "imgui_headless",
         (
             case_path("imgui_headless") / "src" / "main.cpp",
