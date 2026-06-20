@@ -46,6 +46,18 @@ enum Opcode : int64_t {
   OpBrTrue = 15,
   OpRet = 16,
   OpSelect = 17,
+  // ponytail: L1.5.1 widened integer binary ops. Values 18+ are the new ISA;
+  // 1..17 stay stable so existing bytecode keeps working.
+  OpMul = 18,
+  OpAnd = 19,
+  OpOr = 20,
+  OpShl = 21,
+  OpLShr = 22,
+  OpAShr = 23,
+  OpSDiv = 24,
+  OpUDiv = 25,
+  OpSRem = 26,
+  OpURem = 27,
 };
 
 // ponytail: How many operand-stack pops and bytecode immediates a handler
@@ -177,6 +189,17 @@ struct CodeVirtualization : public ModulePass {
           case Instruction::Add:
           case Instruction::Sub:
           case Instruction::Xor:
+          // ponytail: L1.5.1 widened integer binary ops.
+          case Instruction::Mul:
+          case Instruction::And:
+          case Instruction::Or:
+          case Instruction::Shl:
+          case Instruction::LShr:
+          case Instruction::AShr:
+          case Instruction::SDiv:
+          case Instruction::UDiv:
+          case Instruction::SRem:
+          case Instruction::URem:
             break;
           default:
             return true;
@@ -274,6 +297,14 @@ struct CodeVirtualization : public ModulePass {
               !emitValue(P, Slots, BO->getOperand(1)))
             return false;
           VmTy ResultTy = vmTyFromType(BO->getType());
+          // ponytail: signedness for the few ops where it matters at encode
+          // time. Mul/And/Or/Xor/Add/Sub/Shl are sign-agnostic; the narrowing
+          // uses the type width only. AShr is signed (arithmetic) shift, LShr
+          // is unsigned (logical) shift; UDiv/URem unsigned, SDiv/SRem signed.
+          // The interpreter opcode choice (OpAShr vs OpLShr, OpSDiv vs OpUDiv)
+          // already encodes this, so the VmTy.Signed here is only consulted by
+          // the narrowing helper, which for these ops behaves the same
+          // regardless of Signed (the result fits in width either way).
           switch (BO->getOpcode()) {
           case Instruction::Add:
             P.Words.push_back(OpAdd);
@@ -283,6 +314,36 @@ struct CodeVirtualization : public ModulePass {
             break;
           case Instruction::Xor:
             P.Words.push_back(OpXor);
+            break;
+          case Instruction::Mul:
+            P.Words.push_back(OpMul);
+            break;
+          case Instruction::And:
+            P.Words.push_back(OpAnd);
+            break;
+          case Instruction::Or:
+            P.Words.push_back(OpOr);
+            break;
+          case Instruction::Shl:
+            P.Words.push_back(OpShl);
+            break;
+          case Instruction::LShr:
+            P.Words.push_back(OpLShr);
+            break;
+          case Instruction::AShr:
+            P.Words.push_back(OpAShr);
+            break;
+          case Instruction::SDiv:
+            P.Words.push_back(OpSDiv);
+            break;
+          case Instruction::UDiv:
+            P.Words.push_back(OpUDiv);
+            break;
+          case Instruction::SRem:
+            P.Words.push_back(OpSRem);
+            break;
+          case Instruction::URem:
+            P.Words.push_back(OpURem);
             break;
           default:
             return false;
@@ -298,10 +359,14 @@ struct CodeVirtualization : public ModulePass {
           if (!emitValue(P, Slots, Cmp->getOperand(0)) ||
               !emitValue(P, Slots, Cmp->getOperand(1)))
             return false;
-          // ponytail: cmp operands are already narrowed at push time (their
-          // VmTy immediate carried width+signedness), and the signedness of
-          // the comparison itself is encoded in the opcode choice
-          // (OpCmpSgt vs a future OpCmpUgt). No extra VmTy immediate needed.
+          // ponytail: cmp operands are pushed in canonical zext form. Signed
+          // compares (SGT/SLT/SGE/SLE) need the operands sign-extended from
+          // their true width first, so the encoder emits a trailing VmTy
+          // immediate for the signed variants; the handler fetches it and
+          // sign-extends both operands before the ICmp. EQ/NE are sign-
+          // agnostic and carry no immediate.
+          VmTy OperandTy = vmTyFromType(Cmp->getOperand(0)->getType());
+          OperandTy.Signed = Cmp->isSigned();
           switch (Cmp->getPredicate()) {
           case CmpInst::ICMP_EQ:
             P.Words.push_back(OpCmpEq);
@@ -311,15 +376,19 @@ struct CodeVirtualization : public ModulePass {
             break;
           case CmpInst::ICMP_SGT:
             P.Words.push_back(OpCmpSgt);
+            P.Words.push_back(packVmTy(OperandTy));
             break;
           case CmpInst::ICMP_SLT:
             P.Words.push_back(OpCmpSlt);
+            P.Words.push_back(packVmTy(OperandTy));
             break;
           case CmpInst::ICMP_SGE:
             P.Words.push_back(OpCmpSge);
+            P.Words.push_back(packVmTy(OperandTy));
             break;
           case CmpInst::ICMP_SLE:
             P.Words.push_back(OpCmpSle);
+            P.Words.push_back(packVmTy(OperandTy));
             break;
           default:
             return false;
@@ -400,7 +469,20 @@ struct CodeVirtualization : public ModulePass {
     case OpCmpSlt:
     case OpCmpSge:
     case OpCmpSle:
-      // binary ops now carry a VmTy immediate (result width) for narrowing
+    case OpMul:
+    case OpAnd:
+    case OpOr:
+    case OpShl:
+    case OpLShr:
+    case OpAShr:
+    case OpSDiv:
+    case OpUDiv:
+    case OpSRem:
+    case OpURem:
+      // binary ops now carry a VmTy immediate (result width) for narrowing.
+      // Cmp ops in this list carry no immediate (NarrowResult=false), but the
+      // shape is reported conservatively uniform here; the actual fetch count
+      // is driven by NarrowResult in the handler, not by this metadata.
       return {2, 1, 1};
     case OpSelect:
       return {3, 1, 0};
@@ -469,40 +551,46 @@ struct CodeVirtualization : public ModulePass {
     return pop(B, C.I64, C.Stack, C.SP);
   }
 
-  // ponytail: Narrow a full i64 value back to the VmTy width, preserving
-  // signedness. The VM stores everything as i64 internally; arithmetic must
-  // wrap at the operand width to match native semantics. We do this purely
-  // arithmetically so the IR stays branch-free:
+  // ponytail: Narrow a full i64 value to its native width, returned as the
+  // canonical ZERO-EXTENDED bit pattern. The VM stack always holds values in
+  // this canonical form: truncate to width, then zext to i64. Signedness is
+  // NOT applied here -- it is a property of the consuming operation, not the
+  // value. So `-1` (i32) lives on the stack as 0x00000000FFFFFFFF.
   //
-  //   Mask      = (1 << Width) - 1          // low `Width` bits
-  //   SignBit   = 1 << (Width - 1)          // top bit of the narrow value
-  //   Unsigned  = V & Mask                  // zero-extended
-  //   Signed    = (Unsigned ^ SignBit) - SignBit
+  //   Mask = (1 << Width) - 1
+  //   Lo   = V & Mask
   //
-  // The SignBit trick arithmetically extends the narrow two's-complement
-  // value into i64. Width=64 is a no-op: Mask = all-ones, SignBit = MSB,
-  // and (V ^ MSB) - MSB == V.
-  //
-  // PackedTyImm is the runtime VmTy immediate fetched from the bytecode
-  // (low 8 bits = width, bit 8 = signed).
+  // Width=64 is a no-op (Mask = all-ones). PackedTyImm is the runtime VmTy
+  // immediate (low 8 bits = width; the signed bit is ignored here).
   Value *narrowTo(IRBuilder<> &B, InterpCtx &C, Value *V,
                   Value *PackedTyImm) {
+    Value *Width = B.CreateAnd(PackedTyImm, ConstantInt::get(C.I64, 0xFF));
+    // Mask = (1 << Width) - 1
+    Value *Mask =
+        B.CreateSub(B.CreateShl(ConstantInt::get(C.I64, 1), Width),
+                    ConstantInt::get(C.I64, 1));
+    return B.CreateAnd(V, Mask);
+  }
+
+  // ponytail: Sign-extend a canonical zext stack value from its native width
+  // back to a signed i64, for use by signed operations (signed compare, SDiv,
+  // SRem, AShr). Counterpart to narrowTo: narrowTo produces the canonical
+  // zext bit pattern; signExtendFor consumes it when the op is signed.
+  //
+  //   Mask      = (1 << Width) - 1
+  //   Lo        = V & Mask            // canonical zext value
+  //   SignBit   = 1 << (Width - 1)
+  //   Signed    = (Lo ^ SignBit) - SignBit
+  Value *signExtendFor(IRBuilder<> &B, InterpCtx &C, Value *V,
+                       Value *PackedTyImm) {
     Value *One = ConstantInt::get(C.I64, 1);
     Value *Width = B.CreateAnd(PackedTyImm, ConstantInt::get(C.I64, 0xFF));
-    Value *SignedBit =
-        B.CreateAnd(B.CreateLShr(PackedTyImm, ConstantInt::get(C.I64, 8)),
-                    ConstantInt::get(C.I64, 1));
-    // Mask = (1 << Width) - 1
     Value *Mask =
         B.CreateSub(B.CreateShl(One, Width), ConstantInt::get(C.I64, 1));
     Value *Lo = B.CreateAnd(V, Mask);
-    // SignBit = 1 << (Width - 1)
     Value *SignBit =
         B.CreateShl(One, B.CreateSub(Width, ConstantInt::get(C.I64, 1)));
-    // Signed extension: (Lo ^ SignBit) - SignBit. Apply only when SignedBit=1.
-    Value *Sext = B.CreateSub(B.CreateXor(Lo, SignBit), SignBit);
-    return B.CreateSelect(
-        B.CreateICmpNE(SignedBit, ConstantInt::get(C.I64, 0)), Sext, Lo);
+    return B.CreateSub(B.CreateXor(Lo, SignBit), SignBit);
   }
 
   // ponytail: Build the handler table for the interpreter. Each entry owns
@@ -553,54 +641,135 @@ struct CodeVirtualization : public ModulePass {
     // would be ill-formed under /permissive- with a default capture, so we
     // use an explicit capture list with no default and name Fn there.
     //
-    // NarrowResult=true (arithmetic ops): fetch a trailing VmTy immediate and
-    // narrow the i64 result back to the operand width so wraparound matches
-    // native semantics. NarrowResult=false (compare ops): no immediate; the
-    // result is already 0/1 zext'd to i64, width-agnostic.
+    // Flags:
+    //   NarrowResult  -- fetch a trailing VmTy immediate and narrow the i64
+    //                    result back to the operand width (canonical zext).
+    //                    True for all arithmetic ops; false for compares.
+    //   SignedOperands -- sign-extend both operands from their VmTy width
+    //                     before calling Fn. Required for any op whose native
+    //                     semantics depend on the operands being signed
+    //                     (SDiv/SRem/AShr). Sign-agnostic ops (Add/Sub/Mul/
+    //                     And/Or/Xor/Shl/LShr) leave the canonical zext
+    //                     operands in place because two's-complement bit ops
+    //                     give the same result either way once narrowed.
     auto addBinary = [&](Opcode Op, StringRef Name, bool NarrowResult,
+                         bool SignedOperands,
                          std::function<Value *(IRBuilder<> &, Value *, Value *)>
                              Fn) {
       H.push_back({Op, Name, shapeOf(Op),
-                   [this, &C, Fn, NarrowResult](IRBuilder<> &B) {
+                   [this, &C, Fn, NarrowResult, SignedOperands](IRBuilder<> &B) {
                      Value *R = popStk(B, C);
                      Value *L = popStk(B, C);
-                     Value *Result = Fn(B, L, R);
+                     Value *Result;
                      if (NarrowResult) {
                        Value *Ty = fetchWord(B, C);
+                       if (SignedOperands) {
+                         L = signExtendFor(B, C, L, Ty);
+                         R = signExtendFor(B, C, R, Ty);
+                       }
+                       Result = Fn(B, L, R);
                        Result = narrowTo(B, C, Result, Ty);
+                     } else {
+                       Result = Fn(B, L, R);
                      }
                      pushStk(B, C, Result);
                      B.CreateBr(C.Dispatch);
                    }});
     };
-    addBinary(OpAdd, "add", /*NarrowResult=*/true,
+    addBinary(OpAdd, "add", /*Narrow=*/true, /*Signed=*/false,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateAdd(L, R);
               });
-    addBinary(OpSub, "sub", /*NarrowResult=*/true,
+    addBinary(OpSub, "sub", /*Narrow=*/true, /*Signed=*/false,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateSub(L, R);
               });
-    addBinary(OpXor, "xor", /*NarrowResult=*/true,
+    addBinary(OpXor, "xor", /*Narrow=*/true, /*Signed=*/false,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateXor(L, R);
               });
+    // ponytail: L1.5.1 widened integer binary ops. All carry a VmTy immediate
+    // and narrow the result. Signedness is encoded in the opcode choice and
+    // the SignedOperands flag: AShr/SDiv/SRem sign-extend operands first;
+    // the rest operate on the canonical zext bit pattern.
+    addBinary(OpMul, "mul", /*Narrow=*/true, /*Signed=*/false,
+              [](IRBuilder<> &B, Value *L, Value *R) {
+                return B.CreateMul(L, R);
+              });
+    addBinary(OpAnd, "and", /*Narrow=*/true, /*Signed=*/false,
+              [](IRBuilder<> &B, Value *L, Value *R) {
+                return B.CreateAnd(L, R);
+              });
+    addBinary(OpOr, "or", /*Narrow=*/true, /*Signed=*/false,
+              [](IRBuilder<> &B, Value *L, Value *R) {
+                return B.CreateOr(L, R);
+              });
+    addBinary(OpShl, "shl", /*Narrow=*/true, /*Signed=*/false,
+              [](IRBuilder<> &B, Value *L, Value *R) {
+                return B.CreateShl(L, R);
+              });
+    addBinary(OpLShr, "lshr", /*Narrow=*/true, /*Signed=*/false,
+              [](IRBuilder<> &B, Value *L, Value *R) {
+                return B.CreateLShr(L, R);
+              });
+    addBinary(OpAShr, "ashr", /*Narrow=*/true, /*Signed=*/true,
+              [](IRBuilder<> &B, Value *L, Value *R) {
+                return B.CreateAShr(L, R);
+              });
+    addBinary(OpSDiv, "sdiv", /*Narrow=*/true, /*Signed=*/true,
+              [](IRBuilder<> &B, Value *L, Value *R) {
+                return B.CreateSDiv(L, R);
+              });
+    addBinary(OpUDiv, "udiv", /*Narrow=*/true, /*Signed=*/false,
+              [](IRBuilder<> &B, Value *L, Value *R) {
+                return B.CreateUDiv(L, R);
+              });
+    addBinary(OpSRem, "srem", /*Narrow=*/true, /*Signed=*/true,
+              [](IRBuilder<> &B, Value *L, Value *R) {
+                return B.CreateSRem(L, R);
+              });
+    addBinary(OpURem, "urem", /*Narrow=*/true, /*Signed=*/false,
+              [](IRBuilder<> &B, Value *L, Value *R) {
+                return B.CreateURem(L, R);
+              });
 
-    auto addCmp = [&](Opcode Op, StringRef Name, CmpInst::Predicate Pred) {
-      // Pred (by-value param) and C.I64 are captured by value into the
-      // owned std::function so they survive after addCmp returns. Cmp results
-      // are 0/1, no width narrowing.
-      addBinary(Op, Name, /*NarrowResult=*/false,
+    auto addCmp = [&](Opcode Op, StringRef Name, CmpInst::Predicate Pred,
+                      bool SignedOperands) {
+      // Signed compares (SGT/SLT/SGE/SLE) must sign-extend operands first so
+      // that e.g. (-1) < 1 holds. EQ/NE are sign-agnostic. The operand VmTy
+      // is carried by the most recent push (LoadSlot/PushConst), but the cmp
+      // opcode emits no VmTy immediate of its own, so we re-fetch the width
+      // from the value's type -- which we do not have here. Instead the cmp
+      // handlers below re-narrow the operands using the type width baked
+      // into the comparison by reading it from a separate path.
+      //
+      // Simpler: re-use addBinary with Narrow=false but inject a sign-extend
+      // step. Since addBinary only sign-extends when NarrowResult=true (it
+      // needs the Ty immediate), and cmps have no Ty immediate, we handle
+      // signed compares by sign-extending unconditionally to 64-bit here --
+      // which is correct because every supported integer type fits in 64
+      // bits, and the canonical zext value sign-extended from its true width
+      // equals the mathematically correct signed value. But we don't know
+      // the width at this layer without the immediate.
+      //
+      // Resolution: signed cmps DO carry a VmTy immediate after all. See the
+      // encoder: cmp ops emit packVmTy(OperandTy) for the signed variants.
+      // To keep this layer simple we instead sign-extend from the operands'
+      // stack form by re-deriving width at encode time and emitting it. For
+      // now, EQ/NE (the unsigned/signed-agnostic predicates) work without
+      // any immediate; the S* predicates are handled by the encoder emitting
+      // a VmTy and the handler fetching it.
+      addBinary(Op, Name, /*Narrow=*/SignedOperands, /*Signed=*/SignedOperands,
                 [Pred, I64 = C.I64](IRBuilder<> &B, Value *L, Value *R) {
                   return B.CreateZExt(B.CreateICmp(Pred, L, R), I64);
                 });
     };
-    addCmp(OpCmpEq, "cmpeq", CmpInst::ICMP_EQ);
-    addCmp(OpCmpNe, "cmpne", CmpInst::ICMP_NE);
-    addCmp(OpCmpSgt, "cmpsgt", CmpInst::ICMP_SGT);
-    addCmp(OpCmpSlt, "cmpslt", CmpInst::ICMP_SLT);
-    addCmp(OpCmpSge, "cmpsge", CmpInst::ICMP_SGE);
-    addCmp(OpCmpSle, "cmpsle", CmpInst::ICMP_SLE);
+    addCmp(OpCmpEq, "cmpeq", CmpInst::ICMP_EQ, /*Signed=*/false);
+    addCmp(OpCmpNe, "cmpne", CmpInst::ICMP_NE, /*Signed=*/false);
+    addCmp(OpCmpSgt, "cmpsgt", CmpInst::ICMP_SGT, /*Signed=*/true);
+    addCmp(OpCmpSlt, "cmpslt", CmpInst::ICMP_SLT, /*Signed=*/true);
+    addCmp(OpCmpSge, "cmpsge", CmpInst::ICMP_SGE, /*Signed=*/true);
+    addCmp(OpCmpSle, "cmpsle", CmpInst::ICMP_SLE, /*Signed=*/true);
 
     H.push_back({OpSelect, "select", shapeOf(OpSelect),
                  [this, &C](IRBuilder<> &B) {

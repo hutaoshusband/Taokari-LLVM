@@ -37,6 +37,18 @@ VMP_CASE(add_case, { return a + b; })
 VMP_CASE(sub_case, { return a - b; })
 VMP_CASE(xor_case, { return (a ^ b) ^ 17; })
 
+// --- L1.5.1 widened integer binary ops. ---
+VMP_CASE(mul_case,  { return a * b; })
+VMP_CASE(and_case,  { return (a & b) & 0xFF; })
+VMP_CASE(or_case,   { return (a | b) | 0x100; })
+VMP_CASE(shl_case,  { return (a & 0xF) << (b & 7); })
+VMP_CASE(lshr_case, { return (int)((unsigned int)a >> (b & 7)); })
+VMP_CASE(ashr_case, { return a >> (b & 7); })
+VMP_CASE(sdiv_case, { return b != 0 ? a / b : 0; })
+VMP_CASE(udiv_case, { return b != 0 ? (int)((unsigned int)a / (unsigned int)b) : 0; })
+VMP_CASE(srem_case, { return b != 0 ? a % b : 0; })
+VMP_CASE(urem_case, { return b != 0 ? (int)((unsigned int)a % (unsigned int)b) : 0; })
+
 // --- Comparisons (signed only in L1). Result is 0/1 to keep it integer. ---
 VMP_CASE(cmpeq_case,  { return (a == b); })
 VMP_CASE(cmpne_case,  { return (a != b); })
@@ -77,6 +89,16 @@ int main(int argc, char **argv) {
   printf("add_case:%d:%d:%d\n",     a, b, add_case(a, b));
   printf("sub_case:%d:%d:%d\n",     a, b, sub_case(a, b));
   printf("xor_case:%d:%d:%d\n",     a, b, xor_case(a, b));
+  printf("mul_case:%d:%d:%d\n",     a, b, mul_case(a, b));
+  printf("and_case:%d:%d:%d\n",     a, b, and_case(a, b));
+  printf("or_case:%d:%d:%d\n",      a, b, or_case(a, b));
+  printf("shl_case:%d:%d:%d\n",     a, b, shl_case(a, b));
+  printf("lshr_case:%d:%d:%d\n",    a, b, lshr_case(a, b));
+  printf("ashr_case:%d:%d:%d\n",    a, b, ashr_case(a, b));
+  printf("sdiv_case:%d:%d:%d\n",    a, b, sdiv_case(a, b));
+  printf("udiv_case:%d:%d:%d\n",    a, b, udiv_case(a, b));
+  printf("srem_case:%d:%d:%d\n",    a, b, srem_case(a, b));
+  printf("urem_case:%d:%d:%d\n",    a, b, urem_case(a, b));
   printf("cmpeq_case:%d:%d:%d\n",   a, b, cmpeq_case(a, b));
   printf("cmpne_case:%d:%d:%d\n",   a, b, cmpne_case(a, b));
   printf("cmpsgt_case:%d:%d:%d\n",  a, b, cmpsgt_case(a, b));
