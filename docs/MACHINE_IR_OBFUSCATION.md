@@ -231,6 +231,14 @@ prologue/epilogue gate:
   sequence.
 - the normal `dirtybytes,junk,sub` MIR set does not emit fake boundary bytes.
 
+`testing/scripts/verify_machine_obf_l3_ida_snapshot.py` checks the local
+Hex-Rays before/after snapshot:
+
+- a plain exported fixture function decompiles to the clean source-like return.
+- the Fortress MIR build decompiles to a longer pseudocode snapshot with
+  visible flags noise.
+- the verifier uses `TAOKARI_IDA` when set, otherwise the local IDA install.
+
 `testing/scripts/verify_machine_obf_l3_cross_pass.py` checks cross-pass
 integration:
 
@@ -263,6 +271,8 @@ IDA-Pro research doc §A Level 3:
 - **Fake prologue/epilogue byte patterns** — `+mir:fakebounds` emits guarded
   frame-looking bytes that survive into the binary while preserving runtime
   behavior.
+- **Hex-Rays snapshot gate** — `verify_machine_obf_l3_ida_snapshot.py` records
+  plain vs Fortress MIR pseudocode and gates on measurable decompiler noise.
 - **Unmodelled instruction emission** — explicit `unmodelled` opt-in emits
   skipped privileged/SIMD bytes the microcode lifter may not model.
 - **Runtime-dependent dirty-byte guards** — dirty-byte branches depend on live

@@ -78,6 +78,16 @@ python testing\scripts\verify_machine_obf_l3_fakebounds.py
 It checks explicit `+mir:fakebounds`/flag emission and proves the normal MIR set
 does not emit fake boundary bytes.
 
+Run the local IDA/Hex-Rays snapshot gate:
+
+```powershell
+python testing\scripts\verify_machine_obf_l3_ida_snapshot.py
+```
+
+It uses `TAOKARI_IDA` or the local IDA install, snapshots plain vs Fortress MIR
+Hex-Rays output, and fails unless the protected function gains visible
+decompiler noise.
+
 Run the MIR + IR cross-pass gate:
 
 ```powershell

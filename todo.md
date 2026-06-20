@@ -1031,7 +1031,7 @@ obfuscation regression matrix stays green (57 PASS / 0 FAIL).
 * [x] Add unmodelled instruction emission (anti-microcode-lift, Fortress only)
 * [x] Add runtime-dependent dirty-byte guards
 * [x] Add cross-pass integration with flattening / indirect-branch
-* [ ] Add decompiler snapshot tests (Hex-Rays output before/after)
+* [x] Add decompiler snapshot tests (Hex-Rays output before/after)
 * [x] Add CFG fragmentation metric
 * [x] Add performance budget for the Fortress profile
 * [x] Add AArch64 MIR parity planning
