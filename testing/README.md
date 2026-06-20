@@ -68,3 +68,12 @@ python testing\scripts\verify_machine_obf_l3_unmodelled.py
 
 It checks explicit `+mir:unmodelled` emission and proves the normal MIR set does
 not emit the privileged/SIMD bytes.
+
+Run the MIR + IR cross-pass gate:
+
+```powershell
+python testing\scripts\verify_machine_obf_l3_cross_pass.py
+```
+
+It checks that MIR `dirtybytes,junk,sub` survives with IR flattening, BCF and
+indirect-branch obfuscation enabled.

@@ -217,6 +217,15 @@ unmodelled-instruction gate:
 - `+mir:unmodelled` emits the privileged/SIMD byte sequence.
 - the normal `dirtybytes,junk,sub` MIR set does not emit it.
 
+`testing/scripts/verify_machine_obf_l3_cross_pass.py` checks cross-pass
+integration:
+
+- a branch/switch-heavy fixture compiles and runs with IR flattening, BCF,
+  indirect-branch obfuscation, and MIR `dirtybytes,junk,sub`.
+- `-verify-machineinstrs` accepts the combined pipeline.
+- the final object still contains all requested MIR byte signatures after the
+  IR passes run.
+
 ## Level 3 roadmap (backlog)
 
 The remaining MIR transforms that attack Hex-Rays function recovery, per the
@@ -229,6 +238,8 @@ IDA-Pro research doc §A Level 3:
   skipped privileged/SIMD bytes the microcode lifter may not model.
 - **Runtime-dependent dirty-byte guards** — dirty-byte branches depend on live
   architectural state instead of a fixed `cmp rsp, rsp` signature.
+- **Cross-pass integration** — `verify_machine_obf_l3_cross_pass.py` proves MIR
+  emission survives alongside IR flattening, BCF and indirect branches.
 - **Budget gate** — `verify_machine_obf_l3_budget.py` blocks pathological
   compile-time and binary-size growth while Fortress MIR expands.
 
