@@ -138,14 +138,22 @@ Example families:
 
 ## Level 2 — Context-Based Predicates
 
-* [ ] Add pointer-based predicates
-* [ ] Add stack-address predicates
-* [ ] Add global-seed predicates
-* [ ] Add environment-mixed predicates
-* [ ] Add volatile-load support
-* [ ] Add runtime-global nonce support
-* [ ] Prevent easy constant folding
-* [ ] Prevent obvious InstCombine cleanup
+* [x] Add pointer-based predicates
+* [x] Add stack-address predicates
+* [x] Add global-seed predicates
+* [x] Add environment-mixed predicates
+* [x] Add volatile-load support
+* [x] Add runtime-global nonce support
+* [x] Prevent easy constant folding
+* [x] Prevent obvious InstCombine cleanup
+
+**Definition of done for L2:**
+Each context seed kind (`pointer`, `stack`, `global`, `environment`, `nonce`)
+plus the unfoldable `x*(x+1)` family survives `opt -passes=instcombine,
+simplifycfg`. Verified by `testing/scripts/verify_opaque_predicates_level2.py`
+against the locally built `clang-cl`/`opt`/`llvm-config`. The Level-1
+algebraic predicate over the same seeds folds (control), proving the survival
+test is non-vacuous and that the unfoldable family is what closes the gap.
 
 ## Level 3 — Predicate Engine
 
