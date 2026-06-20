@@ -50,3 +50,12 @@ python testing\scripts\verify_machine_obf_l3_budget.py
 
 It compares plain vs `-taokari-mir=dirtybytes,junk,sub`, checks identical output,
 and fails if compile time or binary size exceeds the default budget.
+
+Run the runtime dirty-byte guard gate:
+
+```powershell
+python testing\scripts\verify_machine_obf_l3_dirty_guard.py
+```
+
+It checks that dirty-byte emission uses the runtime stack-byte guard and no
+longer emits the old fixed `cmp rsp, rsp` guard.

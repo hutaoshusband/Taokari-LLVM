@@ -155,8 +155,10 @@ Level 2 emits x86-64 inline-asm byte snippets at the function entry, after
 register allocation and before final emission. The snippets preserve the GPRs
 and RFLAGS they touch while still surviving as side-effecting machine code.
 
-- **Dirty bytes:** `cmp rsp, rsp; je +8; <dead invalid/trap bytes>`. The guard
-  is tied to architectural context and the skipped bytes survive in the binary.
+- **Dirty bytes:** `pushfq; push rax; mov al, [rsp]; xor al, imm8; xor al, imm8;
+  cmp al, [rsp]; je +8; <dead invalid/trap bytes>; pop rax; popfq`. The guard
+  depends on runtime stack contents while remaining net-neutral, and the skipped
+  bytes survive in the binary.
 - **Junk with side effects:** `pushfq; push rax; xor byte ptr [rsp], imm8; xor
   byte ptr [rsp], imm8; pop rax; popfq`. The stack writes are real but net
   neutral.
@@ -195,6 +197,13 @@ and checks the first instruction of each function.
 - obfuscated binary size must stay under `1.25x + 32 KiB` versus plain by
   default.
 
+`testing/scripts/verify_machine_obf_l3_dirty_guard.py` checks the Fortress
+dirty-byte guard:
+
+- plain and MIR-obfuscated executables produce identical stdout.
+- the object contains the runtime stack-byte guard.
+- the old fixed `cmp rsp, rsp` guard is absent.
+
 ## Level 3 roadmap (backlog)
 
 The remaining MIR transforms that attack Hex-Rays function recovery, per the
@@ -205,6 +214,8 @@ IDA-Pro research doc §A Level 3:
   prologue/epilogue byte patterns between real functions.
 - **Unmodelled instruction emission** — Fortress-profile only; emit
   instructions the microcode lifter has no rule for.
+- **Runtime-dependent dirty-byte guards** — dirty-byte branches depend on live
+  architectural state instead of a fixed `cmp rsp, rsp` signature.
 - **Budget gate** — `verify_machine_obf_l3_budget.py` blocks pathological
   compile-time and binary-size growth while Fortress MIR expands.
 

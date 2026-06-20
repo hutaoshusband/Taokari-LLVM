@@ -16,7 +16,7 @@ VSDEVCMD = Path(
 )
 
 MARKER = bytes.fromhex("48 8d 40 00")
-DIRTY = bytes.fromhex("48 39 e4 74 08 0f 0b eb fe cc f1 0f 0b")
+DIRTY = bytes.fromhex("9c 50 8a 04 24 34 a7 34 a7 3a 04 24 74 08 0f 0b eb fe cc f1 0f 0b 58 9d")
 JUNK = bytes.fromhex("9c 50 80 34 24 5a 80 34 24 5a 58 9d")
 SUB = bytes.fromhex("9c 50 48 89 e0 48 8d 40 13 48 83 e8 13 58 9d")
 
