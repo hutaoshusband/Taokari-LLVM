@@ -69,11 +69,12 @@ struct BogusControlFlow : public FunctionPass {
         Blocks.push_back(&BB);
     }
 
+    std::mt19937_64 FuncRNG(RNG());
     bool Changed = false;
     for (BasicBlock *BB : Blocks) {
-      if ((RNG() % 100) >= Probability)
+      if ((FuncRNG() % 100) >= Probability)
         continue;
-      Changed |= obfuscateBlock(F, *BB, Opt.level(), Loops);
+      Changed |= obfuscateBlock(F, *BB, Opt.level(), Loops, FuncRNG);
     }
     return Changed;
   }
@@ -91,7 +92,7 @@ struct BogusControlFlow : public FunctionPass {
   }
 
   bool obfuscateBlock(Function &F, BasicBlock &BB, uint32_t Level,
-                      uint32_t Loops) {
+                      uint32_t Loops, std::mt19937_64 &FuncRNG) {
     auto *Pred = BB.getSinglePredecessor();
     if (!Pred)
       return false;
@@ -109,8 +110,8 @@ struct BogusControlFlow : public FunctionPass {
     BasicBlock *Fake = CloneBasicBlock(&BB, VMap, ".bcf.fake", &F);
     sanitizeFake(*Fake);
     if (Level >= 2)
-      mutateFake(*Fake, Level);
-    addJunk(*Fake, BB, *Nonce, *JunkSlot, Loops, Level);
+      mutateFake(*Fake, Level, FuncRNG);
+    addJunk(*Fake, BB, *Nonce, *JunkSlot, Loops, Level, FuncRNG);
 
     Pred->getTerminator()->replaceSuccessorWith(&BB, Guard);
 
@@ -155,7 +156,7 @@ struct BogusControlFlow : public FunctionPass {
     }
   }
 
-  void mutateFake(BasicBlock &Fake, uint32_t Level) {
+  void mutateFake(BasicBlock &Fake, uint32_t Level, std::mt19937_64 &FuncRNG) {
     SmallVector<BinaryOperator *, 8> Ops;
     for (Instruction &I : Fake) {
       if (auto *BO = dyn_cast<BinaryOperator>(&I))
@@ -166,8 +167,8 @@ struct BogusControlFlow : public FunctionPass {
       IRBuilder<> IRB(BO);
       Value *L = BO->getOperand(0);
       Value *R = BO->getOperand(1);
-      Value *N = (RNG() % 3 == 0) ? IRB.CreateXor(L, R, BO->getName() + ".mx")
-                 : (Level > 2 && RNG() % 2)
+      Value *N = (FuncRNG() % 3 == 0) ? IRB.CreateXor(L, R, BO->getName() + ".mx")
+                 : (Level > 2 && FuncRNG() % 2)
                        ? IRB.CreateMul(L, R, BO->getName() + ".mm")
                        : IRB.CreateAdd(L, R, BO->getName() + ".ma");
       BO->replaceAllUsesWith(N);
@@ -176,15 +177,16 @@ struct BogusControlFlow : public FunctionPass {
   }
 
   void addJunk(BasicBlock &Fake, BasicBlock &Real, GlobalVariable &Nonce,
-               AllocaInst &JunkSlot, uint32_t Loops, uint32_t Level) {
+               AllocaInst &JunkSlot, uint32_t Loops, uint32_t Level,
+               std::mt19937_64 &FuncRNG) {
     IRBuilder<> IRB(&Fake);
     auto *Int64 = Type::getInt64Ty(Fake.getContext());
     Value *V = IRB.CreateAlignedLoad(Int64, &Nonce, Align(8), true,
                                      "bcf.fake.nonce");
     for (uint32_t I = 0; I < Loops; ++I) {
-      V = IRB.CreateXor(V, ConstantInt::get(Int64, RNG()), "bcf.fake.xor");
-      V = IRB.CreateMul(V, ConstantInt::get(Int64, (RNG() | 1)), "bcf.fake.mul");
-      V = IRB.CreateAdd(V, ConstantInt::get(Int64, RNG()), "bcf.fake.add");
+      V = IRB.CreateXor(V, ConstantInt::get(Int64, FuncRNG()), "bcf.fake.xor");
+      V = IRB.CreateMul(V, ConstantInt::get(Int64, (FuncRNG() | 1)), "bcf.fake.mul");
+      V = IRB.CreateAdd(V, ConstantInt::get(Int64, FuncRNG()), "bcf.fake.add");
     }
     if (Level >= 2) {
       auto *JunkFn = getOrCreateJunkFunction(*Fake.getModule());
