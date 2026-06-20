@@ -129,6 +129,42 @@ VMP_CASE(nested_loop_case, {
   return total;
 })
 
+// --- L1.5.1 VM-local memory (middle way). Only VM-local allocas; no
+//     external pointer args or globals (deferred to the L2 full-pointer
+//     step). volative-marker would force reloads; we use plain locals and
+//     rely on -O2 keeping them address-taken so they survive as alloca. ---
+VMP_CASE(local_scalar_case, {
+  // volatile qualifier forces the locals to live in memory (alloca) rather
+  // than registers, exercising the VM load/store path.
+  volatile int x = a;
+  volatile int y = b;
+  x = x + y;
+  y = x ^ y;
+  x = x - y;
+  return x + y;
+})
+
+VMP_CASE(local_array_case, {
+  volatile int arr[4];
+  arr[0] = a;
+  arr[1] = b;
+  arr[2] = a + b;
+  arr[3] = a ^ b;
+  // Re-read to force memory traffic (no register promotion).
+  volatile int s = arr[0] + arr[1] + arr[2] + arr[3];
+  return s;
+})
+
+VMP_CASE(swap_case, {
+  // Classic swap via locals -- exercises store+load round-trips.
+  volatile int p = a;
+  volatile int q = b;
+  volatile int t = p;
+  p = q;
+  q = t;
+  return p * 1000 + q;
+})
+
 int main(int argc, char **argv) {
   if (argc < 3) {
     fprintf(stderr, "usage: %s <a> <b>\n", argv[0]);
@@ -167,5 +203,8 @@ int main(int argc, char **argv) {
   printf("while_count_case:%d:%d:%d\n", a, b, while_count_case(a, b));
   printf("loop_carry_case:%d:%d:%d\n",  a, b, loop_carry_case(a, b));
   printf("nested_loop_case:%d:%d:%d\n", a, b, nested_loop_case(a, b));
+  printf("local_scalar_case:%d:%d:%d\n", a, b, local_scalar_case(a, b));
+  printf("local_array_case:%d:%d:%d\n", a, b, local_array_case(a, b));
+  printf("swap_case:%d:%d:%d\n", a, b, swap_case(a, b));
   return 0;
 }

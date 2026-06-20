@@ -65,6 +65,13 @@ enum Opcode : int64_t {
   OpCmpUlt = 29,
   OpCmpUge = 30,
   OpCmpUle = 31,
+  // ponytail: L1.5.1 VM-local memory (middle way). Frame pointers are static
+  // i64 indices into a per-interpreter Frame array; alloca/GEP resolve to
+  // compile-time PushConst of the frame index. LoadPtr/StorePtr carry a VmTy
+  // for width narrowing. External pointer args/globals are NOT supported --
+  // they stay rejected and defer to the L2 full-pointer step.
+  OpLoadPtr = 32,
+  OpStorePtr = 33,
 };
 
 // ponytail: How many operand-stack pops and bytecode immediates a handler
@@ -181,12 +188,14 @@ struct CodeVirtualization : public ModulePass {
       for (Instruction &I : BB) {
         if (isSkippable(I))
           continue;
-        // ponytail: Level 1 VM is toy integer IR only. Add pointer/call/EH
-        // support after this compile/run path proves useful. PHI is supported
-        // (L1.5.1): lowered to slot copies in predecessors.
+        // ponytail: Level 1 VM is toy integer IR only. Add call/EH support
+        // after this compile/run path proves useful. PHI is supported
+        // (L1.5.1): lowered to slot copies in predecessors. VM-local alloca/
+        // load/store/constant-GEP are supported (L1.5.1 middle way): the
+        // pointer-origin check happens in buildBytecode (needs whole-function
+        // alloca context, which this const scan lacks).
         if (isa<CallBase>(I) || isa<InvokeInst>(I) ||
             isa<ResumeInst>(I) || isa<LandingPadInst>(I) ||
-            isa<AllocaInst>(I) || isa<LoadInst>(I) || isa<StoreInst>(I) ||
             isa<AtomicRMWInst>(I) || isa<AtomicCmpXchgInst>(I) ||
             isa<FenceInst>(I))
           return true;
@@ -242,6 +251,13 @@ struct CodeVirtualization : public ModulePass {
             return true;
           continue;
         }
+        // ponytail: VM-local memory (L1.5.1 middle way). Allow AllocaInst,
+        // LoadInst, StoreInst, GetElementPtrInst here; buildBytecode rejects
+        // the function if any pointer origin is non-VM-local (external arg,
+        // global, etc.) -- that check needs whole-function alloca context.
+        if (isa<AllocaInst>(I) || isa<LoadInst>(I) || isa<StoreInst>(I) ||
+            isa<GetElementPtrInst>(I))
+          continue;
         if (isa<BranchInst>(I) || isa<ReturnInst>(I))
           continue;
         return true;
@@ -259,22 +275,49 @@ struct CodeVirtualization : public ModulePass {
     return Slot;
   }
 
+  // ponytail: True if Ty can live in the VM-local frame (integer scalars,
+  // arrays of integers, or simple aggregates of integers -- anything we can
+  // bucket into i64 slots). Pointers, floats, and nested pointer/float
+  // aggregates are rejected (deferred to the L2 full-pointer step).
+  bool isFrameCompatible(Type *Ty) const {
+    if (Ty->isIntegerTy())
+      return true;
+    if (auto *Arr = dyn_cast<ArrayType>(Ty))
+      return isFrameCompatible(Arr->getElementType());
+    if (auto *St = dyn_cast<StructType>(Ty))
+      return St->getNumElements() > 0 &&
+             all_of(St->elements(),
+                    [this](Type *E) { return isFrameCompatible(E); });
+    return false;
+  }
+
   // ponytail: Emit a value-push that carries the value's VmTy so the
   // interpreter can sign/zero-extend into the i64 slot correctly. For a
   // ConstantInt we encode the full sext/zext value directly; for a slot we
   // emit its index. In both cases a packed VmTy immediate follows so the
   // interpreter narrows/promotes the right way before any consumer sees it.
+  // VM-local pointers (alloca-derived) resolve to a PushConst of the frame
+  // slot index via resolveFramePtr; non-VM-local pointers fail here, which
+  // buildBytecode turns into a skip-virtualization.
   bool emitValue(BytecodeProgram &P, DenseMap<const Value *, unsigned> &Slots,
-                 Value *V) {
+                 DenseMap<const AllocaInst *, unsigned> &AllocaBase,
+                 unsigned &NextFrameSlot, Value *V) {
+    // VM-local pointer: alloca or constant-offset GEP of an alloca.
+    if (V->getType()->isPointerTy()) {
+      int64_t FrameIdx = 0;
+      if (!resolveFramePtr(V, AllocaBase, NextFrameSlot, FrameIdx))
+        return false;
+      P.Words.push_back(OpPushConst);
+      P.Words.push_back(FrameIdx);
+      // Frame pointers are width-agnostic unsigned indices.
+      P.Words.push_back(packVmTy(VmTy{64, false}));
+      return true;
+    }
     VmTy Ty = vmTyFromType(V->getType());
     if (auto *CI = dyn_cast<ConstantInt>(V)) {
       if (CI->getBitWidth() > 64)
         return false;
       P.Words.push_back(OpPushConst);
-      // getSExtValue is correct for signed and for unsigned values that fit
-      // in 63 bits; for unsigned i64 constants with the top bit set the
-      // encoder would lose information, but isSupportedInt already gates on
-      // <=64-bit and the interpreter re-narrows from VmTy, so this is safe.
       P.Words.push_back(CI->getSExtValue());
       P.Words.push_back(packVmTy(Ty));
       return true;
@@ -296,6 +339,8 @@ struct CodeVirtualization : public ModulePass {
   // PHIs naturally (the slot holds the previous iteration's value).
   bool emitPhiCopies(BytecodeProgram &P,
                      DenseMap<const Value *, unsigned> &Slots,
+                     DenseMap<const AllocaInst *, unsigned> &AllocaBase,
+                     unsigned &NextFrameSlot,
                      const BasicBlock *Pred, const BasicBlock *Succ) {
     for (const Instruction &I : *Succ) {
       auto *PN = dyn_cast<PHINode>(&I);
@@ -309,7 +354,7 @@ struct CodeVirtualization : public ModulePass {
       // skip such copies -- the slot stays whatever it was.
       if (isa<UndefValue>(Incoming))
         continue;
-      if (!emitValue(P, Slots, Incoming))
+      if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, Incoming))
         return false;
       P.Words.push_back(OpStoreSlot);
       P.Words.push_back(slotFor(Slots, PN));
@@ -317,9 +362,74 @@ struct CodeVirtualization : public ModulePass {
     return true;
   }
 
+  // ponytail: Resolve a VM-local pointer to a Frame slot index. Returns false
+  // if the pointer origin is not VM-local (external arg, global, etc.) -- in
+  // which case buildBytecode rejects the whole function. V must be an
+  // AllocaInst result, or a constant-offset GEP whose base is VM-local. The
+  // Frame is an i64 array in the interpreter; each alloca reserves a run of
+  // consecutive frame slots sized to the alloca's element count.
+  //
+  // Frame layout is built lazily: AllocaInst encountered during emission
+  // reserve slots in `FrameMap` (alloca -> base index). GEP resolves by
+  // walking to the base alloca and adding the constant byte offset / 8.
+  bool resolveFramePtr(const Value *V,
+                       DenseMap<const AllocaInst *, unsigned> &AllocaBase,
+                       unsigned &NextFrameSlot, int64_t &OutIdx) const {
+    // Strip a constant-offset GEP chain down to its base.
+    APInt ByteOffset(64, 0);
+    const Value *Base = V;
+    while (auto *GEP = dyn_cast<GetElementPtrInst>(Base)) {
+      if (!GEP->accumulateConstantOffset(
+              GEP->getModule()->getDataLayout(), ByteOffset))
+        return false; // non-constant index -> defer to L2
+      Base = GEP->getPointerOperand();
+    }
+    const auto *AI = dyn_cast<AllocaInst>(Base);
+    if (!AI)
+      return false; // external/global pointer -> defer to L2
+    auto It = AllocaBase.find(AI);
+    if (It == AllocaBase.end())
+      return false; // alloca not yet allocated (shouldn't happen post-scan)
+    OutIdx = static_cast<int64_t>(It->second) +
+             ByteOffset.getZExtValue() / sizeof(int64_t);
+    return true;
+  }
+
   bool buildBytecode(Function &F, BytecodeProgram &P) {
     DenseMap<const Value *, unsigned> Slots;
     DenseMap<const BasicBlock *, size_t> BlockStart;
+    // ponytail: VM-local frame allocator. Each AllocaInst reserves
+    // ceil(allocSize / 8) consecutive frame slots (i64 units).
+    DenseMap<const AllocaInst *, unsigned> AllocaBase;
+    unsigned NextFrameSlot = 0;
+    constexpr unsigned kFrameSlotCap = 64;
+
+    // Pre-scan: reserve frame slots for every alloca so any later reference
+    // (including a GEP ahead of the alloca in a different block) resolves.
+    for (BasicBlock &BB : F) {
+      for (Instruction &I : BB) {
+        auto *AI = dyn_cast<AllocaInst>(&I);
+        if (!AI)
+          continue;
+        Type *Ty = AI->getAllocatedType();
+        // Only scalar/array integer or aggregate-of-integer types we can
+        // cleanly bucket into i64 slots. Reject anything with pointers or
+        // floats inside (the middle way is integer locals only).
+        if (!isFrameCompatible(Ty))
+          return false;
+        uint64_t SizeBytes =
+            Ty->isSized() ? F.getParent()->getDataLayout().getTypeAllocSize(Ty)
+                          : 0;
+        unsigned SlotsNeeded =
+            static_cast<unsigned>((SizeBytes + 7) / 8);
+        if (SlotsNeeded == 0)
+          SlotsNeeded = 1;
+        if (NextFrameSlot + SlotsNeeded > kFrameSlotCap)
+          return false; // frame too large -> skip virtualization
+        AllocaBase[AI] = NextFrameSlot;
+        NextFrameSlot += SlotsNeeded;
+      }
+    }
 
     unsigned ArgIndex = 0;
     for (Argument &A : F.args()) {
@@ -350,8 +460,8 @@ struct CodeVirtualization : public ModulePass {
           continue;
         }
         if (auto *BO = dyn_cast<BinaryOperator>(&I)) {
-          if (!emitValue(P, Slots, BO->getOperand(0)) ||
-              !emitValue(P, Slots, BO->getOperand(1)))
+          if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, BO->getOperand(0)) ||
+              !emitValue(P, Slots, AllocaBase, NextFrameSlot, BO->getOperand(1)))
             return false;
           VmTy ResultTy = vmTyFromType(BO->getType());
           // ponytail: signedness for the few ops where it matters at encode
@@ -413,8 +523,8 @@ struct CodeVirtualization : public ModulePass {
           continue;
         }
         if (auto *Cmp = dyn_cast<ICmpInst>(&I)) {
-          if (!emitValue(P, Slots, Cmp->getOperand(0)) ||
-              !emitValue(P, Slots, Cmp->getOperand(1)))
+          if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, Cmp->getOperand(0)) ||
+              !emitValue(P, Slots, AllocaBase, NextFrameSlot, Cmp->getOperand(1)))
             return false;
           // ponytail: cmp operands are pushed in canonical zext form. Signed
           // compares (SGT/SLT/SGE/SLE) need the operands sign-extended from
@@ -469,19 +579,59 @@ struct CodeVirtualization : public ModulePass {
           continue;
         }
         if (auto *Sel = dyn_cast<SelectInst>(&I)) {
-          if (!emitValue(P, Slots, Sel->getCondition()) ||
-              !emitValue(P, Slots, Sel->getTrueValue()) ||
-              !emitValue(P, Slots, Sel->getFalseValue()))
+          if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, Sel->getCondition()) ||
+              !emitValue(P, Slots, AllocaBase, NextFrameSlot, Sel->getTrueValue()) ||
+              !emitValue(P, Slots, AllocaBase, NextFrameSlot, Sel->getFalseValue()))
             return false;
           P.Words.push_back(OpSelect);
           P.Words.push_back(OpStoreSlot);
           P.Words.push_back(slotFor(Slots, &I));
           continue;
         }
+        // ponytail: VM-local load (L1.5.1 middle way). Emit the VM-local
+        // pointer (resolves to a PushConst frame index via emitValue), then
+        // OpLoadPtr + VmTy. The handler pops the frame index, loads
+        // Frame[idx], narrows, and pushes the result. The load result is
+        // then stored into the load's own locals slot like any other def.
+        if (auto *LD = dyn_cast<LoadInst>(&I)) {
+          if (!isSupportedInt(LD->getType()))
+            return false;
+          if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, LD->getPointerOperand()))
+            return false;
+          P.Words.push_back(OpLoadPtr);
+          P.Words.push_back(packVmTy(vmTyFromType(LD->getType())));
+          P.Words.push_back(OpStoreSlot);
+          P.Words.push_back(slotFor(Slots, &I));
+          continue;
+        }
+        // ponytail: VM-local store. Emit the value then the VM-local pointer,
+        // then OpStorePtr + VmTy. The handler pops the pointer, then the
+        // value, narrows the value to VmTy, and stores Frame[ptr] = value.
+        if (auto *ST = dyn_cast<StoreInst>(&I)) {
+          if (!isSupportedInt(ST->getValueOperand()->getType()))
+            return false;
+          if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, ST->getValueOperand()))
+            return false;
+          if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, ST->getPointerOperand()))
+            return false;
+          P.Words.push_back(OpStorePtr);
+          P.Words.push_back(packVmTy(vmTyFromType(ST->getValueOperand()->getType())));
+          continue;
+        }
+        // GetElementPtrInst produces no bytecode of its own -- emitValue
+        // resolves it to a PushConst frame index when the pointer is used.
+        if (isa<GetElementPtrInst>(I)) {
+          slotFor(Slots, &I); // register so emitValue(GEP) can re-resolve
+          continue;
+        }
+        // AllocaInst produces no bytecode of its own -- references resolve
+        // via emitValue to a PushConst frame index (allocated in pre-scan).
+        if (isa<AllocaInst>(I))
+          continue;
         if (auto *Br = dyn_cast<BranchInst>(&I)) {
           if (Br->isUnconditional()) {
             // ponytail: store PHI incomings for the single successor, then jump.
-            if (!emitPhiCopies(P, Slots, &BB, Br->getSuccessor(0)))
+            if (!emitPhiCopies(P, Slots, AllocaBase, NextFrameSlot, &BB, Br->getSuccessor(0)))
               return false;
             P.Words.push_back(OpJmp);
             P.Fixups.push_back({P.Words.size(), Br->getSuccessor(0)});
@@ -496,21 +646,21 @@ struct CodeVirtualization : public ModulePass {
           //   [false-copies] ; OpJmp -> false-target
           // L_true_copies:
           //   [true-copies]  ; OpJmp -> true-target
-          if (!emitValue(P, Slots, Br->getCondition()))
+          if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, Br->getCondition()))
             return false;
           P.Words.push_back(OpBrTrue);
           // Fixup resolved later to the start of the true-copies region.
           size_t BrTrueFixupIdx = P.Words.size();
           P.Words.push_back(0); // placeholder, patched to L_true_copies
           // False path (fallthrough): copies then jump to false successor.
-          if (!emitPhiCopies(P, Slots, &BB, Br->getSuccessor(1)))
+          if (!emitPhiCopies(P, Slots, AllocaBase, NextFrameSlot, &BB, Br->getSuccessor(1)))
             return false;
           P.Words.push_back(OpJmp);
           P.Fixups.push_back({P.Words.size(), Br->getSuccessor(1)});
           P.Words.push_back(0);
           // True path: now-resolved start of true-copies region.
           P.Words[BrTrueFixupIdx] = static_cast<int64_t>(P.Words.size());
-          if (!emitPhiCopies(P, Slots, &BB, Br->getSuccessor(0)))
+          if (!emitPhiCopies(P, Slots, AllocaBase, NextFrameSlot, &BB, Br->getSuccessor(0)))
             return false;
           P.Words.push_back(OpJmp);
           P.Fixups.push_back({P.Words.size(), Br->getSuccessor(0)});
@@ -520,7 +670,7 @@ struct CodeVirtualization : public ModulePass {
         if (auto *Ret = dyn_cast<ReturnInst>(&I)) {
           if (!Ret->getReturnValue())
             return false;
-          if (!emitValue(P, Slots, Ret->getReturnValue()))
+          if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, Ret->getReturnValue()))
             return false;
           P.Words.push_back(OpRet);
           continue;
@@ -583,6 +733,12 @@ struct CodeVirtualization : public ModulePass {
       return {2, 1, 1};
     case OpSelect:
       return {3, 1, 0};
+    case OpLoadPtr:
+      // pops frame idx, fetches VmTy, pushes value
+      return {1, 1, 1};
+    case OpStorePtr:
+      // pops frame idx, pops value, fetches VmTy
+      return {2, 0, 1};
     case OpJmp:
       return {0, 0, 1};
     case OpBrTrue:
@@ -629,6 +785,7 @@ struct CodeVirtualization : public ModulePass {
     Value *SP;
     Value *Stack;
     Value *Locals;
+    Value *Frame;
     Value *Args;
     BasicBlock *Dispatch;
   };
@@ -728,6 +885,32 @@ struct CodeVirtualization : public ModulePass {
                  [this, &C](IRBuilder<> &B) {
                    B.CreateStore(popStk(B, C),
                                  B.CreateGEP(C.I64, C.Locals, fetchWord(B, C)));
+                   B.CreateBr(C.Dispatch);
+                 }});
+
+    // ponytail: VM-local memory ops (L1.5.1 middle way). Frame index is on
+    // the stack (pushed by emitValue as a PushConst). OpLoadPtr pops the
+    // frame index, fetches VmTy, loads Frame[idx], narrows, pushes.
+    // OpStorePtr pops the frame index, pops the value, fetches VmTy,
+    // narrows, stores Frame[idx] = value. Order: store emits value-then-
+    // pointer in the encoder, so the handler pops pointer first, then value.
+    H.push_back({OpLoadPtr, "loadptr", shapeOf(OpLoadPtr),
+                 [this, &C](IRBuilder<> &B) {
+                   Value *FrameIdx = popStk(B, C);
+                   Value *Ty = fetchWord(B, C);
+                   Value *V = B.CreateLoad(C.I64,
+                                           B.CreateGEP(C.I64, C.Frame, FrameIdx));
+                   pushStk(B, C, narrowTo(B, C, V, Ty));
+                   B.CreateBr(C.Dispatch);
+                 }});
+    H.push_back({OpStorePtr, "storeptr", shapeOf(OpStorePtr),
+                 [this, &C](IRBuilder<> &B) {
+                   Value *FrameIdx = popStk(B, C);
+                   Value *V = popStk(B, C);
+                   Value *Ty = fetchWord(B, C);
+                   Value *Narrowed = narrowTo(B, C, V, Ty);
+                   B.CreateStore(Narrowed,
+                                 B.CreateGEP(C.I64, C.Frame, FrameIdx));
                    B.CreateBr(C.Dispatch);
                  }});
 
@@ -935,6 +1118,10 @@ struct CodeVirtualization : public ModulePass {
     IRBuilder<> B(Entry);
     auto *Stack = B.CreateAlloca(I64, ConstantInt::get(I64, 64), "stack");
     auto *Locals = B.CreateAlloca(I64, ConstantInt::get(I64, 64), "locals");
+    // ponytail: VM-local frame (L1.5.1 middle way). AllocaInst reserves runs
+    // of consecutive slots here; LoadPtr/StorePtr index into it via the
+    // frame-pointer values pushed by emitValue.
+    auto *Frame = B.CreateAlloca(I64, ConstantInt::get(I64, 64), "frame");
     auto *PC = B.CreateAlloca(I64, nullptr, "pc");
     auto *SP = B.CreateAlloca(I64, nullptr, "sp");
     B.CreateStore(ConstantInt::get(I64, 0), PC);
@@ -949,7 +1136,7 @@ struct CodeVirtualization : public ModulePass {
     // ponytail: Build handler table, then emit one switch case per entry.
     // The table is the source of truth; the switch is generated from it.
     InterpCtx IC{I64, F,     &Ctx, BC,     PC,     SP,
-                Stack, Locals, Args, Dispatch};
+                Stack, Locals, Frame, Args, Dispatch};
     SmallVector<Handler, 24> Handlers = buildHandlerTable(IC);
     auto *Sw = B.CreateSwitch(Op, Bad, Handlers.size());
 
