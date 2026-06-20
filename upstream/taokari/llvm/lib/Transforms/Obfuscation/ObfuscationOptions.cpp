@@ -238,6 +238,40 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
         }
         obfOpt->setConstDecryptorMBA(*decryptorMba);
       }
+      if (const auto *releaseStripValue = optObj->get("releaseStrip")) {
+        auto releaseStrip = releaseStripValue->getAsBoolean();
+        if (!releaseStrip) {
+          reportConfigError(FileName, obfOpt->attributeName() +
+                                          ".releaseStrip must be boolean");
+        }
+        obfOpt->setReleaseStrip(*releaseStrip);
+      }
+      if (const auto *randomizeSectionsValue =
+              optObj->get("randomizeSections")) {
+        auto randomizeSections = randomizeSectionsValue->getAsBoolean();
+        if (!randomizeSections) {
+          reportConfigError(FileName, obfOpt->attributeName() +
+                                          ".randomizeSections must be boolean");
+        }
+        obfOpt->setRandomizeSections(*randomizeSections);
+      }
+      if (const auto *allowlistValue = optObj->get("exportAllowlist")) {
+        auto allowlistArray = allowlistValue->getAsArray();
+        if (!allowlistArray) {
+          reportConfigError(FileName, obfOpt->attributeName() +
+                                          ".exportAllowlist must be array");
+        }
+        std::vector<std::string> allowlist;
+        for (const auto &allowlistItem : *allowlistArray) {
+          auto name = allowlistItem.getAsString();
+          if (!name) {
+            reportConfigError(FileName, obfOpt->attributeName() +
+                                            ".exportAllowlist must be strings");
+          }
+          allowlist.emplace_back(name->str());
+        }
+        obfOpt->setExportAllowlist(std::move(allowlist));
+      }
     };
 
     std::string key = obj.getFirst().str();
@@ -396,6 +430,9 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
   result.setStringReencryptAfterUse(option->stringReencryptAfterUse());
   result.setVolatileSeed(option->volatileSeed());
   result.setConstDecryptorMBA(option->constDecryptorMBA());
+  result.setReleaseStrip(option->releaseStrip());
+  result.setRandomizeSections(option->randomizeSections());
+  result.setExportAllowlist(option->exportAllowlist());
   return result;
 }
 

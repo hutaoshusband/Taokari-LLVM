@@ -158,6 +158,21 @@ TaokariRttiEraser("taokari-rtti", cl::desc("Alias for -irobf-rtti"),
                   cl::aliasopt(EnableRttiEraser));
 
 static cl::opt<bool>
+EnableMetadataHygiene("irobf-meta", cl::init(false), cl::NotHidden,
+                      cl::desc("Enable metadata and symbol hygiene."));
+static cl::opt<uint32_t>
+LevelMetadataHygiene("level-meta", cl::init(0), cl::NotHidden,
+                     cl::desc("Set metadata hygiene level."));
+
+static cl::alias
+TaokariMetadataHygiene("taokari-meta", cl::desc("Alias for -irobf-meta"),
+                       cl::aliasopt(EnableMetadataHygiene));
+static cl::alias
+TaokariLevelMetadataHygiene("taokari-level-meta",
+                            cl::desc("Alias for -level-meta"),
+                            cl::aliasopt(LevelMetadataHygiene));
+
+static cl::opt<bool>
 EnableBogusControlFlow("irobf-bcf", cl::init(false), cl::NotHidden,
                        cl::desc("Enable IR Bogus Control Flow."));
 static cl::opt<uint32_t>
@@ -293,6 +308,7 @@ struct ObfuscationPassManager : public ModulePass {
     Opt->bcfOpt()->readOpt(EnableBogusControlFlow, LevelBogusControlFlow);
     Opt->mbaOpt()->readOpt(EnableMBA, LevelMBA);
     Opt->rttiOpt()->readOpt(EnableRttiEraser);
+    Opt->metaOpt()->readOpt(EnableMetadataHygiene, LevelMetadataHygiene);
     return Opt;
   }
 
@@ -302,6 +318,7 @@ struct ObfuscationPassManager : public ModulePass {
         EnableIRFlattening || EnableIRStringEncryption ||
         EnableIRConstantIntEncryption || EnableIRConstantFPEncryption ||
         EnableBogusControlFlow || EnableMBA || EnableRttiEraser ||
+        EnableMetadataHygiene ||
         !TaokariConfigPath.empty() || !ArkariConfigPath.empty()) {
       EnableIRObfuscation = true;
     }
@@ -339,6 +356,9 @@ struct ObfuscationPassManager : public ModulePass {
 
     if (EnableRttiEraser || Options->rttiOpt()->isEnabled()) {
       add(llvm::createMsRttiEraserPass(Options.get()));
+    }
+    if (EnableMetadataHygiene || Options->metaOpt()->isEnabled()) {
+      add(llvm::createMetadataHygienePass(Options.get()));
     }
     bool Changed = run(M);
 

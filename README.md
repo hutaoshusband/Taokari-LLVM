@@ -117,6 +117,7 @@ capped at 4.
 | **indbr** — indirect branches | `-irobf-indbr` | 0-4 | Two-tier page table, critical-edge splitting, AArch64 PAC path |
 | **indgv** — indirect globals | `-irobf-indgv` | 0-4 | Two-tier page table, skips thread-local/DLL-import/EH globals, AArch64 PAC key 2 (data) |
 | **rtti** — MSVC RTTI eraser | `-irobf-rtti` | — | BLAKE3-keyed type-name rewrite (requires `randomSeed` in config) |
+| **meta** — metadata hygiene | `-irobf-meta` | 0-4 | Strips `llvm.ident`/debug/source-path metadata, renames internal helper symbols, supports export allowlists, and randomizes helper sections for PE/ELF/Mach-O at L3 |
 
 ### Per-function control
 
@@ -146,6 +147,7 @@ clang -O2 -mllvm -taokari ^
     -mllvm -taokari-cfe  -mllvm -taokari-level-cfe=2 ^
     -mllvm -taokari-cse  -mllvm -taokari-icall -mllvm -taokari-indbr ^
     -mllvm -taokari-indgv -mllvm -taokari-rtti ^
+    -mllvm -taokari-meta -mllvm -taokari-level-meta=3 ^
     -mllvm -taokari-cfg=configs/my_project.json ^
     main.c -o main_obf.exe
 

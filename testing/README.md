@@ -118,6 +118,16 @@ Run the CFG fragmentation metric:
 python testing\scripts\verify_machine_obf_l3_cfg_fragmentation.py
 ```
 
+Run the metadata hygiene gate:
+
+```powershell
+python testing\scripts\verify_metadata_hygiene.py
+```
+
+It rebuilds the touched compiler/tool targets, then checks `-taokari-meta`
+against IR metadata leaks, COFF symbols, PE runtime behavior, ELF sections and
+Mach-O sections.
+
 It compares plain vs IR+MIR object disassembly and fails if final machine code
 does not add branch-like control transfers and trap/unknown fragmenters.
 

@@ -36,6 +36,9 @@ protected:
   uint32_t StringReencryptAfterUse = 0;
   uint32_t VolatileSeed = 1;
   uint32_t ConstDecryptorMBA = 0;
+  uint32_t ReleaseStrip = 0;
+  uint32_t RandomizeSections = 0;
+  std::vector<std::string> ExportAllowlist;
 
 public:
   ObfOpt(bool enable, uint32_t level, const std::string &attributeName) {
@@ -152,6 +155,24 @@ public:
 
   bool constDecryptorMBA() const { return this->ConstDecryptorMBA; }
 
+  void setReleaseStrip(bool releaseStrip) { this->ReleaseStrip = releaseStrip; }
+
+  bool releaseStrip() const { return this->ReleaseStrip; }
+
+  void setRandomizeSections(bool randomizeSections) {
+    this->RandomizeSections = randomizeSections;
+  }
+
+  bool randomizeSections() const { return this->RandomizeSections; }
+
+  void setExportAllowlist(std::vector<std::string> exportAllowlist) {
+    this->ExportAllowlist = std::move(exportAllowlist);
+  }
+
+  const std::vector<std::string> &exportAllowlist() const {
+    return this->ExportAllowlist;
+  }
+
   const std::string &attributeName() const { return this->AttributeName; }
 
   ObfOpt none() const {
@@ -170,6 +191,9 @@ public:
     Result.setStringReencryptAfterUse(StringReencryptAfterUse);
     Result.setVolatileSeed(VolatileSeed);
     Result.setConstDecryptorMBA(ConstDecryptorMBA);
+    Result.setReleaseStrip(ReleaseStrip);
+    Result.setRandomizeSections(RandomizeSections);
+    Result.setExportAllowlist(ExportAllowlist);
     return Result;
   }
 };
@@ -186,12 +210,13 @@ protected:
   std::shared_ptr<ObfOpt> BcfOpt = nullptr;
   std::shared_ptr<ObfOpt> MbaOpt = nullptr;
   std::shared_ptr<ObfOpt> RttiOpt = nullptr;
+  std::shared_ptr<ObfOpt> MetaOpt = nullptr;
 
   SmallString<32> RandomSeed;
 
 public:
   SmallVector<std::shared_ptr<ObfOpt>> getAllOpt() const {
-    SmallVector<std::shared_ptr<ObfOpt>, 9> allOpt;
+    SmallVector<std::shared_ptr<ObfOpt>, 10> allOpt;
     allOpt.push_back(IndBrOpt);
     allOpt.push_back(ICallOpt);
     allOpt.push_back(IndGvOpt);
@@ -202,6 +227,7 @@ public:
     allOpt.push_back(BcfOpt);
     allOpt.push_back(MbaOpt);
     allOpt.push_back(RttiOpt);
+    allOpt.push_back(MetaOpt);
     return allOpt;
   }
 
@@ -214,7 +240,8 @@ public:
                      const std::shared_ptr<ObfOpt> &cfeOpt,
                      const std::shared_ptr<ObfOpt> &bcfOpt,
                      const std::shared_ptr<ObfOpt> &mbaOpt,
-                     const std::shared_ptr<ObfOpt> &rttiOpt) {
+                     const std::shared_ptr<ObfOpt> &rttiOpt,
+                     const std::shared_ptr<ObfOpt> &metaOpt) {
     this->IndBrOpt = indBrOpt;
     this->ICallOpt = iCallOpt;
     this->IndGvOpt = indGvOpt;
@@ -225,6 +252,7 @@ public:
     this->BcfOpt = bcfOpt;
     this->MbaOpt = mbaOpt;
     this->RttiOpt = rttiOpt;
+    this->MetaOpt = metaOpt;
   }
 
   ObfuscationOptions()
@@ -237,7 +265,8 @@ public:
                            std::make_shared<ObfOpt>("cfe"),
                            std::make_shared<ObfOpt>("bcf"),
                            std::make_shared<ObfOpt>("mba"),
-                           std::make_shared<ObfOpt>("rtti")} {}
+                           std::make_shared<ObfOpt>("rtti"),
+                           std::make_shared<ObfOpt>("meta")} {}
 
   auto indBrOpt() const { return IndBrOpt; }
 
@@ -258,6 +287,8 @@ public:
   auto mbaOpt() const { return MbaOpt; }
 
   auto rttiOpt() const { return RttiOpt; }
+
+  auto metaOpt() const { return MetaOpt; }
 
   auto &randomSeed() { return RandomSeed; }
 

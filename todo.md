@@ -557,35 +557,35 @@ Goal: remove accidental leaks.
 ## Level 1 — Basic Metadata Cleanup
 
 * [x] MSVC RTTI name erase exists
-* [ ] Strip `llvm.ident`
-* [ ] Strip `!dbg`
-* [ ] Strip `DIFile`
-* [ ] Strip source paths
-* [ ] Strip compiler version strings
-* [ ] Add config toggle
-* [ ] Add metadata leak tests
+* [x] Strip `llvm.ident`
+* [x] Strip `!dbg`
+* [x] Strip `DIFile`
+* [x] Strip source paths
+* [x] Strip compiler version strings
+* [x] Add config toggle
+* [x] Add metadata leak tests
 
 ## Level 2 — Stronger Symbol Hygiene
 
-* [ ] Randomize internal symbol names
-* [ ] Randomize obfuscation helper names
-* [ ] Randomize decryptor names
-* [ ] Randomize table names
-* [ ] Hide pass fingerprints
-* [ ] Add fake helper symbols
-* [ ] Add export allowlist
+* [x] Randomize internal symbol names
+* [x] Randomize obfuscation helper names
+* [x] Randomize decryptor names
+* [x] Randomize table names
+* [x] Hide pass fingerprints
+* [x] Add fake helper symbols
+* [x] Add export allowlist
 
 ## Level 3 — Fortress Metadata Hygiene
 
-* [ ] Add full release-strip profile
-* [ ] Add PDB hygiene docs
-* [ ] Add Mach-O metadata support
-* [ ] Add ELF metadata support
-* [ ] Add PE section-name randomization option
-* [ ] Add helper section randomization
-* [ ] Add symbol diff test
-* [ ] Add source-path leak test
-* [ ] Add RTTI leak test
+* [x] Add full release-strip profile
+* [x] Add PDB hygiene docs
+* [x] Add Mach-O metadata support
+* [x] Add ELF metadata support
+* [x] Add PE section-name randomization option
+* [x] Add helper section randomization
+* [x] Add symbol diff test
+* [x] Add source-path leak test
+* [x] Add RTTI leak test
 
 **Definition of done for L3:**
 The binary should not leak project paths, compiler identifiers, helper names or obvious Taokari fingerprints.
