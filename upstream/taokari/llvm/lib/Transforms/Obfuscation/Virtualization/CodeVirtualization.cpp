@@ -182,8 +182,9 @@ struct CodeVirtualization : public ModulePass {
         if (isSkippable(I))
           continue;
         // ponytail: Level 1 VM is toy integer IR only. Add pointer/call/EH
-        // support after this compile/run path proves useful.
-        if (isa<PHINode>(I) || isa<CallBase>(I) || isa<InvokeInst>(I) ||
+        // support after this compile/run path proves useful. PHI is supported
+        // (L1.5.1): lowered to slot copies in predecessors.
+        if (isa<CallBase>(I) || isa<InvokeInst>(I) ||
             isa<ResumeInst>(I) || isa<LandingPadInst>(I) ||
             isa<AllocaInst>(I) || isa<LoadInst>(I) || isa<StoreInst>(I) ||
             isa<AtomicRMWInst>(I) || isa<AtomicCmpXchgInst>(I) ||
@@ -287,6 +288,35 @@ struct CodeVirtualization : public ModulePass {
     return true;
   }
 
+  // ponytail: Emit slot copies for every PHI in `Succ` whose incoming value
+  // for predecessor `Pred` must be stored into the PHI's slot before control
+  // transfers from Pred to Succ. This is the L1.5.1 PHI lowering: the PHI
+  // result is materialized as a locals slot, and each predecessor writes its
+  // incoming value into that slot just before branching. Handles loop-carry
+  // PHIs naturally (the slot holds the previous iteration's value).
+  bool emitPhiCopies(BytecodeProgram &P,
+                     DenseMap<const Value *, unsigned> &Slots,
+                     const BasicBlock *Pred, const BasicBlock *Succ) {
+    for (const Instruction &I : *Succ) {
+      auto *PN = dyn_cast<PHINode>(&I);
+      if (!PN)
+        break; // PHIs are always first in the block.
+      int Idx = PN->getBasicBlockIndex(Pred);
+      if (Idx < 0)
+        return false; // malformed: no incoming for this predecessor.
+      Value *Incoming = PN->getIncomingValue(Idx);
+      // The incoming value may be UndefValue (e.g. unreachable predecessor);
+      // skip such copies -- the slot stays whatever it was.
+      if (isa<UndefValue>(Incoming))
+        continue;
+      if (!emitValue(P, Slots, Incoming))
+        return false;
+      P.Words.push_back(OpStoreSlot);
+      P.Words.push_back(slotFor(Slots, PN));
+    }
+    return true;
+  }
+
   bool buildBytecode(Function &F, BytecodeProgram &P) {
     DenseMap<const Value *, unsigned> Slots;
     DenseMap<const BasicBlock *, size_t> BlockStart;
@@ -300,9 +330,25 @@ struct CodeVirtualization : public ModulePass {
 
     for (BasicBlock &BB : F) {
       BlockStart[&BB] = P.Words.size();
+      // ponytail: pre-register PHI slots so any use of a PHI (including by
+      // another PHI in the same block, or by an instruction before the PHI
+      // list ends -- they're all at block top) resolves to the right slot.
+      for (Instruction &I : BB) {
+        auto *PN = dyn_cast<PHINode>(&I);
+        if (!PN)
+          break; // PHIs are always first; stop at the first non-PHI.
+        if (!isSupportedInt(PN->getType()))
+          return false;
+        slotFor(Slots, PN);
+      }
       for (Instruction &I : BB) {
         if (isSkippable(I))
           continue;
+        if (isa<PHINode>(I)) {
+          // ponytail: PHI nodes produce no bytecode inline. Their effect is
+          // the predecessor-side slot copies emitted by emitPhiCopies below.
+          continue;
+        }
         if (auto *BO = dyn_cast<BinaryOperator>(&I)) {
           if (!emitValue(P, Slots, BO->getOperand(0)) ||
               !emitValue(P, Slots, BO->getOperand(1)))
@@ -434,18 +480,40 @@ struct CodeVirtualization : public ModulePass {
         }
         if (auto *Br = dyn_cast<BranchInst>(&I)) {
           if (Br->isUnconditional()) {
+            // ponytail: store PHI incomings for the single successor, then jump.
+            if (!emitPhiCopies(P, Slots, &BB, Br->getSuccessor(0)))
+              return false;
             P.Words.push_back(OpJmp);
             P.Fixups.push_back({P.Words.size(), Br->getSuccessor(0)});
             P.Words.push_back(0);
             continue;
           }
+          // Conditional: the condition selects which successor's PHI copies
+          // run, so the two copy sequences must be in disjoint bytecode
+          // regions reached by conditional jumps. Layout:
+          //   <cond on stack>
+          //   OpBrTrue -> L_true_copies
+          //   [false-copies] ; OpJmp -> false-target
+          // L_true_copies:
+          //   [true-copies]  ; OpJmp -> true-target
           if (!emitValue(P, Slots, Br->getCondition()))
             return false;
           P.Words.push_back(OpBrTrue);
-          P.Fixups.push_back({P.Words.size(), Br->getSuccessor(0)});
-          P.Words.push_back(0);
+          // Fixup resolved later to the start of the true-copies region.
+          size_t BrTrueFixupIdx = P.Words.size();
+          P.Words.push_back(0); // placeholder, patched to L_true_copies
+          // False path (fallthrough): copies then jump to false successor.
+          if (!emitPhiCopies(P, Slots, &BB, Br->getSuccessor(1)))
+            return false;
           P.Words.push_back(OpJmp);
           P.Fixups.push_back({P.Words.size(), Br->getSuccessor(1)});
+          P.Words.push_back(0);
+          // True path: now-resolved start of true-copies region.
+          P.Words[BrTrueFixupIdx] = static_cast<int64_t>(P.Words.size());
+          if (!emitPhiCopies(P, Slots, &BB, Br->getSuccessor(0)))
+            return false;
+          P.Words.push_back(OpJmp);
+          P.Fixups.push_back({P.Words.size(), Br->getSuccessor(0)});
           P.Words.push_back(0);
           continue;
         }

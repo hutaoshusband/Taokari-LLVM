@@ -84,6 +84,51 @@ VMP_CASE(mixed_case, {
   return (a < b) ? a ^ b : b ^ a;
 })
 
+// --- L1.5.1 PHI lowering: loops. These are the highest-value coverage win
+//     because loops are pervasive in real code and were entirely rejected
+//     before PHI support. n is clamped so the loop terminates in bounded time. ---
+VMP_CASE(for_sum_case, {
+  int n = a & 0xFF;          // 0..255 iterations
+  int sum = 0;
+  for (int i = 0; i < n; ++i)
+    sum = sum + i;
+  return sum;
+})
+
+VMP_CASE(while_count_case, {
+  int n = b & 0x7;           // 0..7 iterations
+  int x = a;
+  int steps = 0;
+  while (x != 0 && steps < n) {
+    x = x >> 1;
+    ++steps;
+  }
+  return steps;
+})
+
+VMP_CASE(loop_carry_case, {
+  // Loop-carried PHI: fib-like sequence. Bounded iterations.
+  int n = a & 0xF;           // 0..15
+  int prev = 0;
+  int cur = 1;
+  for (int i = 0; i < n; ++i) {
+    int next = prev + cur;
+    prev = cur;
+    cur = next;
+  }
+  return prev;
+})
+
+VMP_CASE(nested_loop_case, {
+  int rows = (a & 0x7) + 1;  // 1..8
+  int cols = (b & 0x7) + 1;  // 1..8
+  int total = 0;
+  for (int i = 0; i < rows; ++i)
+    for (int j = 0; j < cols; ++j)
+      total += (i ^ j);
+  return total;
+})
+
 int main(int argc, char **argv) {
   if (argc < 3) {
     fprintf(stderr, "usage: %s <a> <b>\n", argv[0]);
@@ -118,5 +163,9 @@ int main(int argc, char **argv) {
   printf("select_case:%d:%d:%d\n",  a, b, select_case(a, b));
   printf("branch_case:%d:%d:%d\n",  a, b, branch_case(a, b));
   printf("mixed_case:%d:%d:%d\n",   a, b, mixed_case(a, b));
+  printf("for_sum_case:%d:%d:%d\n", a, b, for_sum_case(a, b));
+  printf("while_count_case:%d:%d:%d\n", a, b, while_count_case(a, b));
+  printf("loop_carry_case:%d:%d:%d\n",  a, b, loop_carry_case(a, b));
+  printf("nested_loop_case:%d:%d:%d\n", a, b, nested_loop_case(a, b));
   return 0;
 }
