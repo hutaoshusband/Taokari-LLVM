@@ -252,7 +252,7 @@ def main() -> int:
     parser.add_argument("--case", action="append",
                         help="case name(s) to run; repeatable. default: all")
     parser.add_argument("--keep-going", action="store_true")
-    parser.add_argument("--level", type=int, choices=range(0, 4),
+    parser.add_argument("--level", type=int, choices=range(0, 5),
                         help="append -taokari-level-<pass>=N for all 6 level-aware "
                              "passes (indbr/icall/indgv/fla/cie/cfe)")
     parser.add_argument("--rtti", action="store_true",

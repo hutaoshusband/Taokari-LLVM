@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 import tempfile
@@ -66,11 +67,17 @@ def compile_and_check(out: Path, name: str, extra_flags: list[str], want_indirec
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Check Taokari FLA level-4 dispatcher shape.")
+    parser.add_argument("--artifacts-dir", type=Path,
+                        help="keep generated .ll/.exe artifacts in this directory")
+    args = parser.parse_args()
+
     if not CLANG.exists():
         print(f"missing clang: {CLANG}", file=sys.stderr)
         return 2
-    with tempfile.TemporaryDirectory(prefix="taokari-fla-l4-") as td:
-        out = Path(td)
+    if args.artifacts_dir:
+        out = args.artifacts_dir
+        out.mkdir(parents=True, exist_ok=True)
         compile_and_check(out, "flattening_l4", [], False)
         compile_and_check(
             out,
@@ -78,6 +85,16 @@ def main() -> int:
             ["-mllvm", "-taokari-fla-indirectbr-dispatch"],
             True,
         )
+    else:
+        with tempfile.TemporaryDirectory(prefix="taokari-fla-l4-") as td:
+            out = Path(td)
+            compile_and_check(out, "flattening_l4", [], False)
+            compile_and_check(
+                out,
+                "flattening_l4_indirectbr",
+                ["-mllvm", "-taokari-fla-indirectbr-dispatch"],
+                True,
+            )
     return 0
 
 

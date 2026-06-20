@@ -7,5 +7,6 @@ testing/cases/*/obj/
 testing/_with_vs_env.cmd
 testing/__pycache__/
 testing/ida_l3/
+testing/ida_l4/
 imgui.ini
 INFORMATION/private/

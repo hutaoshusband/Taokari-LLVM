@@ -110,7 +110,7 @@ Static analysis should see fake paths, fake states and misleading edges.
 * [x] Add split two-stage dispatcher buckets
 * [x] Add sparse/colliding fake case layout
 * [x] Add optional `indirectbr`-backed dispatcher
-* [ ] Add IDA switch-recovery regression check
+* [x] Add IDA switch-recovery regression check
 
 ---
 
