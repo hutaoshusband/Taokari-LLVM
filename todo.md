@@ -1011,16 +1011,18 @@ obfuscation regression matrix stays green (57 PASS / 0 FAIL).
 
 ## Level 2 — Core MIR Passes
 
-* [ ] Parse the `-taokari-mir=<passes>` comma-list into individual sub-passes
-* [ ] Add dirty bytes insertion (anti-disassembly)
-* [ ] Add junk instructions with real side effects (anti-dataflow)
-* [ ] Add machine-level instruction substitution (anti-microcode-lift, e.g. add -> lea)
-* [ ] Add opaque predicate engine at MIR level for the dirty-bytes guard
-* [ ] Add per-pass probability
-* [ ] Add config keys per MIR sub-pass
-* [ ] Add annotation: per-sub-pass (`mir:dirtybytes`, etc.)
-* [ ] Add correctness tests for each sub-pass
-* [ ] Add binary-level survival tests (not stripped by AsmPrinter / peephole)
+* [x] Parse the `-taokari-mir=<passes>` comma-list into individual sub-passes
+* [x] Add dirty bytes insertion (anti-disassembly)
+* [x] Add junk instructions with real side effects (anti-dataflow)
+* [x] Add machine-level instruction substitution (anti-microcode-lift, e.g. add -> lea)
+* [x] Add opaque predicate engine at MIR level for the dirty-bytes guard
+* [x] Add per-pass probability
+* [~] Add config keys per MIR sub-pass
+* [x] Add annotation: per-sub-pass (`mir:dirtybytes`, etc.)
+* [x] Add correctness tests for each sub-pass
+* [x] Add post-RA correctness checks (no broken liveness)
+* [x] Add binary-level survival tests (not stripped by AsmPrinter / peephole)
+* [x] Verify no IR-level analysis can repair the MIR output
 
 ## Level 3 — Fortress MIR
 

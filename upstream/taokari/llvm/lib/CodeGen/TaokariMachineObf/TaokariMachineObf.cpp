@@ -24,6 +24,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/CodeGen/TaokariMachineObf.h"
+#include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -31,7 +36,6 @@
 #include "llvm/CodeGen/MachinePassManager.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
-#include "llvm/CodeGen/TaokariMachineObf.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
@@ -60,9 +64,90 @@ static cl::opt<std::string> TaokariMirFlag(
              "(e.g. dirtybytes,junk,sub). Level 1 treats any non-empty "
              "value as on."));
 
-// Returns true if the global -taokari-mir flag enables the MIR layer.
-static bool mirFlagEnabled() {
-  return !TaokariMirFlag.empty();
+static cl::opt<unsigned> TaokariMirDirtyProb(
+    "taokari-mir-dirtybytes-prob", cl::init(100), cl::Hidden,
+    cl::desc("Percent of MIR-enabled functions receiving dirty bytes."));
+
+static cl::opt<unsigned> TaokariMirJunkProb(
+    "taokari-mir-junk-prob", cl::init(100), cl::Hidden,
+    cl::desc("Percent of MIR-enabled functions receiving MIR junk."));
+
+static cl::opt<unsigned> TaokariMirSubProb(
+    "taokari-mir-sub-prob", cl::init(100), cl::Hidden,
+    cl::desc("Percent of MIR-enabled functions receiving MIR substitution."));
+
+struct MirSubpasses {
+  bool Marker = false;
+  bool DirtyBytes = false;
+  bool Junk = false;
+  bool Substitution = false;
+
+  bool any() const { return Marker || DirtyBytes || Junk || Substitution; }
+  void enableAll() {
+    Marker = true;
+    DirtyBytes = true;
+    Junk = true;
+    Substitution = true;
+  }
+};
+
+static MirSubpasses parseMirFlag() {
+  MirSubpasses Passes;
+  if (TaokariMirFlag.empty())
+    return Passes;
+
+  bool SawKnownToken = false;
+  SmallVector<StringRef, 8> Tokens;
+  StringRef(TaokariMirFlag).split(Tokens, ',', -1, false);
+  for (StringRef Token : Tokens) {
+    Token = Token.trim();
+    Token = Token.take_until([](char C) { return C == ':' || C == '='; });
+    if (Token.empty())
+      continue;
+    if (Token == "1" || Token == "on" || Token == "all" || Token == "max") {
+      Passes.enableAll();
+      SawKnownToken = true;
+      continue;
+    }
+    if (Token == "marker") {
+      Passes.Marker = true;
+      SawKnownToken = true;
+      continue;
+    }
+    if (Token == "dirty" || Token == "dirtybytes") {
+      Passes.DirtyBytes = true;
+      SawKnownToken = true;
+      continue;
+    }
+    if (Token == "junk") {
+      Passes.Junk = true;
+      SawKnownToken = true;
+      continue;
+    }
+    if (Token == "sub" || Token == "subst" || Token == "substitution") {
+      Passes.Substitution = true;
+      SawKnownToken = true;
+      continue;
+    }
+  }
+
+  if (!SawKnownToken)
+    Passes.enableAll();
+  return Passes;
+}
+
+static bool stablePercentHit(const Function &F, StringRef PassName,
+                             unsigned Probability) {
+  if (Probability >= 100)
+    return true;
+  if (Probability == 0)
+    return false;
+  SmallString<128> Key;
+  Key += F.getName();
+  Key += ":";
+  Key += PassName;
+  return (static_cast<uint64_t>(hash_value(StringRef(Key))) % 100) <
+         Probability;
 }
 
 // Reads the `llvm.global.annotations` global (populated by clang from
@@ -107,35 +192,51 @@ static SmallVector<std::string> readMirAnnotations(const Function *F) {
   return Annotations;
 }
 
-// Per-function gate. Resolution order (mirrors the IR-layer toObfuscate):
-//   1. Skip declarations / available_externally.
-//   2. If a `+mir` annotation is present on the function -> run (overrides
-//      a globally-off flag, enabling per-function opt-in).
-//   3. If a `-mir` annotation is present -> skip (overrides a globally-on
-//      flag, enabling per-function opt-out).
-//   4. Otherwise follow the global -taokari-mir flag.
-static bool shouldObfuscate(const Function &F) {
+static bool annotationHas(StringRef Annotation, StringRef Needle) {
+  return Annotation.contains(Needle);
+}
+
+static MirSubpasses resolveSubpasses(const Function &F) {
+  MirSubpasses Passes = parseMirFlag();
   if (F.isDeclaration() || F.hasAvailableExternallyLinkage())
-    return false;
-  bool AnnotEnable = false;
-  bool AnnotDisable = false;
-  for (const std::string &A : readMirAnnotations(&F)) {
-    if (A.find("+mir") != std::string::npos)
-      AnnotEnable = true;
-    if (A.find("-mir") != std::string::npos)
-      AnnotDisable = true;
+    return {};
+
+  bool EnableAll = false;
+  bool DisableAll = false;
+  for (const std::string &Raw : readMirAnnotations(&F)) {
+    StringRef A(Raw);
+    if (annotationHas(A, "+mir") && !annotationHas(A, "+mir:"))
+      EnableAll = true;
+    if (annotationHas(A, "-mir") && !annotationHas(A, "-mir:"))
+      DisableAll = true;
+    if (annotationHas(A, "+mir:dirtybytes"))
+      Passes.DirtyBytes = true;
+    if (annotationHas(A, "+mir:junk"))
+      Passes.Junk = true;
+    if (annotationHas(A, "+mir:sub"))
+      Passes.Substitution = true;
+    if (annotationHas(A, "-mir:dirtybytes"))
+      Passes.DirtyBytes = false;
+    if (annotationHas(A, "-mir:junk"))
+      Passes.Junk = false;
+    if (annotationHas(A, "-mir:sub"))
+      Passes.Substitution = false;
   }
-  if (AnnotEnable && AnnotDisable) {
-    // Conflicting annotations: be conservative and skip rather than guess.
+
+  if (EnableAll && DisableAll) {
     errs() << "taokari-mir: both +mir and -mir on " << F.getName()
            << ", skipping\n";
-    return false;
+    return {};
   }
-  if (AnnotDisable)
-    return false;
-  if (AnnotEnable)
-    return true;
-  return mirFlagEnabled();
+  if (DisableAll)
+    return {};
+  if (EnableAll && !Passes.any())
+    Passes.Marker = true;
+
+  Passes.DirtyBytes &= stablePercentHit(F, "dirtybytes", TaokariMirDirtyProb);
+  Passes.Junk &= stablePercentHit(F, "junk", TaokariMirJunkProb);
+  Passes.Substitution &= stablePercentHit(F, "sub", TaokariMirSubProb);
+  return Passes;
 }
 
 // Stateful core shared by the legacy and new-PM wrappers.
@@ -144,6 +245,14 @@ struct TaokariMachineObf {
 };
 
 } // namespace
+
+static void insertSideEffectAsm(MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator InsertPt,
+                                const TargetInstrInfo &TII, const char *Bytes) {
+  BuildMI(MBB, InsertPt, DebugLoc(), TII.get(TargetOpcode::INLINEASM))
+      .addExternalSymbol(Bytes)
+      .addImm(InlineAsm::Extra_HasSideEffects);
+}
 
 // Level 1 transform: insert one semantically-neutral marker at the entry of
 // the function's first basic block. This is a true no-op (it neither reads
@@ -166,7 +275,8 @@ struct TaokariMachineObf {
 // sequence at a function's entry is a reliable, non-vacuous proof that the
 // pass fired.
 bool TaokariMachineObf::run(MachineFunction &MF) {
-  if (!shouldObfuscate(MF.getFunction()))
+  MirSubpasses Passes = resolveSubpasses(MF.getFunction());
+  if (!Passes.any())
     return false;
 
   const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
@@ -175,22 +285,28 @@ bool TaokariMachineObf::run(MachineFunction &MF) {
   if (!MF.getTarget().getTargetTriple().isX86_64())
     return false;
 
-  // INLINEASM operand encoding in LLVM 22 (see FastIsel::lowerCallTo):
-  //   operand 0: ExternalSymbol -> the asm string
-  //   operand 1: imm            -> ExtraInfo flags
-  // Extra_HasSideEffects (=1) prevents later machine passes from deleting
-  // this no-output inline asm as dead. The instruction itself is a no-op, so
-  // marking it side-effecting cannot change program semantics -- it only
-  // prevents deletion, which is what makes the marker survive to the binary
-  // and visible to the Level 1 smoke test. Inserting at the front of the
-  // entry block lands it at the top of the function body in the final binary.
   MachineBasicBlock &EntryMBB = MF.front();
-  BuildMI(EntryMBB, EntryMBB.begin(), DebugLoc(),
-          TII->get(TargetOpcode::INLINEASM))
-      .addExternalSymbol(".byte 0x48,0x8d,0x40,0x00")
-      .addImm(InlineAsm::Extra_HasSideEffects);
 
-  LLVM_DEBUG(dbgs() << "taokari-mir: inserted entry nop in "
+  // Insert in reverse: every BuildMI goes before the original first instr.
+  // All byte snippets preserve GPRs/RFLAGS they touch, but still survive as
+  // side-effecting machine code below the IR layer.
+  if (Passes.Substitution)
+    insertSideEffectAsm(EntryMBB, EntryMBB.begin(), *TII,
+                        ".byte 0x9c,0x50,0x48,0x89,0xe0,0x48,0x8d,0x40,"
+                        "0x13,0x48,0x83,0xe8,0x13,0x58,0x9d");
+  if (Passes.Junk)
+    insertSideEffectAsm(EntryMBB, EntryMBB.begin(), *TII,
+                        ".byte 0x9c,0x50,0x80,0x34,0x24,0x5a,0x80,0x34,"
+                        "0x24,0x5a,0x58,0x9d");
+  if (Passes.DirtyBytes)
+    insertSideEffectAsm(EntryMBB, EntryMBB.begin(), *TII,
+                        ".byte 0x48,0x39,0xe4,0x74,0x08,0x0f,0x0b,0xeb,"
+                        "0xfe,0xcc,0xf1,0x0f,0x0b");
+  if (Passes.Marker)
+    insertSideEffectAsm(EntryMBB, EntryMBB.begin(), *TII,
+                        ".byte 0x48,0x8d,0x40,0x00");
+
+  LLVM_DEBUG(dbgs() << "taokari-mir: inserted MIR obfuscation in "
                     << MF.getName() << "\n");
   return true;
 }
@@ -228,8 +344,7 @@ struct TaokariMachineObfLegacy : public MachineFunctionPass {
 } // namespace
 
 char TaokariMachineObfLegacy::ID = 0;
-INITIALIZE_PASS(TaokariMachineObfLegacy, "taokari-mir", PASS_NAME, false,
-                false)
+INITIALIZE_PASS(TaokariMachineObfLegacy, "taokari-mir", PASS_NAME, false, false)
 
 FunctionPass *llvm::createTaokariMachineObfLegacyPass() {
   return new TaokariMachineObfLegacy();

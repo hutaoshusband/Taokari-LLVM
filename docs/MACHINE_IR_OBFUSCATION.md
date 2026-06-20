@@ -15,11 +15,9 @@ to an IR-level simplifier in clean form.
 
 ## Scope of this document
 
-Level 1 (infrastructure) only. It documents how the MIR pass is registered
-into the legacy pass manager, what flag and annotation control it, what the
-Level 1 marker is, and the L2 roadmap. Real transforms (dirty bytes, junk
-instructions with side effects, machine instruction substitution, function
-splitting) are Level 2 and documented here as the backlog.
+Level 1 and Level 2. It documents how the MIR pass is registered into the
+legacy pass manager, what flag and annotation control it, what the Level 1
+marker is, and which Level 2 byte-level transforms are emitted below LLVM IR.
 
 ## Where the code lives
 
@@ -85,9 +83,20 @@ The X86 target links against the new component via `LINK_COMPONENTS` in
 
 ### Flag
 
-`-mllvm -taokari-mir=<passes>` — `cl::opt<std::string>`. The value is intended
-as a comma-separated list of MIR sub-passes (e.g. `dirtybytes,junk,sub`).
-Level 1 treats any non-empty value as "the MIR layer is on".
+`-mllvm -taokari-mir=<passes>` — `cl::opt<std::string>`. The value is parsed as
+a comma-separated list of MIR sub-passes:
+
+- `dirtybytes`
+- `junk`
+- `sub`
+- `marker`
+- `1`, `on`, `all`, `max` for all Level 2 passes plus the legacy marker
+
+Per-pass probabilities are controlled by:
+
+- `-mllvm -taokari-mir-dirtybytes-prob=<0-100>`
+- `-mllvm -taokari-mir-junk-prob=<0-100>`
+- `-mllvm -taokari-mir-sub-prob=<0-100>`
 
 ### Annotation
 
@@ -96,6 +105,8 @@ Per-function control via the standard `llvm.global.annotations` mechanism
 
 - `+mir` — opt the function in, even when the global flag is off.
 - `-mir` — opt the function out, overriding a globally-on flag.
+- `+mir:dirtybytes`, `+mir:junk`, `+mir:sub` — opt into one MIR sub-pass.
+- `-mir:dirtybytes`, `-mir:junk`, `-mir:sub` — opt out of one MIR sub-pass.
 - Both on the same function — the pass logs a warning and skips (conservative).
 
 The annotation reader (`readMirAnnotations`) mirrors the IR-layer
@@ -135,7 +146,23 @@ The marker is marked `InlineAsm::Extra_HasSideEffects` so later machine-level
 passes cannot delete this no-output inline asm as dead. The instruction is
 still a no-op, so the side-effect flag cannot change program semantics.
 
-Level 2 replaces this marker with the real transforms.
+Specific Level 2 sub-pass lists omit this marker. Legacy `1`/`all`/`max` keep it
+for the Level 1 smoke test while also enabling the real transforms.
+
+## Level 2 transforms
+
+Level 2 emits x86-64 inline-asm byte snippets at the function entry, after
+register allocation and before final emission. The snippets preserve the GPRs
+and RFLAGS they touch while still surviving as side-effecting machine code.
+
+- **Dirty bytes:** `cmp rsp, rsp; je +8; <dead invalid/trap bytes>`. The guard
+  is tied to architectural context and the skipped bytes survive in the binary.
+- **Junk with side effects:** `pushfq; push rax; xor byte ptr [rsp], imm8; xor
+  byte ptr [rsp], imm8; pop rax; popfq`. The stack writes are real but net
+  neutral.
+- **Substitution:** `pushfq; push rax; mov rax, rsp; lea rax, [rax+0x13]; sub
+  rax, 0x13; pop rax; popfq`. The `lea` performs machine-level add-like address
+  arithmetic below the IR simplifier.
 
 ## Verification
 
@@ -151,23 +178,24 @@ functional correctness:
 It disassembles the `.obj` (which keeps symbol names, unlike a stripped PE)
 and checks the first instruction of each function.
 
-## Level 2 roadmap (backlog)
+`testing/scripts/verify_machine_obf_level2.py` checks:
 
-The MIR transforms that actually attack Hex-Rays, per the IDA-Pro research
-doc §A Level 2:
+- plain and MIR-obfuscated executables produce identical stdout.
+- each sub-pass emits its byte signature and no other sub-pass signature.
+- `+mir:<subpass>` annotations work without the global flag.
+- `-mllvm -verify-machineinstrs` accepts the post-RA output.
+- optimized LLVM IR contains none of the MIR byte signatures, while the object
+  file does.
 
-- **Dirty bytes insertion** — a region of non-instruction bytes guarded by an
-  always-taken opaque conditional jump; IDA's linear sweep desynchronises.
-- **Junk instructions with real side effects** — valid instructions that write
-  scratch state chained into real-looking computation, polluting the
-  decompiler's dataflow graph.
-- **Machine-level instruction substitution** — replace a single instruction
-  with a semantically-equivalent sequence (e.g. `add` → `lea`) at MIR level,
-  below the IR simplifier.
+## Level 3 roadmap (backlog)
+
+The remaining MIR transforms that attack Hex-Rays function recovery, per the
+IDA-Pro research doc §A Level 3:
+
 - **Function splitting / boundary corruption** — split one function into a
   dispatcher plus shards reachable only via computed jumps, with fake
   prologue/epilogue byte patterns between real functions.
 - **Unmodelled instruction emission** — Fortress-profile only; emit
   instructions the microcode lifter has no rule for.
 
-These are gated by the `-taokari-mir=<passes>` comma-list, parsed in Level 2.
+These remain gated future work, not part of the current Level 2 pass.
