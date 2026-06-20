@@ -39,6 +39,15 @@ protected:
   uint32_t ReleaseStrip = 0;
   uint32_t RandomizeSections = 0;
   std::vector<std::string> ExportAllowlist;
+  // StringEncryption Fortress (L3) knobs. Each is an independent bit so the
+  // JSON profile can compose them; the pass only fires them when cse.level>=3.
+  uint32_t StringDecryptorMBA = 0;       // MBA in shared decrypt loop
+  uint32_t StringDecryptorFlattening = 0;// flatten the shared decryptor body
+  uint32_t StringDecryptorIndirectCall = 0; // route decryptor call via page tbl
+  uint32_t StringShardedPool = 0;        // split encrypted pool across N globals
+  uint32_t StringFakePools = 0;          // emit junk-only decoy pools
+  uint32_t StringPageTableAccess = 0;    // look up pool ptr via indgv page tbl
+  uint32_t StringDelayedDecrypt = 0;     // decrypt-on-touch, scrub before ret
 
 public:
   ObfOpt(bool enable, uint32_t level, const std::string &attributeName) {
@@ -173,6 +182,18 @@ public:
     return this->ExportAllowlist;
   }
 
+#define TAOKARI_STRING_L3_ACCESSOR(Camel, Lower)                              \
+  void setString##Camel(bool V) { this->String##Camel = V; }                   \
+  bool string##Camel() const { return this->String##Camel; }
+  TAOKARI_STRING_L3_ACCESSOR(DecryptorMBA, decryptorMba)
+  TAOKARI_STRING_L3_ACCESSOR(DecryptorFlattening, decryptorFlattening)
+  TAOKARI_STRING_L3_ACCESSOR(DecryptorIndirectCall, decryptorIndirectCall)
+  TAOKARI_STRING_L3_ACCESSOR(ShardedPool, shardedPool)
+  TAOKARI_STRING_L3_ACCESSOR(FakePools, fakePools)
+  TAOKARI_STRING_L3_ACCESSOR(PageTableAccess, pageTableAccess)
+  TAOKARI_STRING_L3_ACCESSOR(DelayedDecrypt, delayedDecrypt)
+#undef TAOKARI_STRING_L3_ACCESSOR
+
   const std::string &attributeName() const { return this->AttributeName; }
 
   ObfOpt none() const {
@@ -194,6 +215,13 @@ public:
     Result.setReleaseStrip(ReleaseStrip);
     Result.setRandomizeSections(RandomizeSections);
     Result.setExportAllowlist(ExportAllowlist);
+    Result.setStringDecryptorMBA(StringDecryptorMBA);
+    Result.setStringDecryptorFlattening(StringDecryptorFlattening);
+    Result.setStringDecryptorIndirectCall(StringDecryptorIndirectCall);
+    Result.setStringShardedPool(StringShardedPool);
+    Result.setStringFakePools(StringFakePools);
+    Result.setStringPageTableAccess(StringPageTableAccess);
+    Result.setStringDelayedDecrypt(StringDelayedDecrypt);
     return Result;
   }
 };

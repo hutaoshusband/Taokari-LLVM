@@ -382,25 +382,25 @@ Main weakness: edge cases and externally visible symbols.
 * [x] Indirect call page table exists
 * [x] Callee dedup cache exists
 * [x] Enhanced page table exists
-* [ ] Skip declarations reliably
-* [ ] Skip weak symbols
-* [ ] Skip `dllimport`
-* [ ] Skip externally visible unsafe callees
-* [ ] Skip `alwaysinline`
-* [ ] Add correctness tests for function pointers
-* [ ] Add tests for virtual calls
-* [ ] Add tests for templates
+* [x] Skip declarations reliably
+* [x] Skip weak symbols
+* [x] Skip `dllimport`
+* [x] Skip externally visible unsafe callees
+* [x] Skip `alwaysinline`
+* [x] Add correctness tests for function pointers
+* [x] Add tests for virtual calls
+* [x] Add tests for templates
 
 ## Level 2 — Stronger Indirection
 
-* [ ] Add per-call probability
-* [ ] Add per-function probability
-* [ ] Add encrypted two-share mode
-* [ ] Add runtime seed in address reconstruction
-* [ ] Add MBA to pointer reconstruction
-* [ ] Add fake page-table entries
-* [ ] Add shuffled page-table layout
-* [ ] Add page-table integrity check
+* [x] Add per-call probability
+* [x] Add per-function probability
+* [x] Add encrypted two-share mode
+* [x] Add runtime seed in address reconstruction
+* [x] Add MBA to pointer reconstruction
+* [x] Add fake page-table entries
+* [x] Add shuffled page-table layout
+* [x] Add page-table integrity check
 
 ## Level 3 — Fortress Indirect Calls
 

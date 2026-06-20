@@ -42,8 +42,12 @@ static GlobalVariable *getOrCreatePageRuntimeSeed(Module &M, IntegerType *IntTy,
   return GV;
 }
 
-static Value *buildMBAAdd(IRBuilder<NoFolder> &IRB, Value *A, Value *B,
-                          const Twine &Name) {
+namespace llvm {
+// Mixed-boolean-arithmetic rewrite of integer addition: a + b is materialised
+// as (a^b) + 2*(a&b). Lives in the llvm namespace so ConstantInt/FP and String
+// decryptors can share one definition via a forward declaration.
+Value *buildMBAAdd(IRBuilder<NoFolder> &IRB, Value *A, Value *B,
+                   const Twine &Name) {
   Value *Xor = IRB.CreateXor(A, B, Name + ".mba.xor");
   markNoObf(Xor);
   Value *And = IRB.CreateAnd(A, B, Name + ".mba.and");
@@ -55,6 +59,8 @@ static Value *buildMBAAdd(IRBuilder<NoFolder> &IRB, Value *A, Value *B,
   markNoObf(Add);
   return Add;
 }
+} // namespace llvm
+
 
 AllocaInst *createConstantSeedCache(Function &F, std::mt19937_64 &rng,
                                     bool volatileSeed) {

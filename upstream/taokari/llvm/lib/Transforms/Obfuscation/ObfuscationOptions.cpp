@@ -272,6 +272,28 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
         }
         obfOpt->setExportAllowlist(std::move(allowlist));
       }
+      auto readStringL3Bool = [&](const char *Key,
+                                  void (ObfOpt::*Setter)(bool)) {
+        if (const auto *V = optObj->get(Key)) {
+          auto B = V->getAsBoolean();
+          if (!B) {
+            reportConfigError(FileName, obfOpt->attributeName() + Twine(".") +
+                                            Key + " must be boolean");
+          }
+          ((*obfOpt).*Setter)(*B);
+        }
+      };
+      readStringL3Bool("stringDecryptorMBA", &ObfOpt::setStringDecryptorMBA);
+      readStringL3Bool("stringDecryptorFlattening",
+                       &ObfOpt::setStringDecryptorFlattening);
+      readStringL3Bool("stringDecryptorIndirectCall",
+                       &ObfOpt::setStringDecryptorIndirectCall);
+      readStringL3Bool("stringShardedPool", &ObfOpt::setStringShardedPool);
+      readStringL3Bool("stringFakePools", &ObfOpt::setStringFakePools);
+      readStringL3Bool("stringPageTableAccess",
+                       &ObfOpt::setStringPageTableAccess);
+      readStringL3Bool("stringDelayedDecrypt",
+                       &ObfOpt::setStringDelayedDecrypt);
     };
 
     std::string key = obj.getFirst().str();
@@ -433,6 +455,13 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
   result.setReleaseStrip(option->releaseStrip());
   result.setRandomizeSections(option->randomizeSections());
   result.setExportAllowlist(option->exportAllowlist());
+  result.setStringDecryptorMBA(option->stringDecryptorMBA());
+  result.setStringDecryptorFlattening(option->stringDecryptorFlattening());
+  result.setStringDecryptorIndirectCall(option->stringDecryptorIndirectCall());
+  result.setStringShardedPool(option->stringShardedPool());
+  result.setStringFakePools(option->stringFakePools());
+  result.setStringPageTableAccess(option->stringPageTableAccess());
+  result.setStringDelayedDecrypt(option->stringDelayedDecrypt());
   return result;
 }
 

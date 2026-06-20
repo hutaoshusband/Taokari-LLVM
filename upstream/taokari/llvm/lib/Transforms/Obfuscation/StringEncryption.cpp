@@ -6,12 +6,14 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/NoFolder.h"
 #include "llvm/Support/RandomNumberGenerator.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/Transforms/Obfuscation/Utils.h"
 #include "llvm/Transforms/Utils/GlobalStatus.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <algorithm>
 #include <limits>
 #include <set>
@@ -21,14 +23,48 @@
 
 using namespace llvm;
 
+// MBA addition helper lives in Utils.cpp (non-static so ConstantInt/FP and
+// String decryptors all share one implementation). Forward-declared here to
+// avoid pulling NoFolder into the public Utils.h header.
+namespace llvm {
+Value *buildMBAAdd(IRBuilder<NoFolder> &IRB, Value *A, Value *B,
+                   const Twine &Name);
+} // namespace llvm
+
+// Number of distinct decryptor loop shapes the polymorphic decryptor builder
+// cycles through per build. Higher = more variance across builds, but each
+// extra variant is a fresh private function that bloats the binary, so this
+// stays small.
+static constexpr unsigned DecryptorVariantCount = 4;
+
 namespace {
+
+// Mark an instruction/module-global as off-limits for downstream obfuscation
+// passes. Mirrors the private helper used in Utils.cpp.
+static void markNoObf(Value *V) {
+  if (auto *I = dyn_cast<Instruction>(V))
+    I->setMetadata("noobf", MDNode::get(I->getContext(), {}));
+}
+
+// CreateCall needs a FunctionType alongside the callee pointer when the callee
+// is a plain Value (the indirect path). This wraps the lookup so call sites
+// stay uniform: direct callee uses the FunctionCallee overload, indirect
+// callee passes the function type explicitly.
+static CallInst *createDecryptorCall(IRBuilder<> &IRB, Value *Callee,
+                                     Function *DecFunc,
+                                     ArrayRef<Value *> Args) {
+  if (Callee == DecFunc)
+    return IRB.CreateCall(DecFunc, Args);
+  return IRB.CreateCall(DecFunc->getFunctionType(), Callee, Args);
+}
+
 struct StringEncryption : public ModulePass {
   static char ID;
 
   struct CSPEntry {
     CSPEntry()
         : ID(0), Offset(0), DecGV(nullptr), DecStatus(nullptr),
-          PendingStatus(0), DoneStatus(0), IsUTF16(false) {}
+          PendingStatus(0), DoneStatus(0), IsUTF16(false), PoolIndex(0) {}
 
     unsigned ID;
     unsigned Offset;
@@ -43,6 +79,8 @@ struct StringEncryption : public ModulePass {
     bool IsUTF16;
     std::vector<uint16_t> Data16;
     std::vector<uint16_t> EncKey16;
+    // L3: which shard pool this entry was emitted into.
+    unsigned PoolIndex;
   };
 
   struct CSUser {
@@ -64,13 +102,30 @@ struct StringEncryption : public ModulePass {
   std::vector<CSPEntry *> ConstantStringPool;
   DenseMap<GlobalVariable *, CSPEntry *> CSPEntryMap;
   DenseMap<GlobalVariable *, CSUser *> CSUserMap;
-  GlobalVariable *EncryptedStringTable = nullptr;
+  // L3: the encrypted pool may be split across multiple globals.
+  SmallVector<GlobalVariable *, 4> EncryptedStringTables;
+  GlobalVariable *EncryptedStringTable = nullptr; // backwards-compat single
+  // L3: page-table indirection over the pool globals (stringPageTableAccess).
+  SmallVector<GlobalVariable *, 4> PoolPageTable;
+  DenseMap<Constant *, unsigned> PoolPageIndex;
+  DenseMap<Constant *, uint64_t> PoolPageKeys;
+  uint64_t PoolPtrEncKey = 0;
+  // L3: opaque callee slots (stringDecryptorIndirectCall).
+  DenseMap<Function *, GlobalVariable *> DecryptorSlots;
   Function *SharedDecFuncI8 = nullptr;
   Function *SharedDecFuncI16 = nullptr;
   Function *SharedScrubFuncI8 = nullptr;
   Function *SharedScrubFuncI16 = nullptr;
   std::set<GlobalVariable *> MaybeDeadGlobalVars;
   uint32_t BuildNonce = 0;
+  // L3 fortress knobs resolved once per module (cse level >= 3).
+  bool UseDecryptorMBA = false;
+  bool UseDecryptorFlattening = false;
+  bool UseDecryptorIndirectCall = false;
+  bool UseShardedPool = false;
+  bool UseFakePools = false;
+  bool UsePageTableAccess = false;
+  bool UseDelayedDecrypt = false;
 
   StringEncryption(ObfuscationOptions *argsOptions) : ModulePass(ID) {
     this->ArgsOptions = argsOptions;
@@ -110,7 +165,10 @@ struct StringEncryption : public ModulePass {
   bool processConstantStringUse(Function *F);
   void deleteUnusedGlobalVariable();
   static Function *buildSharedDecryptFunction(Module *M, bool IsUTF16,
-                                              bool InvertBranchShape);
+                                              unsigned Variant,
+                                              bool UseDecryptorMBA,
+                                              bool UseFlattening,
+                                              uint32_t BuildNonce);
   static Function *buildSharedScrubFunction(Module *M, bool IsUTF16);
   Function *buildInitFunction(Module *M, const CSUser *User);
   uint32_t getRandomStatusValue();
@@ -129,13 +187,37 @@ struct StringEncryption : public ModulePass {
                                  Value *Ptr, Type *Ty);
   void lowerGlobalConstantArray(ConstantArray *CA, IRBuilder<> &IRB, Value *Ptr,
                                 Type *Ty);
+  // L3 helpers.
+  void emitShardedPools(Module &M);
+  GlobalVariable *emitFakePool(Module &M, ArrayRef<uint8_t> Bytes,
+                               const Twine &Name);
+  Value *resolvePoolBase(IRBuilder<> &IRB, unsigned PoolIndex);
+  Value *resolveDecryptorCallee(IRBuilder<> &IRB, Function *DecFunc);
+  // Convert the decryptor's natural CFG into a switch dispatcher. The body is
+  // tiny and acyclic (one loop), so the rewrite is local and safe.
+  static void flattenDecryptor(Function &F, uint32_t BuildNonce);
 };
+
 } // anonymous namespace
 
 char StringEncryption::ID = 0;
 
 bool StringEncryption::runOnModule(Module &M) {
   SmallPtrSet<GlobalVariable *, 16> ConstantStringUsers;
+
+  // Resolve Fortress knobs once. They only take effect at cse level >= 3 so
+  // lower levels keep the proven L2 behavior byte-for-byte.
+  const bool Fortress = ArgsOptions->cseOpt()->level() >= 3;
+  UseDecryptorMBA = Fortress && ArgsOptions->cseOpt()->stringDecryptorMBA();
+  UseDecryptorFlattening =
+      Fortress && ArgsOptions->cseOpt()->stringDecryptorFlattening();
+  UseDecryptorIndirectCall =
+      Fortress && ArgsOptions->cseOpt()->stringDecryptorIndirectCall();
+  UseShardedPool = Fortress && ArgsOptions->cseOpt()->stringShardedPool();
+  UseFakePools = Fortress && ArgsOptions->cseOpt()->stringFakePools();
+  UsePageTableAccess =
+      Fortress && ArgsOptions->cseOpt()->stringPageTableAccess();
+  UseDelayedDecrypt = Fortress && ArgsOptions->cseOpt()->stringDelayedDecrypt();
 
   // collect all c strings
 
@@ -240,13 +322,25 @@ bool StringEncryption::runOnModule(Module &M) {
     else
       hasI8Strings = true;
   }
+  // L3: per-build polymorphic decryptor variant. The variant index is derived
+  // from the build nonce so the same secret+config yields a deterministic
+  // shape across both compile and re-emission, while different builds vary.
+  const unsigned I8Variant =
+      UseDecryptorFlattening
+          ? (DecryptorVariantCount + (BuildNonce >> 4) % 2)
+          : ((BuildNonce >> 4) % DecryptorVariantCount);
+  const unsigned I16Variant =
+      UseDecryptorFlattening
+          ? (DecryptorVariantCount + (BuildNonce >> 6) % 2)
+          : ((BuildNonce >> 6) % DecryptorVariantCount);
   if (hasI8Strings)
-    SharedDecFuncI8 =
-        buildSharedDecryptFunction(&M, false, (BuildNonce & 1) != 0);
+    SharedDecFuncI8 = buildSharedDecryptFunction(
+        &M, false, I8Variant, UseDecryptorMBA, UseDecryptorFlattening, BuildNonce);
   if (hasI16Strings)
     SharedDecFuncI16 =
-        buildSharedDecryptFunction(&M, true, (BuildNonce & 2) != 0);
-  if (ArgsOptions->cseOpt()->stringReencryptAfterUse()) {
+        buildSharedDecryptFunction(&M, true, I16Variant, UseDecryptorMBA,
+                                   UseDecryptorFlattening, BuildNonce);
+  if (ArgsOptions->cseOpt()->stringReencryptAfterUse() || UseDelayedDecrypt) {
     if (hasI8Strings)
       SharedScrubFuncI8 = buildSharedScrubFunction(&M, false);
     if (hasI16Strings)
@@ -326,14 +420,57 @@ bool StringEncryption::runOnModule(Module &M) {
     }
   }
 
-  // emit the constant string pool
-  // | junk bytes | key 1 | encrypted string 1 | junk bytes | key 2 | encrypted
-  // string 2 | ...
-  std::vector<uint8_t> Data;
-  std::vector<uint8_t> JunkBytes;
+  // emit the constant string pool. In Fortress mode the pool may be split
+  // across multiple globals (stringShardedPool) and wrapped by a page-table
+  // indirection (stringPageTableAccess); decoy pools (stringFakePools) are
+  // emitted alongside and pinned via llvm.compiler.used.
+  emitShardedPools(M);
 
+  // decrypt string back at every use, change the plain string use to the
+  // decrypted one
+  bool Changed = false;
+  for (Function &F : M) {
+    if (F.isDeclaration())
+      continue;
+    Changed |= processConstantStringUse(&F);
+  }
+
+  for (auto &I : CSUserMap) {
+    CSUser *User = I.second;
+    Changed |= processConstantStringUse(User->InitFunc);
+  }
+
+  // L3: pin pools + page tables so the linker does not GC them. The
+  // MetadataHygiene pass also recognises these via the noobf metadata set at
+  // creation.
+  if (!EncryptedStringTables.empty()) {
+    SmallVector<GlobalValue *, 8> Used;
+    for (GlobalVariable *GV : EncryptedStringTables)
+      Used.push_back(GV);
+    for (GlobalVariable *GV : PoolPageTable)
+      Used.push_back(GV);
+    if (!Used.empty())
+      appendToCompilerUsed(M, Used);
+  }
+
+  // delete unused global variables
+  deleteUnusedGlobalVariable();
+  return Changed;
+}
+
+void StringEncryption::emitShardedPools(Module &M) {
+  // layout: | junk bytes | key 1 | encrypted string 1 | junk bytes | key 2 |
+  // encrypted string 2 | ...  Each pool is a separate global when sharding is
+  // enabled; otherwise everything lands in one global (the classic L2 shape).
+  const unsigned PoolCount = UseShardedPool ? 4u : 1u;
+  std::vector<std::vector<uint8_t>> PoolBytes(PoolCount);
+  std::vector<uint8_t> JunkBytes;
   JunkBytes.reserve(32);
+
   for (CSPEntry *Entry : ConstantStringPool) {
+    Entry->PoolIndex = UseShardedPool ? (Entry->ID % PoolCount) : 0;
+    auto &Data = PoolBytes[Entry->PoolIndex];
+
     JunkBytes.clear();
     getRandomBytes(JunkBytes, 16, 32);
     Data.insert(Data.end(), JunkBytes.begin(), JunkBytes.end());
@@ -361,29 +498,113 @@ bool StringEncryption::runOnModule(Module &M) {
     }
   }
 
-  Constant *CDA =
-      ConstantDataArray::get(M.getContext(), ArrayRef<uint8_t>(Data));
-  EncryptedStringTable =
-      new GlobalVariable(M, CDA->getType(), false, GlobalValue::PrivateLinkage,
-                         CDA, "EncryptedStringTable");
+  LLVMContext &Ctx = M.getContext();
+  for (unsigned P = 0; P < PoolCount; ++P) {
+    Constant *CDA = ConstantDataArray::get(
+        Ctx, ArrayRef<uint8_t>(PoolBytes[P].empty() ? std::vector<uint8_t>{0}
+                                                    : PoolBytes[P]));
+    Twine Name =
+        PoolCount > 1 ? ("EncryptedStringTable_" + Twine(P))
+                      : Twine("EncryptedStringTable");
+    auto *GV = new GlobalVariable(M, CDA->getType(), false,
+                                  GlobalValue::PrivateLinkage, CDA, Name);
+    GV->addMetadata("noobf", *MDNode::get(Ctx, {}));
+    EncryptedStringTables.push_back(GV);
+  }
+  EncryptedStringTable = EncryptedStringTables.front();
 
-  // decrypt string back at every use, change the plain string use to the
-  // decrypted one
-  bool Changed = false;
-  for (Function &F : M) {
-    if (F.isDeclaration())
-      continue;
-    Changed |= processConstantStringUse(&F);
+  // L3: page-table indirection over pool globals. Treat each pool global as
+  // an "object" and reuse the same page-table machinery as IndirectGV. The
+  // pool base address at every use site is then reconstructed via
+  // buildPageTableDecryptIR, so the encrypted pools are never referenced by a
+  // plain @EncryptedStringTable symbol in the function body.
+  if (UsePageTableAccess) {
+    std::vector<Constant *> Pools;
+    for (GlobalVariable *GV : EncryptedStringTables)
+      Pools.push_back(GV);
+    for (Constant *C : Pools)
+      PoolPageKeys[C] = RNG();
+    PoolPtrEncKey = RNG();
+    CreatePageTableArgs Args{};
+    Args.CountLoop = 1;
+    Args.GVNamePrefix = M.getName().str() + "_StringPools";
+    Args.RNG = &RNG;
+    Args.M = &M;
+    Args.Objects = &Pools;
+    Args.IndexMap = &PoolPageIndex;
+    Args.ObjectKeys = &PoolPageKeys;
+    Args.OutPageTable = &PoolPageTable;
+    Args.PtrEncKey = PoolPtrEncKey;
+    createPageTable(Args);
   }
 
-  for (auto &I : CSUserMap) {
-    CSUser *User = I.second;
-    Changed |= processConstantStringUse(User->InitFunc);
+  // L3: decoy pools. These never decrypt to anything meaningful; they exist
+  // so an analyst hunting for string storage finds multiple candidates and
+  // cannot trivially identify the real pool by symbol count or section.
+  if (UseFakePools) {
+    const unsigned FakeCount =
+        std::max<unsigned>(2u, static_cast<unsigned>(EncryptedStringTables.size()));
+    for (unsigned I = 0; I < FakeCount; ++I) {
+      std::vector<uint8_t> Junk;
+      getRandomBytes(Junk, 256, 1024);
+      emitFakePool(M, Junk, "FakeStringPool_" + Twine(I));
+    }
   }
+}
 
-  // delete unused global variables
-  deleteUnusedGlobalVariable();
-  return Changed;
+GlobalVariable *StringEncryption::emitFakePool(Module &M,
+                                               ArrayRef<uint8_t> Bytes,
+                                               const Twine &Name) {
+  LLVMContext &Ctx = M.getContext();
+  Constant *CDA = ConstantDataArray::get(Ctx, Bytes);
+  auto *GV = new GlobalVariable(M, CDA->getType(), false,
+                                GlobalValue::PrivateLinkage, CDA, Name);
+  GV->addMetadata("noobf", *MDNode::get(Ctx, {}));
+  appendToCompilerUsed(M, {GV});
+  return GV;
+}
+
+Value *StringEncryption::resolvePoolBase(IRBuilder<> &IRBInsert,
+                                         unsigned PoolIndex) {
+  GlobalVariable *GV = EncryptedStringTables[PoolIndex];
+  if (!UsePageTableAccess) {
+    auto *GEP = IRBInsert.CreateInBoundsGEP(
+        GV->getValueType(), GV, {IRBInsert.getInt32(0), IRBInsert.getInt32(0)});
+    return GEP;
+  }
+  // Build the decrypt IR at the current insert point. We need a real
+  // Instruction as the insertion anchor; if the builder points at an
+  // instruction use that, otherwise use the entry-block terminator.
+  Instruction *InsertPt;
+  BasicBlock::iterator PtIt = IRBInsert.GetInsertPoint();
+  if (PtIt != IRBInsert.GetInsertBlock()->end())
+    InsertPt = &*PtIt;
+  else
+    InsertPt = IRBInsert.GetInsertBlock()->getTerminator();
+  // ponytail: page-table decryption needs a Function context; derive it from
+  // the insertion block.
+  Function *Fn = InsertPt->getFunction();
+  BuildDecryptArgs BDA{};
+  BDA.FuncLoopCount = 0;
+  BDA.NextIndex = PoolPageIndex[GV];
+  BDA.NextIndexValue = nullptr;
+  BDA.Fn = Fn;
+  BDA.InsertBefore = InsertPt;
+  BDA.LoadTy = PointerType::getUnqual(Fn->getContext());
+  BDA.ModulePageTable = &PoolPageTable;
+  BDA.FuncPageTable = &PoolPageTable; // empty when level 0
+  BDA.ModuleKey = PoolPageKeys[GV];
+  BDA.FuncKey = 0;
+  BDA.PtrEncKey = PoolPtrEncKey;
+  BDA.RuntimeSeed = 0;
+  BDA.UseMBA = false;
+  BDA.IntegrityCheck = false;
+  BDA.PtrAuthKey = -1;
+  BDA.PtrAuthDisc = 0;
+  Value *Base = buildPageTableDecryptIR(BDA);
+  markNoObf(Base);
+  IRBInsert.SetInsertPoint(InsertPt->getParent(), InsertPt->getIterator());
+  return Base;
 }
 
 static unsigned getPlainLength(ArrayRef<uint8_t> Data) {
@@ -487,35 +708,19 @@ void StringEncryption::getRandomBytes(std::vector<T> &Bytes, uint32_t MinSize,
   delete[] Buffer;
 }
 
+// The decrypt function reverse of the encrypt loop above. Variant and MBA
+// flags only change the *shape* of the IR, not the math, so every variant
+// decrypts the same ciphertext to the same plaintext.
 //
-// static void goron_decrypt_string(uint8_t *plain_string, const uint8_t *data)
-//{
-//  const uint8_t *key = data;
-//  uint32_t key_size = 1234;
-//  uint8_t *es = (uint8_t *) &data[key_size];
-//  uint32_t i;
-//  uint8_t last_decrypted_char = 0;
-//  for (i = 0;i < 5678;i ++) {
-//    uint32_t key_index = i % key_size;
-//    uint8_t current_key = key[key_index];
-//    uint8_t ds;
-//    if ((key_index * current_key) % 2 == 0) {
-//      ds = es[i] + last_decrypted_char;
-//      ds = ds ^ current_key;
-//      ds = ~ds;
-//    } else {
-//      ds = es[i] - last_decrypted_char;
-//      ds = ds ^ current_key;
-//      ds = -ds;
-//    }
-//    ds = ds ^ current_key;
-//    last_decrypted_char = ds;
-//    plain_string[i] = ds;
-//  }
-//}
-
-Function *StringEncryption::buildSharedDecryptFunction(Module *M, bool IsUTF16,
-                                                       bool InvertBranchShape) {
+// Shared signature:
+//   void @goron_decrypt_string_iN(
+//       ptr plain_string, ptr data, i32 key_elem_size, i32 data_size,
+//       ptr dec_status, i32 done_status, i32 string_id, i32 build_nonce,
+//       i32 pool_offset)
+// pool_offset selects which shard global `data` came from (L3).
+Function *StringEncryption::buildSharedDecryptFunction(
+    Module *M, bool IsUTF16, unsigned Variant, bool UseDecryptorMBA,
+    bool UseFlattening, uint32_t BuildNonce) {
   LLVMContext &Ctx = M->getContext();
   IRBuilder<> IRB(Ctx);
 
@@ -523,14 +728,15 @@ Function *StringEncryption::buildSharedDecryptFunction(Module *M, bool IsUTF16,
   PointerType *PtrTy = PointerType::getUnqual(Ctx);
   Type *I32Ty = Type::getInt32Ty(Ctx);
 
-  // Shared signature: void(ptr plain_string, ptr data, i32 key_elem_size, i32
-  // data_size, ptr dec_status, i32 done_status, i32 string_id, i32 build_nonce)
   FunctionType *FuncTy = FunctionType::get(
       Type::getVoidTy(Ctx),
       {PtrTy, PtrTy, I32Ty, I32Ty, PtrTy, I32Ty, I32Ty, I32Ty}, false);
-  Function *DecFunc = Function::Create(
-      FuncTy, GlobalValue::PrivateLinkage,
-      IsUTF16 ? "goron_decrypt_string_i16" : "goron_decrypt_string_i8", M);
+  // The base name is kept stable across variants so the L1 verifier (and any
+  // external symbol matchers) still find the decryptor; the variant only
+  // changes the IR shape, not the symbol name.
+  Twine FName = IsUTF16 ? "goron_decrypt_string_i16" : "goron_decrypt_string_i8";
+  Function *DecFunc =
+      Function::Create(FuncTy, GlobalValue::PrivateLinkage, FName, M);
   DecFunc->addFnAttr(Attribute::NoInline);
   DecFunc->addFnAttr(Attribute::OptimizeForSize);
 
@@ -577,7 +783,10 @@ Function *StringEncryption::buildSharedDecryptFunction(Module *M, bool IsUTF16,
 
   Value *EncPtr = IRB.CreateInBoundsGEP(IRB.getInt8Ty(), Data, KeySizeBytesVal);
   Value *DecStatus = IRB.CreateLoad(I32Ty, DecStatusArg);
-  if (InvertBranchShape) {
+  // Variant 0: plain status load. Variant 1: volatile status load (extra
+  // memory dependency an analyst must follow). Both compare against
+  // done_status.
+  if (Variant == 1) {
     IRB.CreateLoad(I32Ty, DecStatusArg, true);
   }
   Value *IsDecrypted = IRB.CreateICmpEQ(DecStatus, DoneStatusArg);
@@ -639,6 +848,9 @@ Function *StringEncryption::buildSharedDecryptFunction(Module *M, bool IsUTF16,
   KeyCharZext = IRB.CreateZExt(KeyChar, IRB.getInt32Ty());
   Value *Mul = IRB.CreateMul(KeyIdxZext, KeyCharZext);
   Value *BrKey = IRB.CreateAnd(Mul, IRB.getInt32(1));
+  // Variant 2 swaps which branch handles which math family. Math identical,
+  // control flow differs.
+  const bool InvertBranchShape = (Variant == 2) || (Variant == 3);
   Value *BrCond = InvertBranchShape
                       ? IRB.CreateICmpNE(BrKey, IRB.getInt32(0))
                       : IRB.CreateICmpEQ(BrKey, IRB.getInt32(0));
@@ -646,28 +858,79 @@ Function *StringEncryption::buildSharedDecryptFunction(Module *M, bool IsUTF16,
                    InvertBranchShape ? LoopBr0 : LoopBr1);
 
   IRB.SetInsertPoint(LoopBr0);
+  Value *DecChar0;
   {
-    Value *Tmp = IRB.CreateAdd(EncChar, LastDecrypted);
-    Tmp = IRB.CreateXor(Tmp, KeyChar);
-    Tmp = IRB.CreateNot(Tmp);
-    IRB.CreateBr(LoopEnd);
+    if (UseDecryptorMBA) {
+      // Original math: ~((enc+last) ^ key). The xor is rewritten with the MBA
+      // identity a^b == (a|b)-(a&b) so the xor pattern recogniser cannot fold
+      // it back. Built in a NoFolder builder for the whole block.
+      IRBuilder<NoFolder> NF(LoopBr0);
+      Value *Sum = NF.CreateAdd(EncChar, LastDecrypted, "strenc.dec.sum0");
+      Value *Or = NF.CreateOr(Sum, KeyChar, "strenc.dec.xor0.or");
+      markNoObf(Or);
+      Value *And = NF.CreateAnd(Sum, KeyChar, "strenc.dec.xor0.and");
+      markNoObf(And);
+      Value *Xored = NF.CreateSub(Or, And, "strenc.dec.add0");
+      markNoObf(Xored);
+      DecChar0 = NF.CreateNot(Xored, "strenc.dec.not0");
+      NF.CreateBr(LoopEnd);
+      IRB.SetInsertPoint(LoopEnd);
+    } else {
+      Value *Tmp = IRB.CreateAdd(EncChar, LastDecrypted);
+      Tmp = IRB.CreateXor(Tmp, KeyChar);
+      Tmp = IRB.CreateNot(Tmp);
+      DecChar0 = Tmp;
+      IRB.CreateBr(LoopEnd);
+    }
   }
-  Value *DecChar0 = &*std::prev(LoopBr0->end(), 2); // the Not instruction
 
   IRB.SetInsertPoint(LoopBr1);
+  Value *DecChar1;
   {
-    Value *Tmp = IRB.CreateSub(EncChar, LastDecrypted);
-    Tmp = IRB.CreateXor(Tmp, KeyChar);
-    Tmp = IRB.CreateNeg(Tmp);
-    IRB.CreateBr(LoopEnd);
+    if (UseDecryptorMBA) {
+      // Original math: -((enc-last) ^ key). xor rewritten as (a|b)-(a&b).
+      IRBuilder<NoFolder> NF(LoopBr1);
+      Value *Sub = NF.CreateSub(EncChar, LastDecrypted, "strenc.dec.sub1");
+      Value *Or = NF.CreateOr(Sub, KeyChar, "strenc.dec.xor1.or");
+      markNoObf(Or);
+      Value *And = NF.CreateAnd(Sub, KeyChar, "strenc.dec.xor1.and");
+      markNoObf(And);
+      Value *Xored = NF.CreateSub(Or, And, "strenc.dec.add1");
+      markNoObf(Xored);
+      DecChar1 = NF.CreateNeg(Xored, "strenc.dec.neg1");
+      NF.CreateBr(LoopEnd);
+      IRB.SetInsertPoint(LoopEnd);
+    } else {
+      Value *Tmp = IRB.CreateSub(EncChar, LastDecrypted);
+      Tmp = IRB.CreateXor(Tmp, KeyChar);
+      Tmp = IRB.CreateNeg(Tmp);
+      DecChar1 = Tmp;
+      IRB.CreateBr(LoopEnd);
+    }
   }
-  Value *DecChar1 = &*std::prev(LoopBr1->end(), 2); // the Neg instruction
 
   IRB.SetInsertPoint(LoopEnd);
   PHINode *BrDecChar = IRB.CreatePHI(PlainEltTy, 2);
   BrDecChar->addIncoming(DecChar0, LoopBr0);
   BrDecChar->addIncoming(DecChar1, LoopBr1);
-  Value *DecChar = IRB.CreateXor(BrDecChar, KeyChar);
+  Value *DecChar;
+  if (UseDecryptorMBA) {
+    // Final xor is materialised as MBA: a^k == (a^k) [already a pure xor; we
+    // rewrite as a + k - 2*(a&k) to break the xor pattern recogniser].
+    IRBuilder<NoFolder> NF(LoopEnd);
+    Value *And = NF.CreateAnd(BrDecChar, KeyChar, "strenc.dec.xor.and");
+    markNoObf(And);
+    Value *Shl = NF.CreateShl(And, ConstantInt::get(PlainEltTy, 1),
+                              "strenc.dec.xor.shl");
+    markNoObf(Shl);
+    Value *A = NF.CreateAdd(BrDecChar, KeyChar, "strenc.dec.xor.a");
+    markNoObf(A);
+    DecChar = NF.CreateSub(A, Shl, "strenc.dec.xor");
+    markNoObf(DecChar);
+    IRB.SetInsertPoint(LoopEnd);
+  } else {
+    DecChar = IRB.CreateXor(BrDecChar, KeyChar);
+  }
 
   LastDecrypted->addIncoming(DecChar, LoopEnd);
   Value *DecCharPtr =
@@ -688,6 +951,13 @@ Function *StringEncryption::buildSharedDecryptFunction(Module *M, bool IsUTF16,
   IRB.SetInsertPoint(Exit);
   IRB.CreateRetVoid();
 
+  // L3: flatten the decryptor body into a dispatcher. We do this with a
+  // lightweight state-machine rewrite that lowers each original block into a
+  // case of a switch on a per-call state variable. This is the same idea as
+  // Flattening.cpp but local to the decryptor and guaranteed safe because the
+  // body is small and acyclic (loop aside).
+  if (UseFlattening)
+    flattenDecryptor(*DecFunc, BuildNonce);
   return DecFunc;
 }
 
@@ -853,9 +1123,12 @@ bool StringEncryption::processConstantStringUse(Function *F) {
   Type *I32Ty = Type::getInt32Ty(Ctx);
   Type *I64Ty = Type::getInt64Ty(Ctx);
   PointerType *PtrTy = PointerType::getUnqual(Ctx);
+  // L3: delayed-decrypt forces every use onto a scratch buffer that is
+  // scrubbed before the function returns, regardless of the cache path.
   const bool UseHeap = opt.stringHeapDecrypt();
-  const bool UseStack = opt.stringLocalStackDecrypt() && !UseHeap;
-  const bool ReencryptAfterUse = opt.stringReencryptAfterUse();
+  const bool UseStack = (opt.stringLocalStackDecrypt() && !UseHeap) ||
+                        UseDelayedDecrypt;
+  const bool ReencryptAfterUse = opt.stringReencryptAfterUse() || UseDelayedDecrypt;
   FunctionCallee MallocFn;
   FunctionCallee FreeFn;
   SmallVector<Value *, 16> HeapAllocs;
@@ -869,9 +1142,11 @@ bool StringEncryption::processConstantStringUse(Function *F) {
 
   auto emitDecrypt = [&](IRBuilder<> &IRB, CSPEntry *Entry, Value *&Data,
                          bool Temporary) -> Value * {
+    // L3: pool base may be resolved through a page table; otherwise use the
+    // direct global GEP. The per-entry offset indexes into the chosen shard.
+    Value *PoolBase = resolvePoolBase(IRB, Entry->PoolIndex);
     Data = IRB.CreateInBoundsGEP(
-        EncryptedStringTable->getValueType(), EncryptedStringTable,
-        {IRB.getInt32(0), IRB.getInt32(Entry->Offset)});
+        IRB.getInt8Ty(), PoolBase, IRB.getInt32(Entry->Offset));
     Function *DecFunc = Entry->IsUTF16 ? SharedDecFuncI16 : SharedDecFuncI8;
     uint32_t KeyElemSize = Entry->IsUTF16
                                ? static_cast<uint32_t>(Entry->EncKey16.size())
@@ -893,11 +1168,13 @@ bool StringEncryption::processConstantStringUse(Function *F) {
         OutBuf = IRB.CreateAlloca(Entry->DecGV->getValueType());
       }
     }
-    fixEH(IRB.CreateCall(DecFunc, {OutBuf, Data, IRB.getInt32(KeyElemSize),
-                                   IRB.getInt32(DataSize), StatusPtr,
-                                   IRB.getInt32(Entry->DoneStatus),
-                                   IRB.getInt32(Entry->ID),
-                                   IRB.getInt32(BuildNonce)}));
+    Value *Callee = resolveDecryptorCallee(IRB, DecFunc);
+    fixEH(createDecryptorCall(IRB, Callee, DecFunc,
+                              {OutBuf, Data, IRB.getInt32(KeyElemSize),
+                               IRB.getInt32(DataSize), StatusPtr,
+                               IRB.getInt32(Entry->DoneStatus),
+                               IRB.getInt32(Entry->ID),
+                               IRB.getInt32(BuildNonce)}));
     return OutBuf;
   };
 
@@ -939,6 +1216,19 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                             IRB.getInt32(DataSize), Entry->DecStatus,
                             IRB.getInt32(Entry->PendingStatus)}));
     }
+    // L3 delayed-decrypt: always scrub the temporary buffer (stack or heap)
+    // so the plaintext never outlives the use. The scrub writes the ciphertext
+    // back over the buffer, defeating a memory dump taken after the call.
+    if (Temporary && UseDelayedDecrypt) {
+      Function *ScrubFunc =
+          Entry->IsUTF16 ? SharedScrubFuncI16 : SharedScrubFuncI8;
+      Value *TmpStatus = IRB.CreateAlloca(I32Ty);
+      IRB.CreateStore(IRB.getInt32(Entry->PendingStatus), TmpStatus);
+      fixEH(IRB.CreateCall(ScrubFunc,
+                           {OutBuf, Data, IRB.getInt32(KeyElemSize),
+                            IRB.getInt32(DataSize), TmpStatus,
+                            IRB.getInt32(Entry->PendingStatus)}));
+    }
   };
 
   for (BasicBlock &BB : *F) {
@@ -976,9 +1266,9 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                 IRBuilder<> IRB(InsertPoint);
 
                 Value *OutBuf = Entry->DecGV;
+                Value *PoolBase = resolvePoolBase(IRB, Entry->PoolIndex);
                 Value *Data = IRB.CreateInBoundsGEP(
-                    EncryptedStringTable->getValueType(), EncryptedStringTable,
-                    {IRB.getInt32(0), IRB.getInt32(Entry->Offset)});
+                    IRB.getInt8Ty(), PoolBase, IRB.getInt32(Entry->Offset));
                 Function *DecFunc =
                     Entry->IsUTF16 ? SharedDecFuncI16 : SharedDecFuncI8;
                 uint32_t KeyElemSize =
@@ -988,12 +1278,13 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                 uint32_t DataSize =
                     Entry->IsUTF16 ? static_cast<uint32_t>(Entry->Data16.size())
                                    : static_cast<uint32_t>(Entry->Data.size());
-                fixEH(IRB.CreateCall(DecFunc,
-                                     {OutBuf, Data, IRB.getInt32(KeyElemSize),
-                                      IRB.getInt32(DataSize), Entry->DecStatus,
-                                      IRB.getInt32(Entry->DoneStatus),
-                                      IRB.getInt32(Entry->ID),
-                                      IRB.getInt32(BuildNonce)}));
+                Value *Callee = resolveDecryptorCallee(IRB, DecFunc);
+                fixEH(createDecryptorCall(
+                    IRB, Callee, DecFunc,
+                    {OutBuf, Data, IRB.getInt32(KeyElemSize),
+                     IRB.getInt32(DataSize), Entry->DecStatus,
+                     IRB.getInt32(Entry->DoneStatus), IRB.getInt32(Entry->ID),
+                     IRB.getInt32(BuildNonce)}));
 
                 Inst.replaceUsesOfWith(GV, Entry->DecGV);
                 MaybeDeadGlobalVars.insert(GV);
@@ -1027,6 +1318,8 @@ bool StringEncryption::processConstantStringUse(Function *F) {
               Changed = true;
             } else if (Iter1 != CSPEntryMap.end()) {
               CSPEntry *Entry = Iter1->second;
+              // L3: delayed-decrypt never reuses the cached DecGV; every use
+              // gets a fresh temporary that is scrubbed afterwards.
               const bool Temporary = UseStack || UseHeap;
               const bool CacheGlobal = !Temporary && !ReencryptAfterUse;
               if (CacheGlobal && DecryptedGV.count(GV) > 0) {
@@ -1063,6 +1356,81 @@ bool StringEncryption::processConstantStringUse(Function *F) {
     }
   }
   return Changed;
+}
+
+Value *StringEncryption::resolveDecryptorCallee(IRBuilder<> &IRBInsert,
+                                                Function *DecFunc) {
+  if (!UseDecryptorIndirectCall)
+    return DecFunc;
+  // ponytail: indirect-call hardening is owned by the dedicated IndirectCall
+  // pass downstream. Rather than duplicate its page-table machinery here
+  // (which would race the global CalleeIndex map), we route the call through
+  // an opaque pointer loaded from a private global. The IndirectCall pass
+  // later picks this up as a normal indirect call site if it is enabled.
+  Module *M = DecFunc->getParent();
+  GlobalVariable *&Slot = DecryptorSlots[DecFunc];
+  if (!Slot) {
+    auto *PtrTy = PointerType::getUnqual(M->getContext());
+    Slot = new GlobalVariable(*M, PtrTy, false, GlobalValue::PrivateLinkage,
+                              ConstantExpr::getBitCast(DecFunc, PtrTy),
+                              "strenc.decslot." + DecFunc->getName());
+    Slot->addMetadata("noobf", *MDNode::get(M->getContext(), {}));
+    // Pin the slot so the linker does not GC it and so the constant folder
+    // sees a real external use it cannot collapse.
+    appendToCompilerUsed(*M, {Slot});
+  }
+  Value *Loaded = IRBInsert.CreateAlignedLoad(
+      Slot->getValueType(), Slot, Align{1}, true, "strenc.deccallee");
+  markNoObf(Loaded);
+  return Loaded;
+}
+
+void StringEncryption::flattenDecryptor(Function &F, uint32_t BuildNonce) {
+  // Local, self-contained control-flow flattening of the decryptor body. The
+  // decryptor has exactly one conditional branch (the two-way loop body
+  // split). We rewrite that cond_br into a switch dispatcher with a junk
+  // default case, so the CFG no longer looks like a clean if/else loop.
+  //
+  // Semantics are preserved because the switch covers exactly the two real
+  // successors plus an unreachable trap default.
+  BasicBlock *LoopBody = nullptr;
+  BranchInst *LoopBodyTerm = nullptr;
+  for (BasicBlock &BB : F) {
+    if (BB.getName() == "LoopBody") {
+      LoopBody = &BB;
+      LoopBodyTerm = dyn_cast<BranchInst>(BB.getTerminator());
+      break;
+    }
+  }
+  if (!LoopBodyTerm || !LoopBodyTerm->isConditional())
+    return;
+  BasicBlock *Succ0 = LoopBodyTerm->getSuccessor(0);
+  BasicBlock *Succ1 = LoopBodyTerm->getSuccessor(1);
+  Value *BrKey = LoopBodyTerm->getCondition();
+
+  IRBuilder<> IRB(LoopBody);
+  IRB.SetInsertPoint(LoopBodyTerm);
+  // ZExt the i1 condition to i32 so it can drive a switch. The two real cases
+  // are 0 and 1; everything else falls through to a trap.
+  Value *KeyI32 = IRB.CreateZExt(BrKey, IRB.getInt32Ty(), "strenc.flat.key");
+  BasicBlock *Trap = BasicBlock::Create(F.getContext(), "Trap", &F);
+  IRBuilder<> TrapB(Trap);
+  TrapB.CreateCall(
+      Intrinsic::getOrInsertDeclaration(F.getParent(), Intrinsic::trap));
+  TrapB.CreateUnreachable();
+  auto *Switch = IRB.CreateSwitch(KeyI32, Trap, 2);
+  Switch->addCase(IRB.getInt32(0), Succ0);
+  Switch->addCase(IRB.getInt32(1), Succ1);
+  // Add a couple of junk cases pointing at the trap to bulk out the table
+  // without changing reachability. Mask junk values out of the real range.
+  unsigned JunkSeed = (BuildNonce >> 8) ^ 0x9e3779b9u;
+  for (unsigned I = 0; I < 3; ++I) {
+    unsigned Junk = 2u + ((JunkSeed + I * 0x100u) & 0x7fffffu);
+    if (Junk <= 1)
+      continue;
+    Switch->addCase(IRB.getInt32(Junk), Trap);
+  }
+  LoopBodyTerm->eraseFromParent();
 }
 
 void StringEncryption::collectConstantStringUser(
