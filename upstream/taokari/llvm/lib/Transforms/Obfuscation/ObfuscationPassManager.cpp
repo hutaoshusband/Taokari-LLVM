@@ -15,6 +15,11 @@ static cl::opt<bool>
 EnableIRObfuscation("irobf", cl::init(false), cl::NotHidden,
                     cl::desc("Enable IR Code Obfuscation."));
 
+// Taokari alias of the master -irobf flag.
+static cl::alias
+TaokariIRObfuscation("taokari", cl::desc("Alias for -irobf"),
+                     cl::aliasopt(EnableIRObfuscation));
+
 
 static cl::opt<bool>
 EnableIndirectBr("irobf-indbr", cl::init(false), cl::NotHidden,
@@ -22,6 +27,14 @@ EnableIndirectBr("irobf-indbr", cl::init(false), cl::NotHidden,
 static cl::opt<uint32_t>
 LevelIndirectBr("level-indbr", cl::init(0), cl::NotHidden,
                 cl::desc("Set IR Indirect Branch Obfuscation Level."));
+
+static cl::alias
+TaokariIndirectBr("taokari-indbr", cl::desc("Alias for -irobf-indbr"),
+                  cl::aliasopt(EnableIndirectBr));
+static cl::alias
+TaokariLevelIndirectBr("taokari-level-indbr",
+                       cl::desc("Alias for -level-indbr"),
+                       cl::aliasopt(LevelIndirectBr));
 
 
 static cl::opt<bool>
@@ -31,6 +44,14 @@ static cl::opt<uint32_t>
 LevelIndirectCall("level-icall", cl::init(0), cl::NotHidden,
                   cl::desc("Set IR Indirect Call Obfuscation Level."));
 
+static cl::alias
+TaokariIndirectCall("taokari-icall", cl::desc("Alias for -irobf-icall"),
+                    cl::aliasopt(EnableIndirectCall));
+static cl::alias
+TaokariLevelIndirectCall("taokari-level-icall",
+                         cl::desc("Alias for -level-icall"),
+                         cl::aliasopt(LevelIndirectCall));
+
 
 static cl::opt<bool> EnableIndirectGV(
     "irobf-indgv", cl::init(false), cl::NotHidden,
@@ -39,15 +60,32 @@ static cl::opt<uint32_t> LevelIndirectGV(
     "level-indgv", cl::init(0), cl::NotHidden,
     cl::desc("Set IR Indirect Global Variable Obfuscation Level."));
 
+static cl::alias
+TaokariIndirectGV("taokari-indgv", cl::desc("Alias for -irobf-indgv"),
+                  cl::aliasopt(EnableIndirectGV));
+static cl::alias
+TaokariLevelIndirectGV("taokari-level-indgv",
+                       cl::desc("Alias for -level-indgv"),
+                       cl::aliasopt(LevelIndirectGV));
+
 
 static cl::opt<bool> EnableIRFlattening(
     "irobf-fla", cl::init(false), cl::NotHidden,
     cl::desc("Enable IR Control Flow Flattening Obfuscation."));
 
+static cl::alias
+TaokariIRFlattening("taokari-fla", cl::desc("Alias for -irobf-fla"),
+                    cl::aliasopt(EnableIRFlattening));
+
 
 static cl::opt<bool>
 EnableIRStringEncryption("irobf-cse", cl::init(false), cl::NotHidden,
                          cl::desc("Enable IR Constant String Encryption."));
+
+static cl::alias
+TaokariIRStringEncryption("taokari-cse",
+                          cl::desc("Alias for -irobf-cse"),
+                          cl::aliasopt(EnableIRStringEncryption));
 
 
 static cl::opt<bool>
@@ -58,6 +96,15 @@ static cl::opt<uint32_t> LevelIRConstantIntEncryption(
     "level-cie", cl::init(0), cl::NotHidden,
     cl::desc("Set IR Constant Integer Encryption Level."));
 
+static cl::alias
+TaokariIRConstantIntEncryption("taokari-cie",
+                               cl::desc("Alias for -irobf-cie"),
+                               cl::aliasopt(EnableIRConstantIntEncryption));
+static cl::alias
+TaokariLevelIRConstantIntEncryption("taokari-level-cie",
+                                    cl::desc("Alias for -level-cie"),
+                                    cl::aliasopt(LevelIRConstantIntEncryption));
+
 
 static cl::opt<bool>
 EnableIRConstantFPEncryption("irobf-cfe", cl::init(false), cl::NotHidden,
@@ -67,10 +114,23 @@ static cl::opt<uint32_t> LevelIRConstantFPEncryption(
     "level-cfe", cl::init(0), cl::NotHidden,
     cl::desc("Set IR Constant FP Encryption Level."));
 
+static cl::alias
+TaokariIRConstantFPEncryption("taokari-cfe",
+                              cl::desc("Alias for -irobf-cfe"),
+                              cl::aliasopt(EnableIRConstantFPEncryption));
+static cl::alias
+TaokariLevelIRConstantFPEncryption("taokari-level-cfe",
+                                   cl::desc("Alias for -level-cfe"),
+                                   cl::aliasopt(LevelIRConstantFPEncryption));
+
 
 static cl::opt<bool>
 EnableRttiEraser("irobf-rtti", cl::init(false), cl::NotHidden,
                  cl::desc("Enable RTTI Eraser."));
+
+static cl::alias
+TaokariRttiEraser("taokari-rtti", cl::desc("Alias for -irobf-rtti"),
+                  cl::aliasopt(EnableRttiEraser));
 
 
 static cl::opt<std::string>

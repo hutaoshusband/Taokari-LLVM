@@ -11,10 +11,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TESTING = ROOT / "testing"
-DEFAULT_CLANG = ROOT / "build" / "taokari-ninja" / "bin" / "clang.exe"
+DEFAULT_CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
 VSDEVCMD = Path(r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat")
 
-OBF_FLAGS = ["-O2", "-mllvm", "-irobf", "-mllvm", "-irobf-fla", "-mllvm", "-irobf-cse", "-mllvm", "-irobf-cie"]
+OBF_FLAGS = [
+    "-O2",
+    "-mllvm", "-taokari",
+    "-mllvm", "-taokari-indbr",
+    "-mllvm", "-taokari-icall",
+    "-mllvm", "-taokari-indgv",
+    "-mllvm", "-taokari-fla",
+    "-mllvm", "-taokari-cse",
+    "-mllvm", "-taokari-cie",
+    "-mllvm", "-taokari-cfe",
+]
 COLOR = {
     "reset": "\033[0m",
     "blue": "\033[36m",
@@ -45,6 +55,7 @@ CASES = [
     Case("cpp_console", (case_path("cpp_console") / "src" / "main.cpp",), "cpp-console:144\n"),
     Case("cpp_classes", (case_path("cpp_classes") / "src" / "main.cpp",), "classes:124:taokari\n"),
     Case("cpp_templates", (case_path("cpp_templates") / "src" / "main.cpp",), "templates:55:29\n"),
+    Case("cpp_mixed", (case_path("cpp_mixed") / "src" / "main.cpp",), "mixed:3628800:1.4142:301\n"),
     Case(
         "imgui_headless",
         (
@@ -122,6 +133,10 @@ def main() -> int:
     args = parser.parse_args()
 
     clang = args.clang.resolve()
+    if clang != DEFAULT_CLANG.resolve():
+        print(f"refusing non-local compiler: {clang}", file=sys.stderr)
+        print(f"expected: {DEFAULT_CLANG.resolve()}", file=sys.stderr)
+        return 2
     if not clang.exists():
         print(f"missing clang: {clang}", file=sys.stderr)
         return 2

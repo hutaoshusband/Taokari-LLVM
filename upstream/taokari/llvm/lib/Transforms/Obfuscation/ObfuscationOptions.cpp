@@ -13,6 +13,10 @@ using namespace llvm;
 
 namespace llvm {
 
+static void reportConfigError(const Twine &FileName, const Twine &Message) {
+  report_fatal_error("Taokari config error in " + FileName + ": " + Message);
+}
+
 SmallVector<std::string> readAnnotate(Function *f) {
   SmallVector<std::string> annotations;
 
@@ -55,13 +59,12 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
     return result;
   }
   if (!sys::fs::exists(FileName)) {
-    report_fatal_error("Config file doesn't exist: " + FileName);
+    reportConfigError(FileName, "file does not exist");
   }
 
   auto BufOrErr = MemoryBuffer::getFileOrSTDIN(FileName);
   if (const auto ErrCode = BufOrErr.getError()) {
-    report_fatal_error(
-        ("Can not read config file: " + ErrCode.message()).c_str());
+    reportConfigError(FileName, "cannot read file: " + ErrCode.message());
   }
 
   const auto &    buf = *BufOrErr.get();
@@ -69,27 +72,40 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
 
   auto jsonRoot = json::parse(buf.getBuffer());
   if (!jsonRoot) {
-    report_fatal_error(jsonRoot.takeError());
+    reportConfigError(FileName,
+                      "invalid JSON: " + toString(jsonRoot.takeError()));
   }
   auto rootObj = jsonRoot->getAsObject();
   if (!rootObj) {
-    report_fatal_error("Json root is not an object.");
+    reportConfigError(FileName, "JSON root must be an object");
   }
 
-  static auto procObj = [](const std::shared_ptr<ObfOpt> &obfOpt,
-                           const detail::DenseMapPair<
-                             json::ObjectKey, json::Value> &
-                           obj) ->bool {
+  auto procObj = [&FileName](
+      const std::shared_ptr<ObfOpt> &obfOpt,
+      const detail::DenseMapPair<json::ObjectKey, json::Value> &obj) -> bool {
 
-    static auto procOptValue = [](const std::shared_ptr<ObfOpt> &obfOpt,
-                                  const json::Value &            value) {
-      if (auto optObj = value.getAsObject()) {
-        if (auto enable = optObj->getBoolean("enable")) {
-          obfOpt->setEnable(enable.value());
+    auto procOptValue = [&FileName](const std::shared_ptr<ObfOpt> &obfOpt,
+                                    const json::Value &value) {
+      auto optObj = value.getAsObject();
+      if (!optObj) {
+        reportConfigError(FileName,
+                          obfOpt->attributeName() + " must be an object");
+      }
+      if (const auto *enableValue = optObj->get("enable")) {
+        auto enable = enableValue->getAsBoolean();
+        if (!enable) {
+          reportConfigError(FileName,
+                            obfOpt->attributeName() + ".enable must be boolean");
         }
-        if (auto level = optObj->getInteger("level")) {
-          obfOpt->setLevel(static_cast<uint32_t>(level.value()));
+        obfOpt->setEnable(*enable);
+      }
+      if (const auto *levelValue = optObj->get("level")) {
+        auto level = levelValue->getAsInteger();
+        if (!level) {
+          reportConfigError(FileName,
+                            obfOpt->attributeName() + ".level must be integer");
         }
+        obfOpt->setLevel(static_cast<uint32_t>(*level));
       }
     };
 
@@ -111,6 +127,8 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
         auto &      seed = result->randomSeed();
         seed = seedStr;
         seed.resize(32, 0);
+      } else {
+        reportConfigError(FileName, "randomSeed must be string");
       }
       continue;
     }

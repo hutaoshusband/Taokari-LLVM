@@ -2,7 +2,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
-$Build = Join-Path $Root "build\\taokari-ninja"
+$Build = Join-Path $Root "build\\taokari-local"
 $Clang = Join-Path $Build "bin\clang.exe"
 
 if (-not (Test-Path $Build)) {

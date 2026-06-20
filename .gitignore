@@ -1,7 +1,9 @@
 build/
+build-logs/
 *.rar
 TODO.md
 testing/cases/*/build/
 testing/cases/*/obj/
 testing/_with_vs_env.cmd
 imgui.ini
+INFORMATION/private/

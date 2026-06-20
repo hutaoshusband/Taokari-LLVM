@@ -5,23 +5,28 @@ Taokari LLVM is an LLVM obfuscator fork based on Arkari.
 This repository keeps the imported LLVM tree separate from Taokari-owned files:
 
 - `upstream/taokari/` - Taokari LLVM source tree, copied from `C:\Arkari`.
-- `build/taokari-ninja/` - copied Taokari Ninja build cache and objects.
+- `build/taokari-local/` - local Taokari Ninja build output.
 - `scripts/` - Taokari helper commands.
 - `docs/` - project notes and source inventory.
 
 ## Build
 
-Fast path, using the copied object cache:
+External build:
 
-```powershell
-.\scripts\build-cached.ps1
+```bat
+scripts\build-external.cmd
 ```
 
-Clean configure path, when the copied cache stops matching the source:
+Show the current log:
 
-```powershell
-.\scripts\configure-release.ps1
-ninja -C build\\taokari-ninja
+```bat
+scripts\build-status.cmd
+```
+
+Stop the build:
+
+```bat
+scripts\build-stop.cmd
 ```
 
 ## Arkari Credit

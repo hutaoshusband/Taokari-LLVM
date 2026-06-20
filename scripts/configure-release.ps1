@@ -3,13 +3,18 @@ $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
 $Source = Join-Path $Root "upstream\\taokari\llvm"
-$Build = Join-Path $Root "build\\taokari-ninja"
+$Build = Join-Path $Root "build\\taokari-local"
 
 if (-not $env:VCPKG_ROOT) {
   throw "VCPKG_ROOT is not set"
 }
+$VcpkgRoot = $env:VCPKG_ROOT.Trim()
+$Ninja = "$env:LOCALAPPDATA\Microsoft\WinGet\Links\ninja.exe"
 
 cmake -S $Source -B $Build -G Ninja `
+  -DCMAKE_MAKE_PROGRAM="$Ninja" `
+  -DCMAKE_C_COMPILER=cl `
+  -DCMAKE_CXX_COMPILER=cl `
   -DCMAKE_CXX_FLAGS="-DLIBXML_STATIC /utf-8 /EHsc" `
   -DCMAKE_C_FLAGS="-DLIBXML_STATIC /utf-8" `
   -DCMAKE_INSTALL_PREFIX="$Build\install" `
@@ -30,5 +35,5 @@ cmake -S $Source -B $Build -G Ninja `
   -DLLVM_INCLUDE_BENCHMARKS=OFF `
   -DLLVM_ENABLE_ASSERTIONS=OFF `
   -DLLVM_RELEASE_ENABLE_LTO=OFF `
-  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+  -DCMAKE_TOOLCHAIN_FILE="$VcpkgRoot\scripts\buildsystems\vcpkg.cmake" `
   -DVCPKG_TARGET_TRIPLET="x64-windows-static"
