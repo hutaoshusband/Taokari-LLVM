@@ -332,21 +332,21 @@ Main weakness: plaintext decrypt status and predictable decrypt flow.
 * [x] i16 decrypt function exists
 * [x] Per-string status exists
 * [x] Junk-padded table exists
-* [ ] Audit all plaintext status slots
-* [ ] Add tests for UTF-16 strings
-* [ ] Add tests for wide strings
-* [ ] Add config for minimum string length
-* [ ] Add skip list for harmless strings
+* [x] Audit all plaintext status slots
+* [x] Add tests for UTF-16 strings
+* [x] Add tests for wide strings
+* [x] Add config for minimum string length
+* [x] Add skip list for harmless strings
 
 ## Level 2 — Stronger StringEnc
 
-* [ ] Replace plaintext status flag
-* [ ] Add encrypted sentinel
-* [ ] Add per-build nonce
-* [ ] Add per-string key schedule
-* [ ] Randomize key length
+* [x] Replace plaintext status flag
+* [x] Add encrypted sentinel
+* [x] Add per-build nonce
+* [x] Add per-string key schedule
+* [x] Randomize key length
 * [ ] Randomize decryptor shape
-* [ ] Add position-dependent key mixing
+* [x] Add position-dependent key mixing
 * [ ] Add optional local stack decrypt
 * [ ] Add optional heap decrypt
 * [ ] Add optional re-encrypt-after-use

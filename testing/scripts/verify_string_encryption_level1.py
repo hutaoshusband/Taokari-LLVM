@@ -2,7 +2,8 @@
 
 Checks the existing StringEnc surface without touching the main test runner:
 UTF-8, UTF-16, and wide strings decrypt correctly; minStringLength/skipStrings
-leave harmless strings alone; status slots no longer use plain 0/1 sentinels.
+leave harmless strings alone; status slots no longer use plain 0/1 sentinels;
+decryptors carry build nonce and position-dependent key mixing.
 """
 from __future__ import annotations
 
@@ -134,6 +135,25 @@ def check_ir(ir: str) -> None:
   if re.search(r"store i32 1, ptr .*dec_status", ir):
     raise SystemExit("plain status store found")
 
+  calls = re.findall(
+      r"call void @goron_decrypt_string_i(?:8|16)\([^\n]*, i32 (-?\d+), i32 (\d+), i32 (-?\d+)\)",
+      ir,
+  )
+  if not calls:
+    raise SystemExit("decrypt calls do not carry done_status/string_id/build_nonce")
+  for _done_status, _string_id, build_nonce in calls:
+    if build_nonce in {"0", "1"}:
+      raise SystemExit("weak build nonce found")
+
+  i8_body = re.search(r"define private void @goron_decrypt_string_i8\b[\s\S]*?\n}", ir)
+  i16_body = re.search(r"define private void @goron_decrypt_string_i16\b[\s\S]*?\n}", ir)
+  if not i8_body or not i16_body:
+    raise SystemExit("missing i8/i16 decryptor body")
+  if not all(needle in i8_body.group(0) for needle in ["lshr", "59", "17"]):
+    raise SystemExit("i8 decryptor lacks nonce/position key mixing")
+  if not all(needle in i16_body.group(0) for needle in ["lshr", "40503", "257"]):
+    raise SystemExit("i16 decryptor lacks nonce/position key mixing")
+
 
 def run_checks(tmp: Path) -> int:
     src = tmp / "stringenc_level1.cpp"
@@ -162,7 +182,7 @@ def run_checks(tmp: Path) -> int:
       )
 
     check_ir(emit_ir(src, ll, cfg))
-    print("string encryption level1: ok")
+    print("string encryption verifier: ok")
     return 0
 
 

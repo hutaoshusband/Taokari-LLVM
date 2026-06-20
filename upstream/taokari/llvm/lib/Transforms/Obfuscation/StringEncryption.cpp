@@ -68,6 +68,7 @@ struct StringEncryption : public ModulePass {
   Function *SharedDecFuncI8 = nullptr;
   Function *SharedDecFuncI16 = nullptr;
   std::set<GlobalVariable *> MaybeDeadGlobalVars;
+  uint32_t BuildNonce = 0;
 
   StringEncryption(ObfuscationOptions *argsOptions) : ModulePass(ID) {
     this->ArgsOptions = argsOptions;
@@ -109,6 +110,10 @@ struct StringEncryption : public ModulePass {
   static Function *buildSharedDecryptFunction(Module *M, bool IsUTF16);
   Function *buildInitFunction(Module *M, const CSUser *User);
   uint32_t getRandomStatusValue();
+  uint8_t mixKey8(uint8_t Key, uint32_t KeyIndex, uint32_t Position,
+                  const CSPEntry *Entry) const;
+  uint16_t mixKey16(uint16_t Key, uint32_t KeyIndex, uint32_t Position,
+                    const CSPEntry *Entry) const;
   bool shouldSkipString(ArrayRef<uint8_t> Data) const;
   bool shouldSkipString(ArrayRef<uint16_t> Data) const;
   template <typename T>
@@ -131,6 +136,7 @@ bool StringEncryption::runOnModule(Module &M) {
   // collect all c strings
 
   LLVMContext &Ctx = M.getContext();
+  BuildNonce = getRandomStatusValue();
   for (GlobalVariable &GV : M.globals()) {
     if (!GV.isConstant() || !GV.hasInitializer() ||
         GV.hasDLLExportStorageClass() || GV.isDLLImportDependent()) {
@@ -241,7 +247,8 @@ bool StringEncryption::runOnModule(Module &M) {
       uint8_t LastPlainChar = 0;
       for (unsigned i = 0; i < Entry->Data.size(); ++i) {
         const uint32_t KeyIndex = i % Entry->EncKey.size();
-        const uint8_t CurrentKey = Entry->EncKey[KeyIndex];
+        const uint8_t CurrentKey =
+            mixKey8(Entry->EncKey[KeyIndex], KeyIndex, i, Entry);
         const uint8_t CurrentPlainChar = Entry->Data[i];
         uint8_t val = CurrentPlainChar;
         val ^= CurrentKey;
@@ -263,7 +270,8 @@ bool StringEncryption::runOnModule(Module &M) {
       uint16_t LastPlainChar = 0;
       for (unsigned i = 0; i < Entry->Data16.size(); ++i) {
         const uint32_t KeyIndex = i % Entry->EncKey16.size();
-        const uint16_t CurrentKey = Entry->EncKey16[KeyIndex];
+        const uint16_t CurrentKey =
+            mixKey16(Entry->EncKey16[KeyIndex], KeyIndex, i, Entry);
         const uint16_t CurrentPlainChar = Entry->Data16[i];
         uint16_t val = CurrentPlainChar;
         val ^= CurrentKey;
@@ -382,6 +390,26 @@ uint32_t StringEncryption::getRandomStatusValue() {
   return Value;
 }
 
+uint8_t StringEncryption::mixKey8(uint8_t Key, uint32_t KeyIndex,
+                                  uint32_t Position,
+                                  const CSPEntry *Entry) const {
+  uint32_t Mixed = Key;
+  Mixed ^= (BuildNonce >> ((Position & 3) * 8)) & 0xffu;
+  Mixed ^= ((Entry->ID + 1u) * 0x5du) & 0xffu;
+  Mixed ^= ((Position + 1u) * 0x3bu + KeyIndex * 0x11u) & 0xffu;
+  return static_cast<uint8_t>(Mixed);
+}
+
+uint16_t StringEncryption::mixKey16(uint16_t Key, uint32_t KeyIndex,
+                                    uint32_t Position,
+                                    const CSPEntry *Entry) const {
+  uint32_t Mixed = Key;
+  Mixed ^= (BuildNonce >> ((Position & 1) * 16)) & 0xffffu;
+  Mixed ^= ((Entry->ID + 1u) * 0x45d9u) & 0xffffu;
+  Mixed ^= ((Position + 1u) * 0x9e37u + KeyIndex * 0x0101u) & 0xffffu;
+  return static_cast<uint16_t>(Mixed);
+}
+
 bool StringEncryption::shouldSkipString(ArrayRef<uint8_t> Data) const {
   const unsigned Len = getPlainLength(Data);
   const auto Opt = ArgsOptions->cseOpt();
@@ -484,9 +512,10 @@ Function *StringEncryption::buildSharedDecryptFunction(Module *M,
   Type *I32Ty = Type::getInt32Ty(Ctx);
 
   // Shared signature: void(ptr plain_string, ptr data, i32 key_elem_size, i32
-  // data_size, ptr dec_status, i32 done_status)
+  // data_size, ptr dec_status, i32 done_status, i32 string_id, i32 build_nonce)
   FunctionType *FuncTy = FunctionType::get(
-      Type::getVoidTy(Ctx), {PtrTy, PtrTy, I32Ty, I32Ty, PtrTy, I32Ty}, false);
+      Type::getVoidTy(Ctx),
+      {PtrTy, PtrTy, I32Ty, I32Ty, PtrTy, I32Ty, I32Ty, I32Ty}, false);
   Function *DecFunc = Function::Create(
       FuncTy, GlobalValue::PrivateLinkage,
       IsUTF16 ? "goron_decrypt_string_i16" : "goron_decrypt_string_i8", M);
@@ -499,7 +528,9 @@ Function *StringEncryption::buildSharedDecryptFunction(Module *M,
   Argument *KeyElemSizeArg = ArgIt++;
   Argument *DataSizeArg = ArgIt++;
   Argument *DecStatusArg = ArgIt++;
-  Argument *DoneStatusArg = ArgIt;
+  Argument *DoneStatusArg = ArgIt++;
+  Argument *StringIDArg = ArgIt++;
+  Argument *BuildNonceArg = ArgIt;
 
   AttrBuilder NoCaptureAttrBuilder{Ctx};
   NoCaptureAttrBuilder.addCapturesAttr(
@@ -514,6 +545,8 @@ Function *StringEncryption::buildSharedDecryptFunction(Module *M,
   DecStatusArg->setName("dec_status");
   DecStatusArg->addAttrs(NoCaptureAttrBuilder);
   DoneStatusArg->setName("done_status");
+  StringIDArg->setName("string_id");
+  BuildNonceArg->setName("build_nonce");
 
   BasicBlock *Enter = BasicBlock::Create(Ctx, "Enter", DecFunc);
   BasicBlock *LoopBody = BasicBlock::Create(Ctx, "LoopBody", DecFunc);
@@ -554,6 +587,27 @@ Function *StringEncryption::buildSharedDecryptFunction(Module *M,
     KeyChar = IRB.CreateLoad(Type::getInt16Ty(Ctx), KeyCharPtr);
   }
 
+  Value *KeyCharZext = IRB.CreateZExt(KeyChar, IRB.getInt32Ty());
+  Value *ShiftIndex =
+      IRB.CreateAnd(LoopCounter, IRB.getInt32(IsUTF16 ? 1 : 3));
+  Value *Shift = IRB.CreateShl(ShiftIndex, IRB.getInt32(IsUTF16 ? 4 : 3));
+  Value *NoncePart = IRB.CreateLShr(BuildNonceArg, Shift);
+  Value *Mask = IRB.getInt32(IsUTF16 ? 0xffff : 0xff);
+  NoncePart = IRB.CreateAnd(NoncePart, Mask);
+  Value *StringPart = IRB.CreateMul(IRB.CreateAdd(StringIDArg, IRB.getInt32(1)),
+                                    IRB.getInt32(IsUTF16 ? 0x45d9 : 0x5d));
+  StringPart = IRB.CreateAnd(StringPart, Mask);
+  Value *PositionPart =
+      IRB.CreateMul(IRB.CreateAdd(LoopCounter, IRB.getInt32(1)),
+                    IRB.getInt32(IsUTF16 ? 0x9e37 : 0x3b));
+  Value *KeyIndexPart =
+      IRB.CreateMul(KeyIdx, IRB.getInt32(IsUTF16 ? 0x0101 : 0x11));
+  PositionPart = IRB.CreateAnd(IRB.CreateAdd(PositionPart, KeyIndexPart), Mask);
+  Value *MixedKey = IRB.CreateXor(KeyCharZext, NoncePart);
+  MixedKey = IRB.CreateXor(MixedKey, StringPart);
+  MixedKey = IRB.CreateXor(MixedKey, PositionPart);
+  KeyChar = IRB.CreateTrunc(MixedKey, PlainEltTy);
+
   Value *EncChar = nullptr;
   if (!IsUTF16) {
     Value *EncCharPtr =
@@ -567,7 +621,7 @@ Function *StringEncryption::buildSharedDecryptFunction(Module *M,
   }
 
   Value *KeyIdxZext = IRB.CreateZExt(KeyIdx, IRB.getInt32Ty());
-  Value *KeyCharZext = IRB.CreateZExt(KeyChar, IRB.getInt32Ty());
+  KeyCharZext = IRB.CreateZExt(KeyChar, IRB.getInt32Ty());
   Value *Mul = IRB.CreateMul(KeyIdxZext, KeyCharZext);
   Value *BrKey = IRB.CreateAnd(Mul, IRB.getInt32(1));
   Value *BrCond = IRB.CreateICmpEQ(BrKey, IRB.getInt32(0));
@@ -757,7 +811,9 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                 fixEH(IRB.CreateCall(DecFunc,
                                      {OutBuf, Data, IRB.getInt32(KeyElemSize),
                                       IRB.getInt32(DataSize), Entry->DecStatus,
-                                      IRB.getInt32(Entry->DoneStatus)}));
+                                      IRB.getInt32(Entry->DoneStatus),
+                                      IRB.getInt32(Entry->ID),
+                                      IRB.getInt32(BuildNonce)}));
 
                 Inst.replaceUsesOfWith(GV, Entry->DecGV);
                 MaybeDeadGlobalVars.insert(GV);
@@ -815,7 +871,9 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                 fixEH(IRB.CreateCall(DecFunc,
                                      {OutBuf, Data, IRB.getInt32(KeyElemSize),
                                       IRB.getInt32(DataSize), Entry->DecStatus,
-                                      IRB.getInt32(Entry->DoneStatus)}));
+                                      IRB.getInt32(Entry->DoneStatus),
+                                      IRB.getInt32(Entry->ID),
+                                      IRB.getInt32(BuildNonce)}));
 
                 Inst.replaceUsesOfWith(GV, Entry->DecGV);
                 MaybeDeadGlobalVars.insert(GV);
