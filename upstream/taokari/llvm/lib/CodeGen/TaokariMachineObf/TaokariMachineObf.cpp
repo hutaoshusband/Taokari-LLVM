@@ -20,7 +20,7 @@
 // `mir` per-function annotation gate, and proves the pipeline runs by emitting
 // one semantically-neutral nop at each enabled function's entry. The real
 // transforms (dirty bytes, junk instructions with side effects, machine-level
-// instruction substitution, function splitting) are Level 2.
+// instruction substitution, and gated Fortress byte patterns) live here too.
 //
 //===----------------------------------------------------------------------===//
 
@@ -82,9 +82,11 @@ struct MirSubpasses {
   bool Junk = false;
   bool Substitution = false;
   bool Unmodelled = false;
+  bool FakeBounds = false;
 
   bool any() const {
-    return Marker || DirtyBytes || Junk || Substitution || Unmodelled;
+    return Marker || DirtyBytes || Junk || Substitution || Unmodelled ||
+           FakeBounds;
   }
   void enableAll() {
     Marker = true;
@@ -135,6 +137,12 @@ static MirSubpasses parseMirFlag() {
     if (Token == "unmodelled" || Token == "unmodeled" ||
         Token == "privileged" || Token == "simd") {
       Passes.Unmodelled = true;
+      SawKnownToken = true;
+      continue;
+    }
+    if (Token == "fakebounds" || Token == "fakeboundaries" ||
+        Token == "fakeprologue" || Token == "fakeprologues") {
+      Passes.FakeBounds = true;
       SawKnownToken = true;
       continue;
     }
@@ -227,6 +235,11 @@ static MirSubpasses resolveSubpasses(const Function &F) {
     if (annotationHas(A, "+mir:unmodelled") ||
         annotationHas(A, "+mir:unmodeled"))
       Passes.Unmodelled = true;
+    if (annotationHas(A, "+mir:fakebounds") ||
+        annotationHas(A, "+mir:fakeboundaries") ||
+        annotationHas(A, "+mir:fakeprologue") ||
+        annotationHas(A, "+mir:fakeprologues"))
+      Passes.FakeBounds = true;
     if (annotationHas(A, "-mir:dirtybytes"))
       Passes.DirtyBytes = false;
     if (annotationHas(A, "-mir:junk"))
@@ -236,6 +249,11 @@ static MirSubpasses resolveSubpasses(const Function &F) {
     if (annotationHas(A, "-mir:unmodelled") ||
         annotationHas(A, "-mir:unmodeled"))
       Passes.Unmodelled = false;
+    if (annotationHas(A, "-mir:fakebounds") ||
+        annotationHas(A, "-mir:fakeboundaries") ||
+        annotationHas(A, "-mir:fakeprologue") ||
+        annotationHas(A, "-mir:fakeprologues"))
+      Passes.FakeBounds = false;
   }
 
   if (EnableAll && DisableAll) {
@@ -323,6 +341,12 @@ bool TaokariMachineObf::run(MachineFunction &MF) {
                         ".byte 0x9c,0x50,0x8a,0x04,0x24,0x34,0x3d,0x34,"
                         "0x3d,0x3a,0x04,0x24,0x74,0x08,0x0f,0x01,0xc1,"
                         "0xc4,0xe2,0x7d,0x18,0xc0,0x58,0x9d");
+  if (Passes.FakeBounds)
+    insertSideEffectAsm(EntryMBB, EntryMBB.begin(), *TII,
+                        ".byte 0x9c,0x50,0x8a,0x04,0x24,0x34,0x6b,0x34,"
+                        "0x6b,0x3a,0x04,0x24,0x74,0x0f,0x55,0x48,0x89,"
+                        "0xe5,0x48,0x83,0xec,0x20,0xc9,0xc3,0x55,0x48,"
+                        "0x89,0xe5,0x5d,0x58,0x9d");
   if (Passes.Marker)
     insertSideEffectAsm(EntryMBB, EntryMBB.begin(), *TII,
                         ".byte 0x48,0x8d,0x40,0x00");

@@ -69,6 +69,15 @@ python testing\scripts\verify_machine_obf_l3_unmodelled.py
 It checks explicit `+mir:unmodelled` emission and proves the normal MIR set does
 not emit the privileged/SIMD bytes.
 
+Run the fake prologue/epilogue boundary-byte gate:
+
+```powershell
+python testing\scripts\verify_machine_obf_l3_fakebounds.py
+```
+
+It checks explicit `+mir:fakebounds`/flag emission and proves the normal MIR set
+does not emit fake boundary bytes.
+
 Run the MIR + IR cross-pass gate:
 
 ```powershell

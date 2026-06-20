@@ -90,6 +90,7 @@ a comma-separated list of MIR sub-passes:
 - `junk`
 - `sub`
 - `unmodelled` (`unmodeled`, `privileged`, `simd` aliases)
+- `fakebounds` (`fakeboundaries`, `fakeprologue`, `fakeprologues` aliases)
 - `marker`
 - `1`, `on`, `all`, `max` for all Level 2 passes plus the legacy marker
 
@@ -108,8 +109,9 @@ Per-function control via the standard `llvm.global.annotations` mechanism
 - `-mir` — opt the function out, overriding a globally-on flag.
 - `+mir:dirtybytes`, `+mir:junk`, `+mir:sub` — opt into one MIR sub-pass.
 - `+mir:unmodelled` — opt into Fortress-only unmodelled instruction emission.
-- `-mir:dirtybytes`, `-mir:junk`, `-mir:sub`, `-mir:unmodelled` — opt out of
-  one MIR sub-pass.
+- `+mir:fakebounds` — opt into Fortress-only fake prologue/epilogue bytes.
+- `-mir:dirtybytes`, `-mir:junk`, `-mir:sub`, `-mir:unmodelled`,
+  `-mir:fakebounds` — opt out of one MIR sub-pass.
 - Both on the same function — the pass logs a warning and skips (conservative).
 
 The annotation reader (`readMirAnnotations`) mirrors the IR-layer
@@ -171,6 +173,10 @@ and RFLAGS they touch while still surviving as side-effecting machine code.
 - **Unmodelled instructions:** explicit `unmodelled` opt-in emits a skipped
   `vmcall` plus VEX-coded SIMD byte sequence. The guard preserves runtime
   behavior; the bytes exist only to poison lifters that decode through them.
+- **Fake bounds:** explicit `fakebounds` opt-in emits a skipped
+  `push rbp; mov rbp, rsp; sub rsp, 0x20; leave; ret; push rbp; ...` byte
+  sequence. Runtime skips it, but disassemblers see plausible function prologue
+  and epilogue patterns in the final code stream.
 
 ## Verification
 
@@ -217,6 +223,14 @@ unmodelled-instruction gate:
 - `+mir:unmodelled` emits the privileged/SIMD byte sequence.
 - the normal `dirtybytes,junk,sub` MIR set does not emit it.
 
+`testing/scripts/verify_machine_obf_l3_fakebounds.py` checks the Fortress fake
+prologue/epilogue gate:
+
+- plain and MIR-obfuscated executables produce identical stdout.
+- `+mir:fakebounds` and `-taokari-mir=fakebounds` emit the fake frame byte
+  sequence.
+- the normal `dirtybytes,junk,sub` MIR set does not emit fake boundary bytes.
+
 `testing/scripts/verify_machine_obf_l3_cross_pass.py` checks cross-pass
 integration:
 
@@ -246,6 +260,9 @@ IDA-Pro research doc §A Level 3:
 - **Function splitting / boundary corruption** — split one function into a
   dispatcher plus shards reachable only via computed jumps, with fake
   prologue/epilogue byte patterns between real functions.
+- **Fake prologue/epilogue byte patterns** — `+mir:fakebounds` emits guarded
+  frame-looking bytes that survive into the binary while preserving runtime
+  behavior.
 - **Unmodelled instruction emission** — explicit `unmodelled` opt-in emits
   skipped privileged/SIMD bytes the microcode lifter may not model.
 - **Runtime-dependent dirty-byte guards** — dirty-byte branches depend on live
