@@ -14,6 +14,7 @@ EXPECTED = "flattening-stress:2287845297:2439064602\n"
 FLAGS = [
     "-O2",
     "-std=c++17",
+    "-fno-discard-value-names",
     "-mllvm", "-taokari",
     "-mllvm", "-taokari-fla",
     "-mllvm", "-taokari-level-fla=4",
@@ -55,6 +56,7 @@ def main() -> int:
         ir = ll.read_text(encoding="utf-8", errors="ignore")
         assert "switch i" not in ir, "level-4 dispatcher still emits LLVM switch"
         assert "br i1" in ir, "level-4 compare/branch dispatcher missing"
+        assert "switchBucket" in ir, "level-4 bucket dispatcher missing"
 
         check(run([str(CLANG), str(SOURCE), *FLAGS, "-o", str(exe)]), "compile exe")
         result = run([str(exe)])

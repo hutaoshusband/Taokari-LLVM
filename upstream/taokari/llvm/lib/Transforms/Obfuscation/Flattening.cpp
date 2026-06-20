@@ -468,17 +468,56 @@ bool Flattening::flatten(Function *f) {
 
   auto emitNoJumpTableDispatcher =
       [&](const SmallVectorImpl<std::pair<ConstantInt *, BasicBlock *>> &Cases) {
-    BasicBlock *probe = switchBlock;
-    for (size_t i = 0; i < Cases.size(); ++i) {
-      IRB.SetInsertPoint(probe);
-      BasicBlock *next =
-          i + 1 == Cases.size()
+    constexpr size_t BucketCount = 4;
+    const uint64_t bucketSalt = randWord();
+    SmallVector<std::pair<ConstantInt *, BasicBlock *>, 16> Buckets[BucketCount];
+    SmallVector<size_t, BucketCount> LiveBuckets;
+
+    for (const auto &Case : Cases) {
+      size_t bucket =
+          ((Case.first->getLimitedValue() ^ bucketSalt) & (BucketCount - 1));
+      if (Buckets[bucket].empty()) {
+        LiveBuckets.push_back(bucket);
+      }
+      Buckets[bucket].push_back(Case);
+    }
+
+    IRB.SetInsertPoint(switchBlock);
+    Value *bucketValue = IRB.CreateAnd(
+        IRB.CreateXor(switchCondition, ConstantInt::get(IntTy, bucketSalt),
+                      "switchBucketMix"),
+        ConstantInt::get(IntTy, BucketCount - 1), "switchBucket");
+
+    BasicBlock *bucketProbe = switchBlock;
+    for (size_t i = 0; i < LiveBuckets.size(); ++i) {
+      const size_t bucket = LiveBuckets[i];
+      BasicBlock *bucketBody =
+          BasicBlock::Create(Ctx, "switchBucketBody", f, bbLoopEnd);
+      BasicBlock *nextBucket =
+          i + 1 == LiveBuckets.size()
               ? swDefault
-              : BasicBlock::Create(Ctx, "switchDispatchProbe", f, bbLoopEnd);
-      Value *hit =
-          IRB.CreateICmpEQ(switchCondition, Cases[i].first, "switchHit");
-      IRB.CreateCondBr(hit, Cases[i].second, next);
-      probe = next;
+              : BasicBlock::Create(Ctx, "switchBucketProbe", f, bbLoopEnd);
+
+      IRB.SetInsertPoint(bucketProbe);
+      Value *bucketHit = IRB.CreateICmpEQ(
+          bucketValue, ConstantInt::get(IntTy, bucket), "switchBucketHit");
+      IRB.CreateCondBr(bucketHit, bucketBody, nextBucket);
+
+      BasicBlock *caseProbe = bucketBody;
+      for (size_t j = 0; j < Buckets[bucket].size(); ++j) {
+        IRB.SetInsertPoint(caseProbe);
+        BasicBlock *nextCase =
+            j + 1 == Buckets[bucket].size()
+                ? swDefault
+                : BasicBlock::Create(Ctx, "switchDispatchProbe", f,
+                                     bbLoopEnd);
+        Value *hit = IRB.CreateICmpEQ(switchCondition,
+                                      Buckets[bucket][j].first, "switchHit");
+        IRB.CreateCondBr(hit, Buckets[bucket][j].second, nextCase);
+        caseProbe = nextCase;
+      }
+
+      bucketProbe = nextBucket;
     }
   };
 

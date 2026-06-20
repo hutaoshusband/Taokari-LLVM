@@ -107,7 +107,7 @@ Static analysis should see fake paths, fake states and misleading edges.
 ## Level 4 - Switch-Table Anti-Recovery
 
 * [x] Add no-jump-table dispatcher lowering mode
-* [ ] Add split two-stage dispatcher buckets
+* [x] Add split two-stage dispatcher buckets
 * [ ] Add sparse/colliding fake case layout
 * [ ] Add optional `indirectbr`-backed dispatcher
 * [ ] Add IDA switch-recovery regression check
