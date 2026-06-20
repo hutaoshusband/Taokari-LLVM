@@ -97,6 +97,12 @@ It uses `TAOKARI_IDA` or the local IDA install, snapshots plain vs Fortress MIR
 Hex-Rays output, and fails unless the protected function gains visible
 decompiler noise.
 
+For the exact IDA 9.2 + D810 lab gate:
+
+```powershell
+python testing\scripts\verify_machine_obf_l3_ida_snapshot.py --require-ida92-d810
+```
+
 Run the MIR + IR cross-pass gate:
 
 ```powershell

@@ -32,19 +32,36 @@ int main(void) {
 '''
 
 IDA_SCRIPT = r'''
+import importlib.util
 import json
 import ida_auto
 import ida_entry
 import ida_funcs
 import ida_hexrays
+import idaapi
 import ida_lines
 import ida_nalt
 import ida_pro
+import os
+import sys
 
 ida_auto.auto_wait()
+def has_d810():
+    if importlib.util.find_spec("d810") or importlib.util.find_spec("D810"):
+        return True
+    for base in sys.path:
+        try:
+            if any("d810" in name.lower() for name in os.listdir(base)):
+                return True
+        except Exception:
+            pass
+    return False
+
 item = {
     "input": ida_nalt.get_input_file_path(),
+    "ida_kernel_version": idaapi.get_kernel_version(),
     "hexrays": bool(ida_hexrays.init_hexrays_plugin()),
+    "d810": has_d810(),
     "exports": [],
     "guarded": None,
 }
@@ -143,7 +160,15 @@ def load_snapshots(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def run_checks(tmp: Path) -> int:
+def require_ida92_d810(snapshots: list[dict]) -> None:
+    versions = {str(s.get("ida_kernel_version", "")) for s in snapshots}
+    if not versions or any(not v.startswith("9.2") for v in versions):
+        raise SystemExit("strict IDA gate requires IDA 9.2, got: " + ", ".join(sorted(versions)))
+    if not all(bool(s.get("d810")) for s in snapshots):
+        raise SystemExit("strict IDA gate requires D810 plugin visible to IDAPython")
+
+
+def run_checks(tmp: Path, require_exact_lab: bool) -> int:
     ida = ida_path()
     if not ida.exists():
         print(f"missing IDA: {ida} (set TAOKARI_IDA)", file=sys.stderr)
@@ -162,6 +187,8 @@ def run_checks(tmp: Path) -> int:
     snapshots = load_snapshots(out)
     if len(snapshots) != 2:
         raise SystemExit(f"expected 2 IDA snapshots, got {len(snapshots)}")
+    if require_exact_lab:
+        require_ida92_d810(snapshots)
     plain_snap, obf_snap = snapshots
     plain_func = plain_snap.get("guarded") or {}
     obf_func = obf_snap.get("guarded") or {}
@@ -193,13 +220,18 @@ def run_checks(tmp: Path) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--keep", action="store_true")
+    parser.add_argument(
+        "--require-ida92-d810",
+        action="store_true",
+        help="fail unless the snapshot ran under IDA 9.2 with D810 visible to IDAPython",
+    )
     args = parser.parse_args()
     if not CLANG.exists():
         print(f"missing tool: {CLANG}", file=sys.stderr)
         return 2
     tmp = Path(tempfile.mkdtemp(prefix="taokari-mir-l3-ida-"))
     try:
-        return run_checks(tmp)
+        return run_checks(tmp, args.require_ida92_d810)
     finally:
         if args.keep:
             print(f"kept temp dir: {tmp}")
