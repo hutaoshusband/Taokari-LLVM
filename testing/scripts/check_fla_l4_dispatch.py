@@ -43,26 +43,41 @@ def check(result: subprocess.CompletedProcess[str], label: str) -> None:
         raise SystemExit(f"{label} failed\n{result.stdout}{result.stderr}")
 
 
+def compile_and_check(out: Path, name: str, extra_flags: list[str], want_indirectbr: bool) -> None:
+    ll = out / f"{name}.ll"
+    exe = out / f"{name}.exe"
+    flags = [*FLAGS, *extra_flags]
+
+    check(run([str(CLANG), "-S", "-emit-llvm", str(SOURCE), *flags, "-o", str(ll)]), f"emit llvm {name}")
+    ir = ll.read_text(encoding="utf-8", errors="ignore")
+    assert "switch i" not in ir, f"{name}: level-4 dispatcher still emits LLVM switch"
+    assert "br i1" in ir, f"{name}: level-4 compare/branch dispatcher missing"
+    assert ir.count("switchHit") >= 20, f"{name}: level-4 sparse/fake case density too low"
+    if want_indirectbr:
+        assert "indirectbr" in ir, f"{name}: indirectbr dispatcher missing"
+    else:
+        assert "switchBucket" in ir, f"{name}: level-4 bucket dispatcher missing"
+        assert "indirectbr" not in ir, f"{name}: indirectbr should be opt-in"
+
+    check(run([str(CLANG), str(SOURCE), *flags, "-o", str(exe)]), f"compile exe {name}")
+    result = run([str(exe)])
+    check(result, f"run exe {name}")
+    assert result.stdout == EXPECTED, f"{name}: stdout {result.stdout!r} expected {EXPECTED!r}"
+
+
 def main() -> int:
     if not CLANG.exists():
         print(f"missing clang: {CLANG}", file=sys.stderr)
         return 2
     with tempfile.TemporaryDirectory(prefix="taokari-fla-l4-") as td:
         out = Path(td)
-        ll = out / "flattening_l4.ll"
-        exe = out / "flattening_l4.exe"
-
-        check(run([str(CLANG), "-S", "-emit-llvm", str(SOURCE), *FLAGS, "-o", str(ll)]), "emit llvm")
-        ir = ll.read_text(encoding="utf-8", errors="ignore")
-        assert "switch i" not in ir, "level-4 dispatcher still emits LLVM switch"
-        assert "br i1" in ir, "level-4 compare/branch dispatcher missing"
-        assert "switchBucket" in ir, "level-4 bucket dispatcher missing"
-        assert ir.count("switchHit") >= 20, "level-4 sparse/fake case density too low"
-
-        check(run([str(CLANG), str(SOURCE), *FLAGS, "-o", str(exe)]), "compile exe")
-        result = run([str(exe)])
-        check(result, "run exe")
-        assert result.stdout == EXPECTED, f"stdout {result.stdout!r} expected {EXPECTED!r}"
+        compile_and_check(out, "flattening_l4", [], False)
+        compile_and_check(
+            out,
+            "flattening_l4_indirectbr",
+            ["-mllvm", "-taokari-fla-indirectbr-dispatch"],
+            True,
+        )
     return 0
 
 

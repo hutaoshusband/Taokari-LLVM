@@ -25,9 +25,11 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include "llvm/Support/RandomNumberGenerator.h"
+#include "llvm/Support/CommandLine.h"
 
 #include <memory>
 #include <random>
+#include <algorithm>
 #include "llvm/ADT/DenseSet.h"
 
 #define DEBUG_TYPE "flattening"
@@ -41,6 +43,10 @@ static constexpr uint32_t DefaultMaxAllocas = 64;
 
 // Stats
 STATISTIC(Flattened, "Functions flattened");
+
+static cl::opt<bool> FlaIndirectBrDispatch(
+    "taokari-fla-indirectbr-dispatch", cl::init(false), cl::NotHidden,
+    cl::desc("Use an indirectbr-backed level-4 flattening dispatcher."));
 
 namespace {
 struct Flattening : public FunctionPass {
@@ -533,7 +539,34 @@ bool Flattening::flatten(Function *f) {
     }
   };
 
-  if (flaLevel >= 4) {
+  auto emitIndirectBrDispatcher =
+      [&](const SmallVectorImpl<std::pair<ConstantInt *, BasicBlock *>> &Cases) {
+    SmallVector<BasicBlock *, 64> Dests;
+    auto addDest = [&](BasicBlock *BB) {
+      if (std::find(Dests.begin(), Dests.end(), BB) == Dests.end()) {
+        Dests.push_back(BB);
+      }
+    };
+
+    IRB.SetInsertPoint(switchBlock);
+    Value *target = BlockAddress::get(f, swDefault);
+    addDest(swDefault);
+    for (const auto &Case : Cases) {
+      Value *hit = IRB.CreateICmpEQ(switchCondition, Case.first, "switchHit");
+      target = IRB.CreateSelect(hit, BlockAddress::get(Case.second), target,
+                                "switchIndirectTarget");
+      addDest(Case.second);
+    }
+
+    auto *IBI = IRB.CreateIndirectBr(target, Dests.size());
+    for (BasicBlock *Dest : Dests) {
+      IBI->addDestination(Dest);
+    }
+  };
+
+  if (flaLevel >= 4 && FlaIndirectBrDispatch) {
+    emitIndirectBrDispatcher(DispatchCases);
+  } else if (flaLevel >= 4) {
     emitNoJumpTableDispatcher(DispatchCases);
   } else {
     auto switchI = SwitchInst::Create(switchCondition, swDefault, 0, switchBlock);
