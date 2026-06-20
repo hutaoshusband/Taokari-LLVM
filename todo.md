@@ -113,14 +113,14 @@ This should become the foundation for bogus control flow, stronger flattening an
 
 ## Level 1 — Basic Predicate Families
 
-* [ ] Add `OpaquePredicate.cpp`
-* [ ] Add always-true algebraic family
-* [ ] Add always-false algebraic family
-* [ ] Add integer-width support
-* [ ] Add random seed per function
-* [ ] Add simple API: `makeTruePredicate`
-* [ ] Add simple API: `makeFalsePredicate`
-* [ ] Add unit tests for correctness
+* [x] Add `OpaquePredicate.cpp`
+* [x] Add always-true algebraic family
+* [x] Add always-false algebraic family
+* [x] Add integer-width support
+* [x] Add random seed per function
+* [x] Add simple API: `makeTruePredicate`
+* [x] Add simple API: `makeFalsePredicate`
+* [x] Add unit tests for correctness
 
 Example families:
 

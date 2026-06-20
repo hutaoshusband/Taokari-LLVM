@@ -1,5 +1,6 @@
 add_llvm_component_library(LLVMObfuscation
   Utils.cpp
+  OpaquePredicate.cpp
   ObfuscationPassManager.cpp
   ObfuscationOptions.cpp
   IndirectBranch.cpp
