@@ -118,7 +118,7 @@ def compile_pair(tmp: Path) -> tuple[Path, Path]:
                 str(CLANG),
                 str(src),
                 "-O1",
-                "-mllvm", "-taokari-mir=dirtybytes,junk,sub,unmodelled,fakebounds",
+                "-mllvm", "-taokari-mir=dirtybytes,junk,sub,unmodelled,fakebounds,split",
                 "-mllvm", "-verify-machineinstrs",
                 "-o", str(obf),
             ],

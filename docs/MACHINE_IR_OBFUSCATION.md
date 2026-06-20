@@ -15,9 +15,10 @@ to an IR-level simplifier in clean form.
 
 ## Scope of this document
 
-Level 1 and Level 2. It documents how the MIR pass is registered into the
+Level 1 through Level 3. It documents how the MIR pass is registered into the
 legacy pass manager, what flag and annotation control it, what the Level 1
-marker is, and which Level 2 byte-level transforms are emitted below LLVM IR.
+marker is, and which byte-level Fortress MIR transforms are emitted below LLVM
+IR.
 
 ## Where the code lives
 
@@ -91,6 +92,7 @@ a comma-separated list of MIR sub-passes:
 - `sub`
 - `unmodelled` (`unmodeled`, `privileged`, `simd` aliases)
 - `fakebounds` (`fakeboundaries`, `fakeprologue`, `fakeprologues` aliases)
+- `split` (`functionsplit`, `functionsplitting`, `boundary` aliases)
 - `marker`
 - `1`, `on`, `all`, `max` for all Level 2 passes plus the legacy marker
 
@@ -110,8 +112,10 @@ Per-function control via the standard `llvm.global.annotations` mechanism
 - `+mir:dirtybytes`, `+mir:junk`, `+mir:sub` — opt into one MIR sub-pass.
 - `+mir:unmodelled` — opt into Fortress-only unmodelled instruction emission.
 - `+mir:fakebounds` — opt into Fortress-only fake prologue/epilogue bytes.
+- `+mir:split` — opt into Fortress-only entry block splitting / boundary
+  trampoline emission.
 - `-mir:dirtybytes`, `-mir:junk`, `-mir:sub`, `-mir:unmodelled`,
-  `-mir:fakebounds` — opt out of one MIR sub-pass.
+  `-mir:fakebounds`, `-mir:split` — opt out of one MIR sub-pass.
 - Both on the same function — the pass logs a warning and skips (conservative).
 
 The annotation reader (`readMirAnnotations`) mirrors the IR-layer
@@ -177,6 +181,12 @@ and RFLAGS they touch while still surviving as side-effecting machine code.
   `push rbp; mov rbp, rsp; sub rsp, 0x20; leave; ret; push rbp; ...` byte
   sequence. Runtime skips it, but disassemblers see plausible function prologue
   and epilogue patterns in the final code stream.
+- **Function split / boundary trampoline:** explicit `split` opt-in uses
+  `MachineBasicBlock::splitAt` after register allocation to move the original
+  entry body into a second machine block. The first block becomes a tiny
+  side-effecting `pushfq; popfq` marker plus an unconditional jump to the real
+  body. This is distinct from IR outlining: the split is introduced after IR
+  optimizers and IR deobfuscators have already lost visibility.
 
 ## Verification
 
@@ -231,6 +241,14 @@ prologue/epilogue gate:
   sequence.
 - the normal `dirtybytes,junk,sub` MIR set does not emit fake boundary bytes.
 
+`testing/scripts/verify_machine_obf_l3_function_split.py` checks the Fortress
+function-splitting / boundary-trampoline gate:
+
+- plain and MIR-split executables produce identical stdout.
+- `+mir:split` and `-taokari-mir=split` emit a split entry trampoline.
+- the normal `dirtybytes,junk,sub` MIR set does not emit the split boundary
+  marker.
+
 `testing/scripts/verify_machine_obf_l3_ida_snapshot.py` checks the local
 Hex-Rays before/after snapshot:
 
@@ -265,9 +283,10 @@ AArch64 parity plan in `docs/MACHINE_IR_AARCH64_PARITY.md`.
 The remaining MIR transforms that attack Hex-Rays function recovery, per the
 IDA-Pro research doc §A Level 3:
 
-- **Function splitting / boundary corruption** — split one function into a
-  dispatcher plus shards reachable only via computed jumps, with fake
-  prologue/epilogue byte patterns between real functions.
+- **Function splitting / boundary corruption** — `+mir:split` splits the
+  machine entry block into a trampoline plus real body after register
+  allocation. Full multi-shard dispatcher splitting remains a later hardening
+  step.
 - **Fake prologue/epilogue byte patterns** — `+mir:fakebounds` emits guarded
   frame-looking bytes that survive into the binary while preserving runtime
   behavior.

@@ -83,10 +83,11 @@ struct MirSubpasses {
   bool Substitution = false;
   bool Unmodelled = false;
   bool FakeBounds = false;
+  bool FunctionSplit = false;
 
   bool any() const {
     return Marker || DirtyBytes || Junk || Substitution || Unmodelled ||
-           FakeBounds;
+           FakeBounds || FunctionSplit;
   }
   void enableAll() {
     Marker = true;
@@ -143,6 +144,12 @@ static MirSubpasses parseMirFlag() {
     if (Token == "fakebounds" || Token == "fakeboundaries" ||
         Token == "fakeprologue" || Token == "fakeprologues") {
       Passes.FakeBounds = true;
+      SawKnownToken = true;
+      continue;
+    }
+    if (Token == "split" || Token == "functionsplit" ||
+        Token == "functionsplitting" || Token == "boundary") {
+      Passes.FunctionSplit = true;
       SawKnownToken = true;
       continue;
     }
@@ -240,6 +247,11 @@ static MirSubpasses resolveSubpasses(const Function &F) {
         annotationHas(A, "+mir:fakeprologue") ||
         annotationHas(A, "+mir:fakeprologues"))
       Passes.FakeBounds = true;
+    if (annotationHas(A, "+mir:split") ||
+        annotationHas(A, "+mir:functionsplit") ||
+        annotationHas(A, "+mir:functionsplitting") ||
+        annotationHas(A, "+mir:boundary"))
+      Passes.FunctionSplit = true;
     if (annotationHas(A, "-mir:dirtybytes"))
       Passes.DirtyBytes = false;
     if (annotationHas(A, "-mir:junk"))
@@ -254,6 +266,11 @@ static MirSubpasses resolveSubpasses(const Function &F) {
         annotationHas(A, "-mir:fakeprologue") ||
         annotationHas(A, "-mir:fakeprologues"))
       Passes.FakeBounds = false;
+    if (annotationHas(A, "-mir:split") ||
+        annotationHas(A, "-mir:functionsplit") ||
+        annotationHas(A, "-mir:functionsplitting") ||
+        annotationHas(A, "-mir:boundary"))
+      Passes.FunctionSplit = false;
   }
 
   if (EnableAll && DisableAll) {
@@ -287,6 +304,20 @@ static void insertSideEffectAsm(MachineBasicBlock &MBB,
       .addImm(InlineAsm::Extra_HasSideEffects);
 }
 
+static MachineBasicBlock *splitEntryBlock(MachineFunction &MF,
+                                          const TargetInstrInfo &TII) {
+  MachineBasicBlock &EntryMBB = MF.front();
+  if (EntryMBB.empty())
+    return nullptr;
+  MachineInstr &FirstBodyMI = *EntryMBB.begin();
+  MachineBasicBlock *BodyMBB = EntryMBB.splitAt(FirstBodyMI);
+  if (!BodyMBB || BodyMBB == &EntryMBB)
+    return nullptr;
+  insertSideEffectAsm(EntryMBB, EntryMBB.end(), TII, ".byte 0x9c,0x9d");
+  TII.insertUnconditionalBranch(EntryMBB, BodyMBB, DebugLoc());
+  return BodyMBB;
+}
+
 // Level 1 transform: insert one semantically-neutral marker at the entry of
 // the function's first basic block. This is a true no-op (it neither reads
 // nor writes any observable architectural state), so it cannot change
@@ -318,37 +349,40 @@ bool TaokariMachineObf::run(MachineFunction &MF) {
   if (!MF.getTarget().getTargetTriple().isX86_64())
     return false;
 
-  MachineBasicBlock &EntryMBB = MF.front();
+  MachineBasicBlock *InsertMBB = &MF.front();
+  if (Passes.FunctionSplit)
+    if (MachineBasicBlock *SplitMBB = splitEntryBlock(MF, *TII))
+      InsertMBB = SplitMBB;
 
   // Insert in reverse: every BuildMI goes before the original first instr.
   // All byte snippets preserve GPRs/RFLAGS they touch, but still survive as
   // side-effecting machine code below the IR layer.
   if (Passes.Substitution)
-    insertSideEffectAsm(EntryMBB, EntryMBB.begin(), *TII,
+    insertSideEffectAsm(*InsertMBB, InsertMBB->begin(), *TII,
                         ".byte 0x9c,0x50,0x48,0x89,0xe0,0x48,0x8d,0x40,"
                         "0x13,0x48,0x83,0xe8,0x13,0x58,0x9d");
   if (Passes.Junk)
-    insertSideEffectAsm(EntryMBB, EntryMBB.begin(), *TII,
+    insertSideEffectAsm(*InsertMBB, InsertMBB->begin(), *TII,
                         ".byte 0x9c,0x50,0x80,0x34,0x24,0x5a,0x80,0x34,"
                         "0x24,0x5a,0x58,0x9d");
   if (Passes.DirtyBytes)
-    insertSideEffectAsm(EntryMBB, EntryMBB.begin(), *TII,
+    insertSideEffectAsm(*InsertMBB, InsertMBB->begin(), *TII,
                         ".byte 0x9c,0x50,0x8a,0x04,0x24,0x34,0xa7,0x34,"
                         "0xa7,0x3a,0x04,0x24,0x74,0x08,0x0f,0x0b,0xeb,"
                         "0xfe,0xcc,0xf1,0x0f,0x0b,0x58,0x9d");
   if (Passes.Unmodelled)
-    insertSideEffectAsm(EntryMBB, EntryMBB.begin(), *TII,
+    insertSideEffectAsm(*InsertMBB, InsertMBB->begin(), *TII,
                         ".byte 0x9c,0x50,0x8a,0x04,0x24,0x34,0x3d,0x34,"
                         "0x3d,0x3a,0x04,0x24,0x74,0x08,0x0f,0x01,0xc1,"
                         "0xc4,0xe2,0x7d,0x18,0xc0,0x58,0x9d");
   if (Passes.FakeBounds)
-    insertSideEffectAsm(EntryMBB, EntryMBB.begin(), *TII,
+    insertSideEffectAsm(*InsertMBB, InsertMBB->begin(), *TII,
                         ".byte 0x9c,0x50,0x8a,0x04,0x24,0x34,0x6b,0x34,"
                         "0x6b,0x3a,0x04,0x24,0x74,0x0f,0x55,0x48,0x89,"
                         "0xe5,0x48,0x83,0xec,0x20,0xc9,0xc3,0x55,0x48,"
                         "0x89,0xe5,0x5d,0x58,0x9d");
   if (Passes.Marker)
-    insertSideEffectAsm(EntryMBB, EntryMBB.begin(), *TII,
+    insertSideEffectAsm(*InsertMBB, InsertMBB->begin(), *TII,
                         ".byte 0x48,0x8d,0x40,0x00");
 
   LLVM_DEBUG(dbgs() << "taokari-mir: inserted MIR obfuscation in "

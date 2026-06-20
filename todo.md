@@ -1026,7 +1026,7 @@ obfuscation regression matrix stays green (57 PASS / 0 FAIL).
 
 ## Level 3 — Fortress MIR
 
-* [ ] Add function splitting / boundary corruption (anti-function-recognition)
+* [x] Add function splitting / boundary corruption (anti-function-recognition)
 * [x] Add fake prologue / epilogue byte patterns between real functions
 * [x] Add unmodelled instruction emission (anti-microcode-lift, Fortress only)
 * [x] Add runtime-dependent dirty-byte guards

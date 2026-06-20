@@ -23,6 +23,7 @@ The same user-facing controls must work:
 | `junk` | Stack byte xor/xor with GPR/RFLAGS preserved | SP-safe paired store/load or scratch-register chain with NZCV preserved |
 | `sub` | `lea`/`sub` address arithmetic chain | `add`/`sub` or address-generation chain below IR |
 | `unmodelled` | Skipped privileged/SIMD bytes | Explicitly gated skipped system/SIMD bytes, feature checked |
+| `split` | Post-RA entry block split into trampoline plus real body | Later target-native block split after branch/liveness rules are audited |
 
 ## Implementation Order
 
@@ -63,6 +64,6 @@ Required before checking off AArch64 implementation:
 
 ## Non-Goals
 
-- Do not port function splitting in the first AArch64 step.
+- Do not port `split` in the first AArch64 step.
 - Do not use AArch64-only features for x86 parity.
 - Do not claim IDA/D810 parity until an AArch64 IDA snapshot exists.

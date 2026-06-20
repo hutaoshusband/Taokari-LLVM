@@ -78,6 +78,15 @@ python testing\scripts\verify_machine_obf_l3_fakebounds.py
 It checks explicit `+mir:fakebounds`/flag emission and proves the normal MIR set
 does not emit fake boundary bytes.
 
+Run the function-splitting / boundary-trampoline gate:
+
+```powershell
+python testing\scripts\verify_machine_obf_l3_function_split.py
+```
+
+It checks explicit `+mir:split`/flag emission and proves the normal MIR set does
+not emit the split boundary marker.
+
 Run the local IDA/Hex-Rays snapshot gate:
 
 ```powershell
