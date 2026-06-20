@@ -165,6 +165,7 @@ protected:
   std::shared_ptr<ObfOpt> CieOpt = nullptr;
   std::shared_ptr<ObfOpt> CfeOpt = nullptr;
   std::shared_ptr<ObfOpt> BcfOpt = nullptr;
+  std::shared_ptr<ObfOpt> MbaOpt = nullptr;
   std::shared_ptr<ObfOpt> RttiOpt = nullptr;
 
   SmallString<32> RandomSeed;
@@ -180,6 +181,7 @@ public:
     allOpt.push_back(CieOpt);
     allOpt.push_back(CfeOpt);
     allOpt.push_back(BcfOpt);
+    allOpt.push_back(MbaOpt);
     allOpt.push_back(RttiOpt);
     return allOpt;
   }
@@ -192,6 +194,7 @@ public:
                      const std::shared_ptr<ObfOpt> &cieOpt,
                      const std::shared_ptr<ObfOpt> &cfeOpt,
                      const std::shared_ptr<ObfOpt> &bcfOpt,
+                     const std::shared_ptr<ObfOpt> &mbaOpt,
                      const std::shared_ptr<ObfOpt> &rttiOpt) {
     this->IndBrOpt = indBrOpt;
     this->ICallOpt = iCallOpt;
@@ -201,6 +204,7 @@ public:
     this->CieOpt = cieOpt;
     this->CfeOpt = cfeOpt;
     this->BcfOpt = bcfOpt;
+    this->MbaOpt = mbaOpt;
     this->RttiOpt = rttiOpt;
   }
 
@@ -213,6 +217,7 @@ public:
                            std::make_shared<ObfOpt>("cie"),
                            std::make_shared<ObfOpt>("cfe"),
                            std::make_shared<ObfOpt>("bcf"),
+                           std::make_shared<ObfOpt>("mba"),
                            std::make_shared<ObfOpt>("rtti")
                        } {}
 
@@ -246,6 +251,10 @@ public:
 
   auto bcfOpt() const {
     return BcfOpt;
+  }
+
+  auto mbaOpt() const {
+    return MbaOpt;
   }
 
   auto rttiOpt() const {

@@ -4,6 +4,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Transforms/Obfuscation/BogusControlFlow.h"
+#include "llvm/Transforms/Obfuscation/MBA.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/IR/Module.h"
 
@@ -174,6 +175,21 @@ TaokariBCFAfterFlattening("taokari-bcf-after-fla", cl::init(false),
                           cl::desc("Run BCF after control-flow flattening."));
 
 
+static cl::opt<bool>
+EnableMBA("irobf-mba", cl::init(false), cl::NotHidden,
+          cl::desc("Enable IR Mixed Boolean Arithmetic substitution."));
+static cl::opt<uint32_t>
+LevelMBA("level-mba", cl::init(0), cl::NotHidden,
+         cl::desc("Set IR Mixed Boolean Arithmetic Level."));
+
+static cl::alias
+TaokariMBA("taokari-mba", cl::desc("Alias for -irobf-mba"),
+           cl::aliasopt(EnableMBA));
+static cl::alias
+TaokariLevelMBA("taokari-level-mba", cl::desc("Alias for -level-mba"),
+                cl::aliasopt(LevelMBA));
+
+
 static cl::opt<std::string>
 TaokariConfigPath("taokari-cfg", cl::init(std::string{}), cl::NotHidden,
                   cl::desc("Taokari config path."));
@@ -263,6 +279,7 @@ struct ObfuscationPassManager : public ModulePass {
       Opt->cfeOpt()->setConstDecryptorMBA(TaokariConstDecryptorMBA);
     }
     Opt->bcfOpt()->readOpt(EnableBogusControlFlow, LevelBogusControlFlow);
+    Opt->mbaOpt()->readOpt(EnableMBA, LevelMBA);
     Opt->rttiOpt()->readOpt(EnableRttiEraser);
     return Opt;
   }
@@ -272,8 +289,8 @@ struct ObfuscationPassManager : public ModulePass {
     if (EnableIndirectBr || EnableIndirectCall || EnableIndirectGV ||
         EnableIRFlattening || EnableIRStringEncryption ||
         EnableIRConstantIntEncryption || EnableIRConstantFPEncryption ||
-        EnableBogusControlFlow || EnableRttiEraser || !TaokariConfigPath.empty() ||
-        !ArkariConfigPath.empty()) {
+        EnableBogusControlFlow || EnableMBA || EnableRttiEraser ||
+        !TaokariConfigPath.empty() || !ArkariConfigPath.empty()) {
       EnableIRObfuscation = true;
     }
 
@@ -285,6 +302,10 @@ struct ObfuscationPassManager : public ModulePass {
     this->Options = Options;
     unsigned   pointerSize = M.getDataLayout().getTypeAllocSize(
         PointerType::getUnqual(M.getContext()));
+
+    // MBA runs first so the arithmetic it materialises flows into the
+    // encryption / flattening / indirect passes downstream.
+    add(llvm::createMbaPass(Options.get()));
 
     add(llvm::createConstantIntEncryptionPass(Options.get()));
 
