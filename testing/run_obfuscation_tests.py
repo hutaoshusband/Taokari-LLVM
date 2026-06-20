@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -113,12 +114,12 @@ def compile_case(clang: Path, case: Case) -> Path:
     obj = case_root / "obj"
     shutil.rmtree(build, ignore_errors=True)
     shutil.rmtree(obj, ignore_errors=True)
-    build.mkdir(parents=True)
-    obj.mkdir(parents=True)
+    build.mkdir(parents=True, exist_ok=True)
+    obj.mkdir(parents=True, exist_ok=True)
 
     objects: list[Path] = []
     for source in case.sources:
-        out = obj / object_name(source)
+        out = obj / f"{os.getpid()}_{object_name(source)}"
         log("COMPILE", f"{case.name}: {source.relative_to(ROOT)}", "blue")
         is_cpp = source.suffix.lower() in {".cpp", ".cc", ".cxx"}
         cmd = [str(clang), "-c", str(source), "-std=c++17" if is_cpp else "-std=c17"]
@@ -135,11 +136,18 @@ def compile_case(clang: Path, case: Case) -> Path:
                 raise RuntimeError(f"compile {source} did not create {out}\n{result.stdout}{result.stderr}")
         objects.append(out)
 
-    exe = build / f"{case.name}.exe"
+    exe = build / f"{case.name}_{os.getpid()}.exe"
     log("LINK", f"{case.name}: {exe.relative_to(ROOT)}", "blue")
     result = run([str(clang), *map(str, objects), *case.link_flags, "-o", str(exe)], use_vs_env=True)
     if result.returncode:
-        raise RuntimeError(f"link {case.name}\n{result.stdout}{result.stderr}")
+        try:
+            exe.unlink(missing_ok=True)
+        except OSError:
+            pass
+        time.sleep(0.2)
+        result = run([str(clang), *map(str, objects), *case.link_flags, "-o", str(exe)], use_vs_env=True)
+        if result.returncode:
+            raise RuntimeError(f"link {case.name}\n{result.stdout}{result.stderr}")
     if not exe.exists():
         result = run([str(clang), *map(str, objects), *case.link_flags, "-o", str(exe)], use_vs_env=True)
         if result.returncode or not exe.exists():
