@@ -27,12 +27,13 @@ OBF_FLAGS = [
     "-mllvm", "-taokari-icall",
     "-mllvm", "-taokari-indgv",
     "-mllvm", "-taokari-fla",
+    "-mllvm", "-taokari-bcf",
     "-mllvm", "-taokari-cse",
     "-mllvm", "-taokari-cie",
     "-mllvm", "-taokari-cfe",
 ]
 # Passes that accept a 0-4 level. Default tests use the strongest level.
-LEVEL_PASSES = ["indbr", "icall", "indgv", "fla", "cie", "cfe"]
+LEVEL_PASSES = ["indbr", "icall", "indgv", "fla", "bcf", "cie", "cfe"]
 DEFAULT_LEVEL = 4
 RTTI_CONFIG = TESTING / "configs" / "rtti.json"
 

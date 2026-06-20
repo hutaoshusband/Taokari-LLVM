@@ -23,7 +23,7 @@ The harness runs every selected case across independent obfuscation axes:
   is `default`-only. -O2/LTO/clang-cl prove the obfuscated IR still folds (or
   stays encrypted) under whole-program and MSVC-ABI pipelines.
 - **Level** (`--level {0,1,2,3,4}`): appends `-taokari-level-<pass>=N` for every
-  level-aware pass (`indbr`, `icall`, `indgv`, `fla`, `cie`, `cfe`). The pass
+  level-aware pass (`indbr`, `icall`, `indgv`, `fla`, `bcf`, `cie`, `cfe`). The pass
   manager caps each level internally at 4. Default: 4.
 - **RTTI** (`--rtti`/`--no-rtti`): enables the RTTI eraser via
   `testing/configs/rtti.json` (which supplies the required `randomSeed`).

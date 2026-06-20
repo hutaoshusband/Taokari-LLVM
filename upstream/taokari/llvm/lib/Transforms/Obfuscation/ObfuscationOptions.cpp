@@ -134,6 +134,24 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
         }
         obfOpt->setMaxAllocas(static_cast<uint32_t>(*maxAllocas));
       }
+      if (const auto *probabilityValue = optObj->get("probability")) {
+        auto probability = probabilityValue->getAsInteger();
+        if (!probability || *probability < 0 || *probability > 100) {
+          reportConfigError(FileName,
+                            obfOpt->attributeName() +
+                            ".probability must be integer from 0 to 100");
+        }
+        obfOpt->setProbability(static_cast<uint32_t>(*probability));
+      }
+      if (const auto *loopCountValue = optObj->get("loopCount")) {
+        auto loopCount = loopCountValue->getAsInteger();
+        if (!loopCount || *loopCount < 0) {
+          reportConfigError(FileName,
+                            obfOpt->attributeName() +
+                            ".loopCount must be non-negative integer");
+        }
+        obfOpt->setLoopCount(static_cast<uint32_t>(*loopCount));
+      }
       if (const auto *minConstSizeValue = optObj->get("minConstSize")) {
         auto minConstSize = minConstSizeValue->getAsInteger();
         if (!minConstSize || *minConstSize < 0) {
@@ -293,6 +311,8 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
   if (!levelSet) {
     result.setLevel(option->level());
   }
+  result.setProbability(option->probability());
+  result.setLoopCount(option->loopCount());
   return result;
 }
 

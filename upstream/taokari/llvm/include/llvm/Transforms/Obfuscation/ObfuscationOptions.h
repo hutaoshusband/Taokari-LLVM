@@ -19,6 +19,9 @@ protected:
   uint32_t    MaxInsts = 0;
   uint32_t    MaxBlocks = 0;
   uint32_t    MaxAllocas = 0;
+  // 101 means unset; valid configured probability is 0..100.
+  uint32_t    Probability = 101;
+  uint32_t    LoopCount = 0;
   // Minimum bit-width of a constant worth encrypting. Constants narrower
   // than this are skipped (cheap, low-value, blows up code size). 0 = use
   // the pass's built-in floor (currently 8 bits).
@@ -91,6 +94,22 @@ public:
     return this->MaxAllocas;
   }
 
+  void setProbability(uint32_t probability) {
+    this->Probability = std::min<uint32_t>(probability, 100);
+  }
+
+  uint32_t probability() const {
+    return this->Probability;
+  }
+
+  void setLoopCount(uint32_t loopCount) {
+    this->LoopCount = loopCount;
+  }
+
+  uint32_t loopCount() const {
+    return this->LoopCount;
+  }
+
   void setMinConstSize(uint32_t minConstSize) {
     this->MinConstSize = minConstSize;
   }
@@ -118,13 +137,14 @@ protected:
   std::shared_ptr<ObfOpt> CseOpt = nullptr;
   std::shared_ptr<ObfOpt> CieOpt = nullptr;
   std::shared_ptr<ObfOpt> CfeOpt = nullptr;
+  std::shared_ptr<ObfOpt> BcfOpt = nullptr;
   std::shared_ptr<ObfOpt> RttiOpt = nullptr;
 
   SmallString<32> RandomSeed;
 
 public:
   SmallVector<std::shared_ptr<ObfOpt>> getAllOpt() const {
-    SmallVector<std::shared_ptr<ObfOpt>, 7> allOpt;
+    SmallVector<std::shared_ptr<ObfOpt>, 9> allOpt;
     allOpt.push_back(IndBrOpt);
     allOpt.push_back(ICallOpt);
     allOpt.push_back(IndGvOpt);
@@ -132,6 +152,7 @@ public:
     allOpt.push_back(CseOpt);
     allOpt.push_back(CieOpt);
     allOpt.push_back(CfeOpt);
+    allOpt.push_back(BcfOpt);
     allOpt.push_back(RttiOpt);
     return allOpt;
   }
@@ -143,6 +164,7 @@ public:
                      const std::shared_ptr<ObfOpt> &cseOpt,
                      const std::shared_ptr<ObfOpt> &cieOpt,
                      const std::shared_ptr<ObfOpt> &cfeOpt,
+                     const std::shared_ptr<ObfOpt> &bcfOpt,
                      const std::shared_ptr<ObfOpt> &rttiOpt) {
     this->IndBrOpt = indBrOpt;
     this->ICallOpt = iCallOpt;
@@ -151,6 +173,7 @@ public:
     this->CseOpt = cseOpt;
     this->CieOpt = cieOpt;
     this->CfeOpt = cfeOpt;
+    this->BcfOpt = bcfOpt;
     this->RttiOpt = rttiOpt;
   }
 
@@ -162,6 +185,7 @@ public:
                            std::make_shared<ObfOpt>("cse"),
                            std::make_shared<ObfOpt>("cie"),
                            std::make_shared<ObfOpt>("cfe"),
+                           std::make_shared<ObfOpt>("bcf"),
                            std::make_shared<ObfOpt>("rtti")
                        } {}
 
@@ -191,6 +215,10 @@ public:
 
   auto cfeOpt() const {
     return CfeOpt;
+  }
+
+  auto bcfOpt() const {
+    return BcfOpt;
   }
 
   auto rttiOpt() const {

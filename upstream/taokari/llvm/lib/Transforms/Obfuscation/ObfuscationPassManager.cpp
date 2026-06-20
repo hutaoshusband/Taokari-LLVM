@@ -3,6 +3,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Transforms/Obfuscation/BogusControlFlow.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/IR/Module.h"
 
@@ -139,6 +140,30 @@ static cl::alias
 TaokariRttiEraser("taokari-rtti", cl::desc("Alias for -irobf-rtti"),
                   cl::aliasopt(EnableRttiEraser));
 
+static cl::opt<bool>
+EnableBogusControlFlow("irobf-bcf", cl::init(false), cl::NotHidden,
+                       cl::desc("Enable IR Bogus Control Flow."));
+static cl::opt<uint32_t>
+LevelBogusControlFlow("level-bcf", cl::init(0), cl::NotHidden,
+                      cl::desc("Set IR Bogus Control Flow Level."));
+
+static cl::alias
+TaokariBogusControlFlow("taokari-bcf", cl::desc("Alias for -irobf-bcf"),
+                        cl::aliasopt(EnableBogusControlFlow));
+static cl::alias
+TaokariLevelBogusControlFlow("taokari-level-bcf",
+                             cl::desc("Alias for -level-bcf"),
+                             cl::aliasopt(LevelBogusControlFlow));
+
+static cl::opt<bool>
+TaokariBCFBeforeFlattening("taokari-bcf-before-fla", cl::init(false),
+                           cl::NotHidden,
+                           cl::desc("Run BCF before control-flow flattening."));
+static cl::opt<bool>
+TaokariBCFAfterFlattening("taokari-bcf-after-fla", cl::init(false),
+                          cl::NotHidden,
+                          cl::desc("Run BCF after control-flow flattening."));
+
 
 static cl::opt<std::string>
 TaokariConfigPath("taokari-cfg", cl::init(std::string{}), cl::NotHidden,
@@ -220,6 +245,7 @@ struct ObfuscationPassManager : public ModulePass {
                            LevelIRConstantIntEncryption);
     Opt->cfeOpt()->readOpt(EnableIRConstantFPEncryption,
                            LevelIRConstantFPEncryption);
+    Opt->bcfOpt()->readOpt(EnableBogusControlFlow, LevelBogusControlFlow);
     Opt->rttiOpt()->readOpt(EnableRttiEraser);
     return Opt;
   }
@@ -229,7 +255,7 @@ struct ObfuscationPassManager : public ModulePass {
     if (EnableIndirectBr || EnableIndirectCall || EnableIndirectGV ||
         EnableIRFlattening || EnableIRStringEncryption ||
         EnableIRConstantIntEncryption || EnableIRConstantFPEncryption ||
-        EnableRttiEraser || !TaokariConfigPath.empty() ||
+        EnableBogusControlFlow || EnableRttiEraser || !TaokariConfigPath.empty() ||
         !ArkariConfigPath.empty()) {
       EnableIRObfuscation = true;
     }
@@ -254,7 +280,11 @@ struct ObfuscationPassManager : public ModulePass {
     }
 
     add(llvm::createIndirectCallPass(Options.get()));
+    if (!TaokariBCFAfterFlattening || TaokariBCFBeforeFlattening)
+      add(llvm::createBogusControlFlowPass(Options.get()));
     add(llvm::createFlatteningPass(pointerSize, Options.get()));
+    if (TaokariBCFAfterFlattening)
+      add(llvm::createBogusControlFlowPass(Options.get()));
     add(llvm::createIndirectBranchPass(Options.get()));
 
     if (EnableRttiEraser || Options->rttiOpt()->isEnabled()) {

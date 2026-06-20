@@ -3,6 +3,7 @@ add_llvm_component_library(LLVMObfuscation
   OpaquePredicate.cpp
   ObfuscationPassManager.cpp
   ObfuscationOptions.cpp
+  BogusControlFlow.cpp
   IndirectBranch.cpp
   IndirectCall.cpp
   IndirectGlobalVariable.cpp
