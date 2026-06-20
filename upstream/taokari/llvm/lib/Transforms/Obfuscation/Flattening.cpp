@@ -22,6 +22,8 @@
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
 #include "llvm/Support/RandomNumberGenerator.h"
 
 #include <memory>
@@ -103,6 +105,7 @@ bool Flattening::flatten(Function *f) {
   const uint32_t maxAllocas =
       flaOpt->maxAllocas() ? flaOpt->maxAllocas() : DefaultMaxAllocas;
   const uint32_t flaLevel = flaOpt->level();
+  const bool fortressMode = flaLevel >= 3;
 
   if (f->getInstructionCount() > maxInsts || f->size() > maxBlocks ||
       f->hasPersonalityFn()) {
@@ -192,6 +195,49 @@ bool Flattening::flatten(Function *f) {
   IRBuilder<> IRB{insertBlock};
   const auto  switchVar = IRB.CreateAlloca(IntTy, nullptr, "switchVar");
   const auto  switchXorVar = IRB.CreateAlloca(IntTy, nullptr, "switchXor");
+  AllocaInst *switchBogusVar = nullptr;
+  if (fortressMode) {
+    switchBogusVar = IRB.CreateAlloca(IntTy, nullptr, "switchBogus");
+  }
+
+  auto buildOpaqueEven = [&](IRBuilder<> &Builder, const Twine &Name) -> Value * {
+    Value *seed = Builder.CreateLoad(IntTy, switchXorVar, true,
+                                     Name + ".seed");
+    Value *pair = Builder.CreateAdd(Builder.CreateMul(seed, seed),
+                                    seed, Name + ".pair");
+    return Builder.CreateAnd(pair, ConstantInt::get(IntTy, 1), Name + ".bit");
+  };
+
+  auto buildOpaqueTrue = [&](IRBuilder<> &Builder,
+                             const Twine &Name) -> Value * {
+    return Builder.CreateICmpEQ(buildOpaqueEven(Builder, Name),
+                                ConstantInt::get(IntTy, 0), Name + ".true");
+  };
+
+  auto buildOpaqueFalse = [&](IRBuilder<> &Builder,
+                              const Twine &Name) -> Value * {
+    return Builder.CreateICmpNE(buildOpaqueEven(Builder, Name),
+                                ConstantInt::get(IntTy, 0), Name + ".false");
+  };
+
+  auto buildXorExpr = [&](IRBuilder<> &Builder, Value *LHS, Value *RHS,
+                          const Twine &Name) -> Value * {
+    switch (fortressMode ? RNG() % 3 : RNG() % 2) {
+    case 1: {
+      Value *orV = Builder.CreateOr(LHS, RHS);
+      Value *andV = Builder.CreateAnd(LHS, RHS);
+      return Builder.CreateAnd(orV, Builder.CreateNot(andV), Name);
+    }
+    case 2: {
+      Value *andV = Builder.CreateAnd(LHS, RHS);
+      return Builder.CreateSub(Builder.CreateAdd(LHS, RHS),
+                               Builder.CreateShl(andV, ConstantInt::get(IntTy, 1)),
+                               Name);
+    }
+    default:
+      return Builder.CreateXor(LHS, RHS, Name);
+    }
+  };
 
   // init：Encoded = EntryCase ^ XorKey
   ConstantInt *entryXor = randStateKey();
@@ -233,6 +279,18 @@ bool Flattening::flatten(Function *f) {
       BasicBlock::Create(f->getContext(), "switchDefault", f, bbLoopEnd);
   auto swFakeCaseGate =
       BasicBlock::Create(f->getContext(), "switchFakeCaseGate", f, bbLoopEnd);
+  auto swFakeSucc0 =
+      fortressMode ? BasicBlock::Create(f->getContext(), "switchFakeSucc0", f,
+                                        bbLoopEnd)
+                   : nullptr;
+  auto swFakeSucc1 =
+      fortressMode ? BasicBlock::Create(f->getContext(), "switchFakeSucc1", f,
+                                        bbLoopEnd)
+                   : nullptr;
+  auto swFakeSucc2 =
+      fortressMode ? BasicBlock::Create(f->getContext(), "switchFakeSucc2", f,
+                                        bbLoopEnd)
+                   : nullptr;
   auto swDefaultJunk =
       BasicBlock::Create(f->getContext(), "switchDefaultJunk", f, bbLoopEnd);
   auto swTrap =
@@ -244,14 +302,40 @@ bool Flattening::flatten(Function *f) {
   IRB.CreateBr(swDefaultJunk);
 
   IRB.SetInsertPoint(swFakeCaseGate);
-  Value *fakeSeed = IRB.CreateLoad(IntTy, switchXorVar, "fakeSeed");
-  Value *fakeEven = IRB.CreateAnd(
-      IRB.CreateAdd(IRB.CreateMul(fakeSeed, fakeSeed), fakeSeed), randConst(),
-      "fakeEven");
-  Value *fakePred = IRB.CreateICmpEQ(
-      IRB.CreateAnd(fakeEven, ConstantInt::get(IntTy, 1)), ConstantInt::get(IntTy, 0),
-      "fakePred");
-  IRB.CreateCondBr(fakePred, swDefaultJunk, swTrap);
+  if (fortressMode) {
+    Value *fakeState = buildXorExpr(IRB, randConst(), randConst(), "fakeState");
+    IRB.CreateStore(fakeState, switchBogusVar, true);
+    IRB.CreateCondBr(buildOpaqueTrue(IRB, "fakeCaseGate"), swFakeSucc0, swTrap);
+  } else {
+    IRB.CreateCondBr(buildOpaqueTrue(IRB, "fakePred"), swDefaultJunk, swTrap);
+  }
+
+  if (fortressMode) {
+    IRB.SetInsertPoint(swFakeSucc0);
+    Value *fakeNext = buildXorExpr(IRB,
+                                   IRB.CreateLoad(IntTy, switchBogusVar, true,
+                                                  "fakeSucc0.load"),
+                                   randConst(), "fakeSucc0.next");
+    IRB.CreateStore(fakeNext, switchBogusVar, true);
+    IRB.CreateCondBr(buildOpaqueTrue(IRB, "fakeSucc0.pred"), swFakeSucc1,
+                     swTrap);
+
+    IRB.SetInsertPoint(swFakeSucc1);
+    Value *fakeMix = IRB.CreateAdd(IRB.CreateLoad(IntTy, switchBogusVar, true,
+                                                  "fakeSucc1.load"),
+                                   randConst(), "fakeSucc1.mix");
+    IRB.CreateStore(fakeMix, switchBogusVar, true);
+    IRB.CreateCondBr(buildOpaqueFalse(IRB, "fakeSucc1.pred"), swTrap,
+                     swFakeSucc2);
+
+    IRB.SetInsertPoint(swFakeSucc2);
+    Value *fakeFinal = buildXorExpr(IRB,
+                                    IRB.CreateLoad(IntTy, switchBogusVar, true,
+                                                   "fakeSucc2.load"),
+                                    randConst(), "fakeSucc2.final");
+    IRB.CreateStore(fakeFinal, switchBogusVar, true);
+    IRB.CreateBr(swDefaultJunk);
+  }
 
   IRB.SetInsertPoint(swDefaultJunk);
   Value *junkC = IRB.CreateXor(
@@ -266,8 +350,98 @@ bool Flattening::flatten(Function *f) {
   IRB.CreateCall(trap);
   IRB.CreateUnreachable();
 
+  BasicBlock *switchBlock = bbLoopEntry;
+  if (fortressMode) {
+    auto dispatchLayout = RNG() % 3;
+    switchBlock =
+        BasicBlock::Create(f->getContext(), "switchDispatch", f, bbLoopEnd);
+
+    if (dispatchLayout == 0) {
+      BranchInst::Create(switchBlock, bbLoopEntry);
+    } else if (dispatchLayout == 1) {
+      auto dispatchGate =
+          BasicBlock::Create(f->getContext(), "switchDispatchGate", f,
+                             bbLoopEnd);
+      IRB.SetInsertPoint(bbLoopEntry);
+      IRB.CreateCondBr(buildOpaqueTrue(IRB, "dispatchGate.pred"),
+                       dispatchGate, swFakeCaseGate);
+      IRB.SetInsertPoint(dispatchGate);
+      Value *gateMix = buildXorExpr(IRB, switchCondition,
+                                    ConstantInt::get(IntTy, 0),
+                                    "dispatchGate.mix");
+      switchCondition = gateMix;
+      IRB.CreateBr(switchBlock);
+    } else {
+      auto nestedOuter =
+          BasicBlock::Create(f->getContext(), "switchNestedDispatch", f,
+                             bbLoopEnd);
+      IRB.SetInsertPoint(bbLoopEntry);
+      IRB.CreateBr(nestedOuter);
+      IRB.SetInsertPoint(nestedOuter);
+      auto *outerSwitch = SwitchInst::Create(buildOpaqueEven(IRB, "nestedKey"),
+                                             swFakeCaseGate, 1, nestedOuter);
+      outerSwitch->addCase(ConstantInt::get(IntTy, 0), switchBlock);
+    }
+  }
+
   // Create switch instruction itself and set condition
-  auto switchI = SwitchInst::Create(switchCondition, swDefault, 0, bbLoopEntry);
+  auto switchI = SwitchInst::Create(switchCondition, swDefault, 0, switchBlock);
+
+  auto isCloneableForFakePath = [](BasicBlock *BB) -> bool {
+    if (BB->isEHPad()) {
+      return false;
+    }
+    for (Instruction &I : *BB) {
+      if (isa<PHINode>(&I) || I.isEHPad() || I.isAtomic() ||
+          I.mayHaveSideEffects() ||
+          I.mayReadOrWriteMemory()) {
+        return false;
+      }
+      if (auto *LI = dyn_cast<LoadInst>(&I)) {
+        if (LI->isVolatile()) {
+          return false;
+        }
+      }
+      if (I.isTerminator()) {
+        continue;
+      }
+      for (Value *Op : I.operands()) {
+        if (auto *OpI = dyn_cast<Instruction>(Op)) {
+          if (OpI->getParent() != BB) {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
+  };
+
+  BasicBlock *fakeCaseTarget = swFakeCaseGate;
+  if (fortressMode) {
+    unsigned cloned = 0;
+    for (BasicBlock *BB : origBB) {
+      if (cloned >= 2) {
+        break;
+      }
+      if (!isCloneableForFakePath(BB)) {
+        continue;
+      }
+      ValueToValueMapTy VMap;
+      BasicBlock *Clone = CloneBasicBlock(BB, VMap, ".tao.clone", f);
+      for (Instruction &I : *Clone) {
+        RemapInstruction(&I, VMap,
+                         RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
+      }
+      Clone->getTerminator()->eraseFromParent();
+      IRBuilder<> CloneIRB(Clone);
+      Value *cloneJunk = buildXorExpr(CloneIRB, randConst(), randConst(),
+                                      "cloneJunk");
+      CloneIRB.CreateStore(cloneJunk, switchBogusVar, true);
+      CloneIRB.CreateBr(fakeCaseTarget);
+      fakeCaseTarget = Clone;
+      ++cloned;
+    }
+  }
 
   // Remove branch jump from 1st BB and make a jump to the while
   ReplaceInstWithInst(f->begin()->getTerminator(),
@@ -290,7 +464,7 @@ bool Flattening::flatten(Function *f) {
       v = randWord();
     } while (v == 0 || UsedCases.count(v));
     UsedCases.insert(v);
-    switchI->addCase(ConstantInt::get(IntTy, v), swFakeCaseGate);
+    switchI->addCase(ConstantInt::get(IntTy, v), fakeCaseTarget);
   }
 
   // Recalculate switchVar
@@ -304,29 +478,32 @@ bool Flattening::flatten(Function *f) {
 
     IRB.SetInsertPoint(bb->getTerminator());
 
-    auto buildXorExpr = [&](Value *LHS, Value *RHS,
-                            const Twine &Name) -> Value * {
-      if ((RNG() & 1) == 0) {
-        return IRB.CreateXor(LHS, RHS, Name);
-      }
-      Value *orV = IRB.CreateOr(LHS, RHS);
-      Value *andV = IRB.CreateAnd(LHS, RHS);
-      return IRB.CreateAnd(orV, IRB.CreateNot(andV), Name);
-    };
-
     auto writeNextEncoded = [&](Value *NextCaseVal) {
       Value *nextXor = randStateKey();
-      switch (RNG() % 3) {
+      switch (fortressMode ? RNG() % 5 : RNG() % 3) {
       case 1:
         nextXor = IRB.CreateNot(nextXor, "nextXor.not");
         break;
       case 2:
-        nextXor = buildXorExpr(nextXor, randConst(), "nextXor.mix");
+        nextXor = buildXorExpr(IRB, nextXor, randConst(), "nextXor.mix");
+        break;
+      case 3:
+        nextXor = IRB.CreateAdd(nextXor, randConst(), "nextXor.addmix");
+        break;
+      case 4:
+        nextXor = IRB.CreateSub(randConst(), nextXor, "nextXor.submix");
         break;
       default:
         break;
       }
-      Value *nextEnc = buildXorExpr(NextCaseVal, nextXor, "nextEnc");
+      Value *nextEnc = buildXorExpr(IRB, NextCaseVal, nextXor, "nextEnc");
+
+      if (fortressMode) {
+        Value *bogusXor = randStateKey();
+        Value *bogusState = buildXorExpr(IRB, randConst(), bogusXor,
+                                         "bogusNextEnc");
+        IRB.CreateStore(bogusState, switchBogusVar, true);
+      }
 
       IRB.CreateStore(nextEnc, switchVar, true);
       IRB.CreateStore(nextXor, switchXorVar, true);
