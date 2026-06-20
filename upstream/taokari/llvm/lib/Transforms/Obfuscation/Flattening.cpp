@@ -222,7 +222,24 @@ bool Flattening::flatten(Function *f) {
 
   auto swDefault =
       BasicBlock::Create(f->getContext(), "switchDefault", f, bbLoopEnd);
+  auto swDefaultJunk =
+      BasicBlock::Create(f->getContext(), "switchDefaultJunk", f, bbLoopEnd);
+  auto swTrap =
+      BasicBlock::Create(f->getContext(), "switchTrap", f, bbLoopEnd);
   IRB.SetInsertPoint(swDefault);
+  Value *junkA = IRB.CreateXor(randConst(), randConst(), "defaultJunkA");
+  Value *junkB = IRB.CreateAdd(junkA, randConst(), "defaultJunkB");
+  IRB.CreateStore(junkB, switchXorVar, true);
+  IRB.CreateBr(swDefaultJunk);
+
+  IRB.SetInsertPoint(swDefaultJunk);
+  Value *junkC = IRB.CreateXor(
+      IRB.CreateLoad(IntTy, switchXorVar, "defaultJunkC"), randConst(),
+      "defaultJunkD");
+  IRB.CreateStore(junkC, switchXorVar, true);
+  IRB.CreateBr(swTrap);
+
+  IRB.SetInsertPoint(swTrap);
   Function *trap =
       Intrinsic::getOrInsertDeclaration(f->getParent(), Intrinsic::trap);
   IRB.CreateCall(trap);
