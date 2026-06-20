@@ -107,6 +107,33 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
         }
         obfOpt->setLevel(static_cast<uint32_t>(*level));
       }
+      if (const auto *maxInstsValue = optObj->get("maxInsts")) {
+        auto maxInsts = maxInstsValue->getAsInteger();
+        if (!maxInsts || *maxInsts < 0) {
+          reportConfigError(FileName,
+                            obfOpt->attributeName() +
+                            ".maxInsts must be non-negative integer");
+        }
+        obfOpt->setMaxInsts(static_cast<uint32_t>(*maxInsts));
+      }
+      if (const auto *maxBlocksValue = optObj->get("maxBlocks")) {
+        auto maxBlocks = maxBlocksValue->getAsInteger();
+        if (!maxBlocks || *maxBlocks < 0) {
+          reportConfigError(FileName,
+                            obfOpt->attributeName() +
+                            ".maxBlocks must be non-negative integer");
+        }
+        obfOpt->setMaxBlocks(static_cast<uint32_t>(*maxBlocks));
+      }
+      if (const auto *maxAllocasValue = optObj->get("maxAllocas")) {
+        auto maxAllocas = maxAllocasValue->getAsInteger();
+        if (!maxAllocas || *maxAllocas < 0) {
+          reportConfigError(FileName,
+                            obfOpt->attributeName() +
+                            ".maxAllocas must be non-negative integer");
+        }
+        obfOpt->setMaxAllocas(static_cast<uint32_t>(*maxAllocas));
+      }
     };
 
     std::string key = obj.getFirst().str();

@@ -16,6 +16,9 @@ protected:
   uint32_t    Enabled : 1;
   uint32_t    Level   : 2;
   std::string AttributeName;
+  uint32_t    MaxInsts = 0;
+  uint32_t    MaxBlocks = 0;
+  uint32_t    MaxAllocas = 0;
 
 public:
   ObfOpt(bool enable, uint32_t level, const std::string &attributeName) {
@@ -58,6 +61,30 @@ public:
 
   uint32_t level() const {
     return this->Level;
+  }
+
+  void setMaxInsts(uint32_t maxInsts) {
+    this->MaxInsts = maxInsts;
+  }
+
+  uint32_t maxInsts() const {
+    return this->MaxInsts;
+  }
+
+  void setMaxBlocks(uint32_t maxBlocks) {
+    this->MaxBlocks = maxBlocks;
+  }
+
+  uint32_t maxBlocks() const {
+    return this->MaxBlocks;
+  }
+
+  void setMaxAllocas(uint32_t maxAllocas) {
+    this->MaxAllocas = maxAllocas;
+  }
+
+  uint32_t maxAllocas() const {
+    return this->MaxAllocas;
   }
 
   const std::string &attributeName() const {

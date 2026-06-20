@@ -12,6 +12,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Transforms/Obfuscation/Flattening.h"
 #include "llvm/Transforms/Obfuscation/LegacyLowerSwitch.h"
 #include "llvm/Transforms/Obfuscation/Utils.h"
@@ -29,6 +32,10 @@
 
 using namespace std;
 using namespace llvm;
+
+static constexpr uint32_t DefaultMaxInsts = 5000;
+static constexpr uint32_t DefaultMaxBlocks = 200;
+static constexpr uint32_t DefaultMaxAllocas = 64;
 
 // Stats
 STATISTIC(Flattened, "Functions flattened");
@@ -66,6 +73,13 @@ bool Flattening::runOnFunction(Function &F) {
   }
   Function *tmp = &F;
   bool      result = false;
+
+  for (const auto &annotation : readAnnotate(&F)) {
+    if (annotation.find("tao-noobf-fla") != std::string::npos) {
+      return result;
+    }
+  }
+
   // Do we obfuscate
   const auto opt = ArgsOptions->toObfuscate(ArgsOptions->flaOpt(), &F);
   if (!opt.isEnabled()) {
@@ -81,6 +95,29 @@ bool Flattening::runOnFunction(Function &F) {
 
 bool Flattening::flatten(Function *f) {
   SmallVector<BasicBlock *, 32> origBB;
+  const auto flaOpt = ArgsOptions->flaOpt();
+  const uint32_t maxInsts =
+      flaOpt->maxInsts() ? flaOpt->maxInsts() : DefaultMaxInsts;
+  const uint32_t maxBlocks =
+      flaOpt->maxBlocks() ? flaOpt->maxBlocks() : DefaultMaxBlocks;
+  const uint32_t maxAllocas =
+      flaOpt->maxAllocas() ? flaOpt->maxAllocas() : DefaultMaxAllocas;
+
+  if (f->getInstructionCount() > maxInsts || f->size() > maxBlocks ||
+      f->hasPersonalityFn()) {
+    return false;
+  }
+
+  uint32_t allocaCount = 0;
+  for (Instruction &I : instructions(f)) {
+    if (isa<AllocaInst>(&I) && ++allocaCount > maxAllocas) {
+      return false;
+    }
+    if (isa<InvokeInst>(&I) || isa<CleanupPadInst>(&I) ||
+        isa<CatchPadInst>(&I) || isa<CatchSwitchInst>(&I)) {
+      return false;
+    }
+  }
 
   auto &Ctx = f->getContext();
   Type *intType = Type::getInt32Ty(Ctx);
@@ -185,7 +222,11 @@ bool Flattening::flatten(Function *f) {
 
   auto swDefault =
       BasicBlock::Create(f->getContext(), "switchDefault", f, bbLoopEnd);
-  BranchInst::Create(bbLoopEnd, swDefault);
+  IRB.SetInsertPoint(swDefault);
+  Function *trap =
+      Intrinsic::getOrInsertDeclaration(f->getParent(), Intrinsic::trap);
+  IRB.CreateCall(trap);
+  IRB.CreateUnreachable();
 
   // Create switch instruction itself and set condition
   auto switchI = SwitchInst::Create(switchCondition, swDefault, 0, bbLoopEntry);
