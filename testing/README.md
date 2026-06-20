@@ -78,6 +78,15 @@ python testing\scripts\verify_machine_obf_l3_cross_pass.py
 It checks that MIR `dirtybytes,junk,sub` survives with IR flattening, BCF and
 indirect-branch obfuscation enabled.
 
+Run the CFG fragmentation metric:
+
+```powershell
+python testing\scripts\verify_machine_obf_l3_cfg_fragmentation.py
+```
+
+It compares plain vs IR+MIR object disassembly and fails if final machine code
+does not add branch-like control transfers and trap/unknown fragmenters.
+
 Run the AArch64 MIR parity-plan gate:
 
 ```powershell

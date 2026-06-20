@@ -226,6 +226,15 @@ integration:
 - the final object still contains all requested MIR byte signatures after the
   IR passes run.
 
+`testing/scripts/verify_machine_obf_l3_cfg_fragmentation.py` checks the local
+CFG-fragmentation proxy:
+
+- plain and IR+MIR-obfuscated executables produce identical stdout.
+- `llvm-objdump -d` on the final objects shows increased branch-like control
+  transfers.
+- the obfuscated object contains trap/unknown fragmenters from skipped dirty
+  bytes.
+
 `testing/scripts/verify_machine_obf_l3_aarch64_plan.py` checks the tracked
 AArch64 parity plan in `docs/MACHINE_IR_AARCH64_PARITY.md`.
 
@@ -243,6 +252,9 @@ IDA-Pro research doc §A Level 3:
   architectural state instead of a fixed `cmp rsp, rsp` signature.
 - **Cross-pass integration** — `verify_machine_obf_l3_cross_pass.py` proves MIR
   emission survives alongside IR flattening, BCF and indirect branches.
+- **CFG fragmentation metric** — `verify_machine_obf_l3_cfg_fragmentation.py`
+  gates an object-level branch/fragmenter count as a local proxy for harder
+  graph recovery.
 - **Budget gate** — `verify_machine_obf_l3_budget.py` blocks pathological
   compile-time and binary-size growth while Fortress MIR expands.
 - **AArch64 parity plan** — `docs/MACHINE_IR_AARCH64_PARITY.md` defines the
