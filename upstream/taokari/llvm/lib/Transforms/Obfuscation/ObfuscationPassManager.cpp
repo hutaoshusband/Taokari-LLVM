@@ -72,10 +72,17 @@ TaokariLevelIndirectGV("taokari-level-indgv",
 static cl::opt<bool> EnableIRFlattening(
     "irobf-fla", cl::init(false), cl::NotHidden,
     cl::desc("Enable IR Control Flow Flattening Obfuscation."));
+static cl::opt<uint32_t> LevelIRFlattening(
+    "level-fla", cl::init(0), cl::NotHidden,
+    cl::desc("Set IR Control Flow Flattening Obfuscation Level."));
 
 static cl::alias
 TaokariIRFlattening("taokari-fla", cl::desc("Alias for -irobf-fla"),
                     cl::aliasopt(EnableIRFlattening));
+static cl::alias
+TaokariLevelIRFlattening("taokari-level-fla",
+                         cl::desc("Alias for -level-fla"),
+                         cl::aliasopt(LevelIRFlattening));
 
 
 static cl::opt<bool>
@@ -207,7 +214,7 @@ struct ObfuscationPassManager : public ModulePass {
     Opt->indBrOpt()->readOpt(EnableIndirectBr, LevelIndirectBr);
     Opt->iCallOpt()->readOpt(EnableIndirectCall, LevelIndirectCall);
     Opt->indGvOpt()->readOpt(EnableIndirectGV, LevelIndirectGV);
-    Opt->flaOpt()->readOpt(EnableIRFlattening);
+    Opt->flaOpt()->readOpt(EnableIRFlattening, LevelIRFlattening);
     Opt->cseOpt()->readOpt(EnableIRStringEncryption);
     Opt->cieOpt()->readOpt(EnableIRConstantIntEncryption,
                            LevelIRConstantIntEncryption);

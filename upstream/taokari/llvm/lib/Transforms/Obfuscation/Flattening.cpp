@@ -102,6 +102,7 @@ bool Flattening::flatten(Function *f) {
       flaOpt->maxBlocks() ? flaOpt->maxBlocks() : DefaultMaxBlocks;
   const uint32_t maxAllocas =
       flaOpt->maxAllocas() ? flaOpt->maxAllocas() : DefaultMaxAllocas;
+  const uint32_t flaLevel = flaOpt->level();
 
   if (f->getInstructionCount() > maxInsts || f->size() > maxBlocks ||
       f->hasPersonalityFn()) {
@@ -204,14 +205,17 @@ bool Flattening::flatten(Function *f) {
   Value *enc0 = IRB.CreateLoad(IntTy, switchVar, "switchVar.enc0");
   Value *xor0 = IRB.CreateLoad(IntTy, switchXorVar, "switchXor.xor0");
 
-  // rolling delta
-  ConstantInt *delta = randConst();
-  Value *      enc1 = IRB.CreateXor(enc0, delta, "switchVar.enc1");
-  Value *      xor1 = IRB.CreateXor(xor0, delta, "switchXor.xor1");
-  IRB.CreateStore(enc1, switchVar, true);
-  IRB.CreateStore(xor1, switchXorVar, true);
-
-  Value *switchCondition = IRB.CreateXor(enc1, xor1, "switchCond");
+  Value *switchCondition = nullptr;
+  if (flaLevel > 0) {
+    ConstantInt *delta = randConst();
+    Value *      enc1 = IRB.CreateXor(enc0, delta, "switchVar.enc1");
+    Value *      xor1 = IRB.CreateXor(xor0, delta, "switchXor.xor1");
+    IRB.CreateStore(enc1, switchVar, true);
+    IRB.CreateStore(xor1, switchXorVar, true);
+    switchCondition = IRB.CreateXor(enc1, xor1, "switchCond");
+  } else {
+    switchCondition = IRB.CreateXor(enc0, xor0, "switchCond");
+  }
 
   // Move first BB on top
   insertBlock->moveBefore(bbLoopEntry);
