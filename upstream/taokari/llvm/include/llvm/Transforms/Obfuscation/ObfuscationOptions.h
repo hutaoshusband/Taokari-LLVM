@@ -239,6 +239,7 @@ protected:
   std::shared_ptr<ObfOpt> MbaOpt = nullptr;
   std::shared_ptr<ObfOpt> RttiOpt = nullptr;
   std::shared_ptr<ObfOpt> MetaOpt = nullptr;
+  std::shared_ptr<ObfOpt> VmpOpt = nullptr;
 
   SmallString<32> RandomSeed;
 
@@ -256,6 +257,7 @@ public:
     allOpt.push_back(MbaOpt);
     allOpt.push_back(RttiOpt);
     allOpt.push_back(MetaOpt);
+    allOpt.push_back(VmpOpt);
     return allOpt;
   }
 
@@ -269,7 +271,8 @@ public:
                      const std::shared_ptr<ObfOpt> &bcfOpt,
                      const std::shared_ptr<ObfOpt> &mbaOpt,
                      const std::shared_ptr<ObfOpt> &rttiOpt,
-                     const std::shared_ptr<ObfOpt> &metaOpt) {
+                     const std::shared_ptr<ObfOpt> &metaOpt,
+                     const std::shared_ptr<ObfOpt> &vmpOpt) {
     this->IndBrOpt = indBrOpt;
     this->ICallOpt = iCallOpt;
     this->IndGvOpt = indGvOpt;
@@ -281,6 +284,7 @@ public:
     this->MbaOpt = mbaOpt;
     this->RttiOpt = rttiOpt;
     this->MetaOpt = metaOpt;
+    this->VmpOpt = vmpOpt;
   }
 
   ObfuscationOptions()
@@ -294,7 +298,8 @@ public:
                            std::make_shared<ObfOpt>("bcf"),
                            std::make_shared<ObfOpt>("mba"),
                            std::make_shared<ObfOpt>("rtti"),
-                           std::make_shared<ObfOpt>("meta")} {}
+                           std::make_shared<ObfOpt>("meta"),
+                           std::make_shared<ObfOpt>("vmp")} {}
 
   auto indBrOpt() const { return IndBrOpt; }
 
@@ -317,6 +322,8 @@ public:
   auto rttiOpt() const { return RttiOpt; }
 
   auto metaOpt() const { return MetaOpt; }
+
+  auto vmpOpt() const { return VmpOpt; }
 
   auto &randomSeed() { return RandomSeed; }
 

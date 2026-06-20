@@ -646,7 +646,7 @@ This should be treated as advanced / expensive protection.
 
 ## Level 1 — Research Prototype
 
-* [ ] Study xVMP architecture
+* [x] Study xVMP architecture
 * [ ] Define Taokari VM scope
 * [ ] Choose stack VM or register VM
 * [ ] Choose bytecode format

@@ -119,6 +119,8 @@ CASES = [
     Case("c_globals", (case_path("c_globals") / "src" / "main.c",), "globals:11:51:18\n"),
     # Literal, format and runtime-built strings -> ConstantStringEncryption.
     Case("c_strings", (case_path("c_strings") / "src" / "main.c",), "strings:FX:108469760:1973234167\n"),
+    # Compile-time VM prototype: annotation-selected integer toy function.
+    Case("vmp_basic", (case_path("vmp_basic") / "src" / "main.c",), "vmp-basic:40:25\n", no_rtti=True),
     # SSE string-op fixture: a CRT-style vectorised byte search whose plain
     # binary lowers to the exact weakness pattern the obfuscator must defeat --
     # pcmpeqb + pmovmskb + a jump-table dispatch with `psrldq $N` arms (the

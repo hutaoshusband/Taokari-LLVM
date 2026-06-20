@@ -4,6 +4,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Transforms/Obfuscation/BogusControlFlow.h"
+#include "llvm/Transforms/Obfuscation/CodeVirtualization.h"
 #include "llvm/Transforms/Obfuscation/MBA.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/IR/Module.h"
@@ -211,6 +212,19 @@ static cl::alias
 TaokariLevelMBA("taokari-level-mba", cl::desc("Alias for -level-mba"),
                 cl::aliasopt(LevelMBA));
 
+static cl::opt<bool>
+EnableVMP("irobf-vmp", cl::init(false), cl::NotHidden,
+          cl::desc("Enable IR code virtualization prototype."));
+static cl::opt<uint32_t>
+LevelVMP("level-vmp", cl::init(0), cl::NotHidden,
+         cl::desc("Set IR code virtualization level."));
+
+static cl::alias
+TaokariVMP("taokari-vmp", cl::desc("Alias for -irobf-vmp"),
+           cl::aliasopt(EnableVMP));
+static cl::alias
+TaokariLevelVMP("taokari-level-vmp", cl::desc("Alias for -level-vmp"),
+                cl::aliasopt(LevelVMP));
 
 static cl::opt<std::string>
 TaokariConfigPath("taokari-cfg", cl::init(std::string{}), cl::NotHidden,
@@ -309,6 +323,7 @@ struct ObfuscationPassManager : public ModulePass {
     Opt->mbaOpt()->readOpt(EnableMBA, LevelMBA);
     Opt->rttiOpt()->readOpt(EnableRttiEraser);
     Opt->metaOpt()->readOpt(EnableMetadataHygiene, LevelMetadataHygiene);
+    Opt->vmpOpt()->readOpt(EnableVMP, LevelVMP);
     return Opt;
   }
 
@@ -318,7 +333,7 @@ struct ObfuscationPassManager : public ModulePass {
         EnableIRFlattening || EnableIRStringEncryption ||
         EnableIRConstantIntEncryption || EnableIRConstantFPEncryption ||
         EnableBogusControlFlow || EnableMBA || EnableRttiEraser ||
-        EnableMetadataHygiene ||
+        EnableMetadataHygiene || EnableVMP ||
         !TaokariConfigPath.empty() || !ArkariConfigPath.empty()) {
       EnableIRObfuscation = true;
     }
@@ -332,8 +347,9 @@ struct ObfuscationPassManager : public ModulePass {
     unsigned   pointerSize = M.getDataLayout().getTypeAllocSize(
         PointerType::getUnqual(M.getContext()));
 
-    // MBA runs first so the arithmetic it materialises flows into the
-    // encryption / flattening / indirect passes downstream.
+    // VMP runs before hardening passes so the interpreter IR can be flattened,
+    // dirtied and encrypted by the normal Taokari stack.
+    add(llvm::createCodeVirtualizationPass(Options.get()));
     add(llvm::createMbaPass(Options.get()));
 
     add(llvm::createConstantIntEncryptionPass(Options.get()));
