@@ -104,7 +104,10 @@ def has_split_trampoline(obj: Path) -> bool:
     if SPLIT_MARKER not in data:
         return False
     body = function_body(disassemble(obj), "split_guarded").lower()
-    return "pushfq" in body and "popfq" in body and "\tjmp" in body
+    lines = [line for line in body.splitlines() if line.strip()]
+    if len(lines) < 3:
+        return False
+    return "pushfq" in lines[0] and "popfq" in lines[1] and "\tjmp" in lines[2]
 
 
 def run_checks(tmp: Path) -> int:

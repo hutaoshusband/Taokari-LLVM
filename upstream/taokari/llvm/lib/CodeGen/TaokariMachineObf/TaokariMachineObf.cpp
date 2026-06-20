@@ -43,6 +43,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
+#include <iterator>
 
 using namespace llvm;
 
@@ -309,10 +310,19 @@ static MachineBasicBlock *splitEntryBlock(MachineFunction &MF,
   MachineBasicBlock &EntryMBB = MF.front();
   if (EntryMBB.empty())
     return nullptr;
-  MachineInstr &FirstBodyMI = *EntryMBB.begin();
-  MachineBasicBlock *BodyMBB = EntryMBB.splitAt(FirstBodyMI);
-  if (!BodyMBB || BodyMBB == &EntryMBB)
+  MachineBasicBlock *BodyMBB =
+      MF.CreateMachineBasicBlock(EntryMBB.getBasicBlock());
+  if (!BodyMBB)
     return nullptr;
+  MF.insert(std::next(EntryMBB.getIterator()), BodyMBB);
+  BodyMBB->transferSuccessorsAndUpdatePHIs(&EntryMBB);
+  for (const MachineBasicBlock::RegisterMaskPair &LiveIn :
+       EntryMBB.liveins())
+    BodyMBB->addLiveIn(LiveIn);
+  BodyMBB->sortUniqueLiveIns();
+  BodyMBB->splice(BodyMBB->end(), &EntryMBB, EntryMBB.begin(),
+                  EntryMBB.end());
+  EntryMBB.addSuccessor(BodyMBB);
   insertSideEffectAsm(EntryMBB, EntryMBB.end(), TII, ".byte 0x9c,0x9d");
   TII.insertUnconditionalBranch(EntryMBB, BodyMBB, DebugLoc());
   return BodyMBB;

@@ -181,9 +181,9 @@ and RFLAGS they touch while still surviving as side-effecting machine code.
   `push rbp; mov rbp, rsp; sub rsp, 0x20; leave; ret; push rbp; ...` byte
   sequence. Runtime skips it, but disassemblers see plausible function prologue
   and epilogue patterns in the final code stream.
-- **Function split / boundary trampoline:** explicit `split` opt-in uses
-  `MachineBasicBlock::splitAt` after register allocation to move the original
-  entry body into a second machine block. The first block becomes a tiny
+- **Function split / boundary trampoline:** explicit `split` opt-in creates a
+  new machine body block after register allocation and moves the original entry
+  instructions into it. The first block becomes a tiny
   side-effecting `pushfq; popfq` marker plus an unconditional jump to the real
   body. This is distinct from IR outlining: the split is introduced after IR
   optimizers and IR deobfuscators have already lost visibility.
