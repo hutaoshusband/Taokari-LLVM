@@ -16,12 +16,18 @@
 #include "llvm/Support/Alignment.h"
 
 #include <cstdint>
+#include <functional>
 
 #define DEBUG_TYPE "taokari-vmp"
 
 using namespace llvm;
 
 namespace {
+
+// ponytail: Opcode encoding is the stable on-the-wire bytecode value. These
+// integers must NOT change once bytecode is shipped; the interpreter handler
+// table is keyed off them. L2 opcode-mapping/encryption layers will sit on
+// top of these values, not replace them.
 enum Opcode : int64_t {
   OpInitArg = 1,
   OpPushConst = 2,
@@ -42,6 +48,17 @@ enum Opcode : int64_t {
   OpSelect = 17,
 };
 
+// ponytail: How many operand-stack pops and bytecode immediates a handler
+// consumes. The encoder uses these for stack-depth validation; the
+// interpreter construction uses them for diagnostics only (each handler
+// drives its own fetch()/pop() count for now, since some are data-dependent
+// like OpInitArg which fetches two immediates).
+struct HandlerStackShape {
+  unsigned Pops = 0;
+  unsigned Pushes = 0;
+  unsigned Immediates = 0;
+};
+
 struct Fixup {
   size_t Index;
   const BasicBlock *Target;
@@ -50,6 +67,23 @@ struct Fixup {
 struct BytecodeProgram {
   SmallVector<int64_t, 64> Words;
   SmallVector<Fixup, 8> Fixups;
+};
+
+// ponytail: Handler descriptor. The interpreter builder iterates the table
+// and emits one switch case per entry; opcode values stay the stable enum.
+// This is the L1.5.2 refactor target: previously every opcode was a hand-
+// written case in getOrCreateInterpreter with no arity metadata. Now the
+// table is the source of truth for stack shape, and the Emit closure is the
+// only opcode-specific code.
+//
+// E operates on the IRBuilder already positioned at a fresh case block; it
+// owns its own pop()/fetch() calls and must terminate the block with a
+// branch back to Dispatch (or a ret).
+struct Handler {
+  Opcode Op;
+  StringRef Name;
+  HandlerStackShape Shape;
+  std::function<void(IRBuilder<> &)> Emit;
 };
 
 struct CodeVirtualization : public ModulePass {
@@ -286,6 +320,41 @@ struct CodeVirtualization : public ModulePass {
     return Slots.size() <= 64 && !P.Words.empty();
   }
 
+  // ponytail: Per-opcode stack shape. Used by the build-time depth check
+  // (L1.5.4) and as documentation. Data-dependent handlers (OpJmp/OpBrTrue/
+  // OpRet) report their shape conservatively.
+  HandlerStackShape shapeOf(Opcode Op) const {
+    switch (Op) {
+    case OpInitArg:
+      return {0, 0, 2};
+    case OpPushConst:
+      return {0, 1, 1};
+    case OpLoadSlot:
+      return {0, 1, 1};
+    case OpStoreSlot:
+      return {1, 0, 1};
+    case OpAdd:
+    case OpSub:
+    case OpXor:
+    case OpCmpEq:
+    case OpCmpNe:
+    case OpCmpSgt:
+    case OpCmpSlt:
+    case OpCmpSge:
+    case OpCmpSle:
+      return {2, 1, 0};
+    case OpSelect:
+      return {3, 1, 0};
+    case OpJmp:
+      return {0, 0, 1};
+    case OpBrTrue:
+      return {1, 0, 1};
+    case OpRet:
+      return {1, 0, 0};
+    }
+    return {0, 0, 0};
+  }
+
   Value *loadWord(IRBuilder<> &B, Type *I64, Value *BC, Value *PC,
                   Value *One) {
     Value *Addr = B.CreateGEP(I64, BC, PC);
@@ -305,6 +374,159 @@ struct CodeVirtualization : public ModulePass {
     Value *Idx = B.CreateSub(B.CreateLoad(I64, SP), ConstantInt::get(I64, 1));
     B.CreateStore(Idx, SP);
     return B.CreateLoad(I64, B.CreateGEP(I64, Stack, Idx));
+  }
+
+  // ponytail: Bundle of interpreter state. Emit closures in the handler
+  // table capture a pointer to this struct by value (one pointer copy),
+  // which is always valid because the Ctx outlives both the table build and
+  // the synchronous Emit pass in getOrCreateInterpreter. This avoids the
+  // lifetime hazard of capturing local helper lambdas (fetch/pop/push) by
+  // reference into deferred std::function closures.
+  struct InterpCtx {
+    Type *I64;
+    Function *F;
+    LLVMContext *Ctx;
+    Value *BC;
+    Value *PC;
+    Value *SP;
+    Value *Stack;
+    Value *Locals;
+    Value *Args;
+    BasicBlock *Dispatch;
+  };
+
+  Value *fetchWord(IRBuilder<> &B, InterpCtx &C) {
+    Value *Cur = B.CreateLoad(C.I64, C.PC);
+    Value *Word = B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.BC, Cur));
+    B.CreateStore(B.CreateAdd(Cur, ConstantInt::get(C.I64, 1)), C.PC);
+    return Word;
+  }
+
+  void pushStk(IRBuilder<> &B, InterpCtx &C, Value *V) {
+    push(B, C.I64, C.Stack, C.SP, V);
+  }
+
+  Value *popStk(IRBuilder<> &B, InterpCtx &C) {
+    return pop(B, C.I64, C.Stack, C.SP);
+  }
+
+  // ponytail: Build the handler table for the interpreter. Each entry owns
+  // its case-block emission, including pop()/fetch() and the branch back to
+  // Dispatch. OpRet intentionally does NOT branch back (it returns).
+  //
+  // Every Emit closure captures `Ctx` (a pointer to InterpCx, by value) and
+  // `this` (the pass, for push/pop helpers). IRBuilder& is passed in by the
+  // caller at Emit time. No local lambdas are captured — fetch/pop/push go
+  // through member functions on `this` + the InterpCx pointer.
+  SmallVector<Handler, 24> buildHandlerTable(InterpCtx &C) {
+    SmallVector<Handler, 24> H;
+    H.push_back({OpInitArg, "initarg", shapeOf(OpInitArg),
+                 [this, &C](IRBuilder<> &B) {
+                   Value *Slot = fetchWord(B, C);
+                   Value *ArgNo = fetchWord(B, C);
+                   Value *ArgVal =
+                       B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.Args, ArgNo));
+                   B.CreateStore(ArgVal, B.CreateGEP(C.I64, C.Locals, Slot));
+                   B.CreateBr(C.Dispatch);
+                 }});
+    H.push_back({OpPushConst, "pushconst", shapeOf(OpPushConst),
+                 [this, &C](IRBuilder<> &B) {
+                   pushStk(B, C, fetchWord(B, C));
+                   B.CreateBr(C.Dispatch);
+                 }});
+    H.push_back({OpLoadSlot, "loadslot", shapeOf(OpLoadSlot),
+                 [this, &C](IRBuilder<> &B) {
+                   pushStk(B, C, B.CreateLoad(C.I64, B.CreateGEP(
+                                                      C.I64, C.Locals,
+                                                      fetchWord(B, C))));
+                   B.CreateBr(C.Dispatch);
+                 }});
+    H.push_back({OpStoreSlot, "storeslot", shapeOf(OpStoreSlot),
+                 [this, &C](IRBuilder<> &B) {
+                   B.CreateStore(popStk(B, C),
+                                 B.CreateGEP(C.I64, C.Locals, fetchWord(B, C)));
+                   B.CreateBr(C.Dispatch);
+                 }});
+
+    // ponytail: Binary-op emitter. The opcode-specific IR is produced by an
+    // owned std::function (Fn) captured by value into the Emit closure. Fn
+    // itself is a by-value parameter of addBinary, so the closure must own a
+    // copy; capturing `Fn` by value (init-capture-free, named explicitly)
+    // would be ill-formed under /permissive- with a default capture, so we
+    // use an explicit capture list with no default and name Fn there.
+    auto addBinary = [&](Opcode Op, StringRef Name,
+                         std::function<Value *(IRBuilder<> &, Value *, Value *)>
+                             Fn) {
+      H.push_back({Op, Name, shapeOf(Op), [this, &C, Fn](IRBuilder<> &B) {
+                     Value *R = popStk(B, C);
+                     Value *L = popStk(B, C);
+                     pushStk(B, C, Fn(B, L, R));
+                     B.CreateBr(C.Dispatch);
+                   }});
+    };
+    addBinary(OpAdd, "add",
+              [](IRBuilder<> &B, Value *L, Value *R) {
+                return B.CreateAdd(L, R);
+              });
+    addBinary(OpSub, "sub",
+              [](IRBuilder<> &B, Value *L, Value *R) {
+                return B.CreateSub(L, R);
+              });
+    addBinary(OpXor, "xor",
+              [](IRBuilder<> &B, Value *L, Value *R) {
+                return B.CreateXor(L, R);
+              });
+
+    auto addCmp = [&](Opcode Op, StringRef Name, CmpInst::Predicate Pred) {
+      // Pred (by-value param) and C.I64 are captured by value into the
+      // owned std::function so they survive after addCmp returns.
+      addBinary(Op, Name,
+                [Pred, I64 = C.I64](IRBuilder<> &B, Value *L, Value *R) {
+                  return B.CreateZExt(B.CreateICmp(Pred, L, R), I64);
+                });
+    };
+    addCmp(OpCmpEq, "cmpeq", CmpInst::ICMP_EQ);
+    addCmp(OpCmpNe, "cmpne", CmpInst::ICMP_NE);
+    addCmp(OpCmpSgt, "cmpsgt", CmpInst::ICMP_SGT);
+    addCmp(OpCmpSlt, "cmpslt", CmpInst::ICMP_SLT);
+    addCmp(OpCmpSge, "cmpsge", CmpInst::ICMP_SGE);
+    addCmp(OpCmpSle, "cmpsle", CmpInst::ICMP_SLE);
+
+    H.push_back({OpSelect, "select", shapeOf(OpSelect),
+                 [this, &C](IRBuilder<> &B) {
+                   Value *FalseV = popStk(B, C);
+                   Value *TrueV = popStk(B, C);
+                   Value *CondV = popStk(B, C);
+                   pushStk(B, C,
+                           B.CreateSelect(
+                               B.CreateICmpNE(CondV,
+                                              ConstantInt::get(C.I64, 0)),
+                               TrueV, FalseV));
+                   B.CreateBr(C.Dispatch);
+                 }});
+
+    H.push_back({OpJmp, "jmp", shapeOf(OpJmp),
+                 [this, &C](IRBuilder<> &B) {
+                   B.CreateStore(fetchWord(B, C), C.PC);
+                   B.CreateBr(C.Dispatch);
+                 }});
+    H.push_back({OpBrTrue, "brtrue", shapeOf(OpBrTrue),
+                 [this, &C](IRBuilder<> &B) {
+                   Value *Target = fetchWord(B, C);
+                   Value *Cond = popStk(B, C);
+                   BasicBlock *SetTarget =
+                       BasicBlock::Create(*C.Ctx, "brtrue.set", C.F);
+                   B.CreateCondBr(
+                       B.CreateICmpNE(Cond, ConstantInt::get(C.I64, 0)),
+                       SetTarget, C.Dispatch);
+                   B.SetInsertPoint(SetTarget);
+                   B.CreateStore(Target, C.PC);
+                   B.CreateBr(C.Dispatch);
+                 }});
+    H.push_back({OpRet, "ret", shapeOf(OpRet),
+                 [this, &C](IRBuilder<> &B) { B.CreateRet(popStk(B, C)); }});
+
+    return H;
   }
 
   Function *getOrCreateInterpreter(Module &M) {
@@ -341,95 +563,20 @@ struct CodeVirtualization : public ModulePass {
     Value *OpPC = B.CreateLoad(I64, PC);
     Value *Op = B.CreateLoad(I64, B.CreateGEP(I64, BC, OpPC));
     B.CreateStore(B.CreateAdd(OpPC, ConstantInt::get(I64, 1)), PC);
-    auto *Sw = B.CreateSwitch(Op, Bad, 17);
 
-    auto makeCase = [&](Opcode OpCode, StringRef Name) {
-      BasicBlock *BB = BasicBlock::Create(Ctx, Name, F);
-      Sw->addCase(cast<ConstantInt>(ConstantInt::get(I64, OpCode)), BB);
-      B.SetInsertPoint(BB);
-      return BB;
-    };
-    auto fetch = [&]() {
-      Value *Cur = B.CreateLoad(I64, PC);
-      Value *Word = B.CreateLoad(I64, B.CreateGEP(I64, BC, Cur));
-      B.CreateStore(B.CreateAdd(Cur, ConstantInt::get(I64, 1)), PC);
-      return Word;
-    };
+    // ponytail: Build handler table, then emit one switch case per entry.
+    // The table is the source of truth; the switch is generated from it.
+    InterpCtx IC{I64, F,     &Ctx, BC,     PC,     SP,
+                Stack, Locals, Args, Dispatch};
+    SmallVector<Handler, 24> Handlers = buildHandlerTable(IC);
+    auto *Sw = B.CreateSwitch(Op, Bad, Handlers.size());
 
-    makeCase(OpInitArg, "initarg");
-    Value *Slot = fetch();
-    Value *ArgNo = fetch();
-    Value *ArgVal = B.CreateLoad(I64, B.CreateGEP(I64, Args, ArgNo));
-    B.CreateStore(ArgVal, B.CreateGEP(I64, Locals, Slot));
-    B.CreateBr(Dispatch);
-
-    makeCase(OpPushConst, "pushconst");
-    push(B, I64, Stack, SP, fetch());
-    B.CreateBr(Dispatch);
-
-    makeCase(OpLoadSlot, "loadslot");
-    push(B, I64, Stack, SP, B.CreateLoad(I64, B.CreateGEP(I64, Locals, fetch())));
-    B.CreateBr(Dispatch);
-
-    makeCase(OpStoreSlot, "storeslot");
-    B.CreateStore(pop(B, I64, Stack, SP), B.CreateGEP(I64, Locals, fetch()));
-    B.CreateBr(Dispatch);
-
-    auto makeBinary = [&](Opcode OpCode, StringRef Name,
-                          function_ref<Value *(Value *, Value *)> Fn) {
-      makeCase(OpCode, Name);
-      Value *R = pop(B, I64, Stack, SP);
-      Value *L = pop(B, I64, Stack, SP);
-      push(B, I64, Stack, SP, Fn(L, R));
-      B.CreateBr(Dispatch);
-    };
-    makeBinary(OpAdd, "add", [&](Value *L, Value *R) {
-      return B.CreateAdd(L, R);
-    });
-    makeBinary(OpSub, "sub", [&](Value *L, Value *R) {
-      return B.CreateSub(L, R);
-    });
-    makeBinary(OpXor, "xor", [&](Value *L, Value *R) {
-      return B.CreateXor(L, R);
-    });
-
-    auto makeCmp = [&](Opcode OpCode, StringRef Name, CmpInst::Predicate Pred) {
-      makeBinary(OpCode, Name, [&](Value *L, Value *R) {
-        return B.CreateZExt(B.CreateICmp(Pred, L, R), I64);
-      });
-    };
-    makeCmp(OpCmpEq, "cmpeq", CmpInst::ICMP_EQ);
-    makeCmp(OpCmpNe, "cmpne", CmpInst::ICMP_NE);
-    makeCmp(OpCmpSgt, "cmpsgt", CmpInst::ICMP_SGT);
-    makeCmp(OpCmpSlt, "cmpslt", CmpInst::ICMP_SLT);
-    makeCmp(OpCmpSge, "cmpsge", CmpInst::ICMP_SGE);
-    makeCmp(OpCmpSle, "cmpsle", CmpInst::ICMP_SLE);
-
-    makeCase(OpSelect, "select");
-    Value *FalseV = pop(B, I64, Stack, SP);
-    Value *TrueV = pop(B, I64, Stack, SP);
-    Value *CondV = pop(B, I64, Stack, SP);
-    push(B, I64, Stack, SP,
-         B.CreateSelect(B.CreateICmpNE(CondV, ConstantInt::get(I64, 0)), TrueV,
-                        FalseV));
-    B.CreateBr(Dispatch);
-
-    makeCase(OpJmp, "jmp");
-    B.CreateStore(fetch(), PC);
-    B.CreateBr(Dispatch);
-
-    makeCase(OpBrTrue, "brtrue");
-    Value *Target = fetch();
-    Value *Cond = pop(B, I64, Stack, SP);
-    B.CreateCondBr(B.CreateICmpNE(Cond, ConstantInt::get(I64, 0)),
-                   BasicBlock::Create(Ctx, "brtrue.set", F), Dispatch);
-    BasicBlock *SetTarget = &F->back();
-    B.SetInsertPoint(SetTarget);
-    B.CreateStore(Target, PC);
-    B.CreateBr(Dispatch);
-
-    makeCase(OpRet, "ret");
-    B.CreateRet(pop(B, I64, Stack, SP));
+    for (Handler &H : Handlers) {
+      BasicBlock *CaseBB = BasicBlock::Create(Ctx, H.Name, F);
+      Sw->addCase(cast<ConstantInt>(ConstantInt::get(I64, H.Op)), CaseBB);
+      B.SetInsertPoint(CaseBB);
+      H.Emit(B);
+    }
 
     B.SetInsertPoint(Bad);
     B.CreateRet(ConstantInt::get(I64, 0));
