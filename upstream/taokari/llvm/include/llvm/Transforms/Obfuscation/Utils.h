@@ -48,10 +48,15 @@ void fixStack(Function *f);
 CallBase *fixEH(CallBase *CB);
 void LowerConstantExpr(Function &F);
 bool expandConstantExpr(Function &F);
+AllocaInst *createConstantSeedCache(Function &F, std::mt19937_64 &rng,
+                                    bool volatileSeed);
 void createPageTable(const CreatePageTableArgs &args);
 void enhancedPageTable(const CreatePageTableArgs &args,
                        DenseMap<Constant *, unsigned> *FuncIndexMap);
 Value *buildPageTableDecryptIR(const BuildDecryptArgs &args);
 Value *encryptConstant(Constant *plainConstant, Instruction *insertBefore,
-                       std::mt19937_64 &rng, unsigned level);
+                       std::mt19937_64 &rng, unsigned level,
+                       AllocaInst *SeedCache = nullptr,
+                       bool volatileSeed = true,
+                       bool decryptorMBA = false);
 #endif

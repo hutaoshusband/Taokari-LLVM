@@ -26,6 +26,8 @@ protected:
   // than this are skipped (cheap, low-value, blows up code size). 0 = use
   // the pass's built-in floor (currently 8 bits).
   uint32_t    MinConstSize = 0;
+  uint32_t    VolatileSeed = 1;
+  uint32_t    ConstDecryptorMBA = 0;
 
 public:
   ObfOpt(bool enable, uint32_t level, const std::string &attributeName) {
@@ -95,7 +97,7 @@ public:
   }
 
   void setProbability(uint32_t probability) {
-    this->Probability = std::min<uint32_t>(probability, 100);
+    this->Probability = probability <= 100 ? probability : 101;
   }
 
   uint32_t probability() const {
@@ -118,12 +120,37 @@ public:
     return this->MinConstSize;
   }
 
+  void setVolatileSeed(bool volatileSeed) {
+    this->VolatileSeed = volatileSeed;
+  }
+
+  bool volatileSeed() const {
+    return this->VolatileSeed;
+  }
+
+  void setConstDecryptorMBA(bool constDecryptorMBA) {
+    this->ConstDecryptorMBA = constDecryptorMBA;
+  }
+
+  bool constDecryptorMBA() const {
+    return this->ConstDecryptorMBA;
+  }
+
   const std::string &attributeName() const {
     return this->AttributeName;
   }
 
   ObfOpt none() const {
-    return ObfOpt{false, 0, this->attributeName()};
+    ObfOpt Result{false, 0, this->attributeName()};
+    Result.setMaxInsts(MaxInsts);
+    Result.setMaxBlocks(MaxBlocks);
+    Result.setMaxAllocas(MaxAllocas);
+    Result.setProbability(Probability);
+    Result.setLoopCount(LoopCount);
+    Result.setMinConstSize(MinConstSize);
+    Result.setVolatileSeed(VolatileSeed);
+    Result.setConstDecryptorMBA(ConstDecryptorMBA);
+    return Result;
   }
 
 };

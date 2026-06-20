@@ -161,6 +161,24 @@ std::shared_ptr<ObfuscationOptions> ObfuscationOptions::readConfigFile(
         }
         obfOpt->setMinConstSize(static_cast<uint32_t>(*minConstSize));
       }
+      if (const auto *volatileSeedValue = optObj->get("volatileSeed")) {
+        auto volatileSeed = volatileSeedValue->getAsBoolean();
+        if (!volatileSeed) {
+          reportConfigError(FileName,
+                            obfOpt->attributeName() +
+                            ".volatileSeed must be boolean");
+        }
+        obfOpt->setVolatileSeed(*volatileSeed);
+      }
+      if (const auto *decryptorMbaValue = optObj->get("decryptorMba")) {
+        auto decryptorMba = decryptorMbaValue->getAsBoolean();
+        if (!decryptorMba) {
+          reportConfigError(FileName,
+                            obfOpt->attributeName() +
+                            ".decryptorMba must be boolean");
+        }
+        obfOpt->setConstDecryptorMBA(*decryptorMba);
+      }
     };
 
     std::string key = obj.getFirst().str();
@@ -313,6 +331,12 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
   }
   result.setProbability(option->probability());
   result.setLoopCount(option->loopCount());
+  result.setMaxInsts(option->maxInsts());
+  result.setMaxBlocks(option->maxBlocks());
+  result.setMaxAllocas(option->maxAllocas());
+  result.setMinConstSize(option->minConstSize());
+  result.setVolatileSeed(option->volatileSeed());
+  result.setConstDecryptorMBA(option->constDecryptorMBA());
   return result;
 }
 

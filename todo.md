@@ -292,14 +292,14 @@ Main weakness: pure constant-expression transformations can sometimes be folded 
 
 ## Level 2 — Runtime-Mixed Constants
 
-* [ ] Add global runtime nonce
-* [ ] Mix decryptor with runtime load
-* [ ] Add volatile seed option
-* [ ] Add per-function seed mixing
-* [ ] Add cache at function entry
-* [ ] Keep dedup cache pattern
-* [ ] Prevent re-encryption recursion
-* [ ] Add constant decryptor MBA option
+* [x] Add global runtime nonce
+* [x] Mix decryptor with runtime load
+* [x] Add volatile seed option
+* [x] Add per-function seed mixing
+* [x] Add cache at function entry
+* [x] Keep dedup cache pattern
+* [x] Prevent re-encryption recursion
+* [x] Add constant decryptor MBA option
 
 ## Level 3 — Fortress Constants
 

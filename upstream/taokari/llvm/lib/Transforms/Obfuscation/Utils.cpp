@@ -14,6 +14,68 @@
 #include <random>
 #include <algorithm>
 
+static void markNoObf(Value *V) {
+  if (auto *I = dyn_cast<Instruction>(V))
+    I->setMetadata("noobf", MDNode::get(I->getContext(), {}));
+}
+
+static GlobalVariable *getOrCreateConstantNonce(Module &M, uint64_t Seed) {
+  if (auto *GV = M.getGlobalVariable("__taokari_const_nonce", true))
+    return GV;
+  auto *Int64 = Type::getInt64Ty(M.getContext());
+  auto *GV = new GlobalVariable(
+      M, Int64, false, GlobalValue::InternalLinkage,
+      ConstantInt::get(Int64, Seed), "__taokari_const_nonce");
+  GV->addMetadata("noobf", *MDNode::get(M.getContext(), {}));
+  return GV;
+}
+
+static Value *buildMBAAdd(IRBuilder<NoFolder> &IRB, Value *A, Value *B,
+                          const Twine &Name) {
+  Value *Xor = IRB.CreateXor(A, B, Name + ".mba.xor");
+  markNoObf(Xor);
+  Value *And = IRB.CreateAnd(A, B, Name + ".mba.and");
+  markNoObf(And);
+  Value *Carry = IRB.CreateShl(And, ConstantInt::get(A->getType(), 1),
+                               Name + ".mba.carry");
+  markNoObf(Carry);
+  Value *Add = IRB.CreateAdd(Xor, Carry, Name + ".mba.add");
+  markNoObf(Add);
+  return Add;
+}
+
+AllocaInst *createConstantSeedCache(Function &F, std::mt19937_64 &rng,
+                                    bool volatileSeed) {
+  auto &EntryBB = F.getEntryBlock();
+  auto &Ctx = F.getContext();
+  auto *Int64 = Type::getInt64Ty(Ctx);
+  IRBuilder<NoFolder> AIB(&*EntryBB.begin());
+  auto *Slot = AIB.CreateAlloca(Int64, nullptr, "taokari.const.seed.cache");
+  markNoObf(Slot);
+
+  Instruction *InsertPt = EntryBB.getTerminator();
+  for (auto &I : EntryBB) {
+    if (!isa<AllocaInst>(&I)) {
+      InsertPt = &I;
+      break;
+    }
+  }
+
+  IRBuilder<NoFolder> IRB(InsertPt);
+  auto *NonceGV = getOrCreateConstantNonce(*F.getParent(), rng());
+  auto *Nonce = IRB.CreateAlignedLoad(Int64, NonceGV, Align{8},
+                                      "taokari.const.nonce");
+  Nonce->setVolatile(volatileSeed);
+  markNoObf(Nonce);
+  Value *Seed = IRB.CreateXor(Nonce, ConstantInt::get(Int64, rng()),
+                              "taokari.const.func.seed");
+  markNoObf(Seed);
+  auto *Store = IRB.CreateAlignedStore(Seed, Slot, Align{8});
+  Store->setVolatile(volatileSeed);
+  markNoObf(Store);
+  return Slot;
+}
+
 // Shamefully borrowed from ../Scalar/RegToMem.cpp :(
 bool valueEscapes(Instruction *Inst) {
   BasicBlock *BB = Inst->getParent();
@@ -533,7 +595,9 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
 }
 
 Value *encryptConstant(Constant *plainConstant, Instruction *insertBefore,
-                       std::mt19937_64 &rng, unsigned level) {
+                       std::mt19937_64 &rng, unsigned level,
+                       AllocaInst *SeedCache, bool volatileSeed,
+                       bool decryptorMBA) {
   auto &Ctx = insertBefore->getContext();
   auto  OriginValTy = plainConstant->getType();
   if (OriginValTy->isStructTy() || OriginValTy->isArrayTy() || OriginValTy->
@@ -570,16 +634,55 @@ Value *encryptConstant(Constant *plainConstant, Instruction *insertBefore,
                                   GlobalValue::InternalLinkage, Enc);
   EncGV->addMetadata("noobf", *MDNode::get(Ctx, {}));
   IRBuilder<NoFolder> IRB(insertBefore);
-  Value *Load = IRB.CreateAlignedLoad(Enc->getType(), EncGV, Align{1}, true);
+  auto *EncLoad = IRB.CreateAlignedLoad(Enc->getType(), EncGV, Align{1}, true);
+  markNoObf(EncLoad);
+  Value *Load = EncLoad;
+  auto loadSeed = [&](const Twine &Name) -> Value * {
+    auto *SeedLoad = IRB.CreateAlignedLoad(Type::getInt64Ty(Ctx), SeedCache,
+                                           Align{8}, Name);
+    SeedLoad->setVolatile(volatileSeed);
+    markNoObf(SeedLoad);
+    Value *Seed = SeedLoad;
+    auto *KeyTy = Key->getType();
+    if (BitWidth < 64) {
+      Seed = IRB.CreateTrunc(Seed, KeyTy, Name + ".trunc");
+      markNoObf(Seed);
+    } else if (BitWidth > 64) {
+      Seed = IRB.CreateZExt(Seed, KeyTy, Name + ".zext");
+      markNoObf(Seed);
+    }
+    return Seed;
+  };
+  if (SeedCache) {
+    Load = IRB.CreateXor(Load, loadSeed("taokari.const.seed.a"),
+                         "taokari.const.seed.mix");
+    markNoObf(Load);
+  }
   if (level) {
     if (level > 2) {
-      Load = IRB.CreateXor(Load, IRB.CreateNeg(XorKey));
+      Value *NegKey = IRB.CreateNeg(XorKey);
+      markNoObf(NegKey);
+      Load = IRB.CreateXor(Load, NegKey);
+      markNoObf(Load);
     }
     if (level > 1) {
-      Load = IRB.CreateXor(Load, IRB.CreateAdd(XorKey, Key));
+      Value *AddKey = IRB.CreateAdd(XorKey, Key);
+      markNoObf(AddKey);
+      Load = IRB.CreateXor(Load, AddKey);
+      markNoObf(Load);
     }
     Load = IRB.CreateXor(Load, XorKey);
+    markNoObf(Load);
   }
-  Load = IRB.CreateAdd(Load, Key);
-  return IRB.CreateBitCast(Load, OriginValTy);
+  if (SeedCache) {
+    Load = IRB.CreateXor(Load, loadSeed("taokari.const.seed.b"),
+                         "taokari.const.seed.unmix");
+    markNoObf(Load);
+  }
+  Load = decryptorMBA ? buildMBAAdd(IRB, Load, Key, "taokari.const.decrypt")
+                      : IRB.CreateAdd(Load, Key);
+  markNoObf(Load);
+  Value *Cast = IRB.CreateBitCast(Load, OriginValTy);
+  markNoObf(Cast);
+  return Cast;
 }

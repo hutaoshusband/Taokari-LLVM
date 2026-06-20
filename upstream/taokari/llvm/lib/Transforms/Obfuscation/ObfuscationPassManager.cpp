@@ -131,6 +131,15 @@ TaokariLevelIRConstantFPEncryption("taokari-level-cfe",
                                    cl::desc("Alias for -level-cfe"),
                                    cl::aliasopt(LevelIRConstantFPEncryption));
 
+static cl::opt<bool>
+TaokariConstVolatileSeed("taokari-const-volatile-seed", cl::init(true),
+                         cl::NotHidden,
+                         cl::desc("Use volatile runtime seed loads in constant decryptors."));
+static cl::opt<bool>
+TaokariConstDecryptorMBA("taokari-const-decryptor-mba", cl::init(false),
+                         cl::NotHidden,
+                         cl::desc("Use MBA for final constant decryptor add."));
+
 
 static cl::opt<bool>
 EnableRttiEraser("irobf-rtti", cl::init(false), cl::NotHidden,
@@ -245,6 +254,14 @@ struct ObfuscationPassManager : public ModulePass {
                            LevelIRConstantIntEncryption);
     Opt->cfeOpt()->readOpt(EnableIRConstantFPEncryption,
                            LevelIRConstantFPEncryption);
+    if (TaokariConstVolatileSeed.getNumOccurrences()) {
+      Opt->cieOpt()->setVolatileSeed(TaokariConstVolatileSeed);
+      Opt->cfeOpt()->setVolatileSeed(TaokariConstVolatileSeed);
+    }
+    if (TaokariConstDecryptorMBA.getNumOccurrences()) {
+      Opt->cieOpt()->setConstDecryptorMBA(TaokariConstDecryptorMBA);
+      Opt->cfeOpt()->setConstDecryptorMBA(TaokariConstDecryptorMBA);
+    }
     Opt->bcfOpt()->readOpt(EnableBogusControlFlow, LevelBogusControlFlow);
     Opt->rttiOpt()->readOpt(EnableRttiEraser);
     return Opt;

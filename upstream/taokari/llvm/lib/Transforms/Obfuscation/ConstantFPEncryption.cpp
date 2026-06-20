@@ -55,6 +55,9 @@ struct ConstantFPEncryption : public FunctionPass {
       Changed |= expandConstantExpr(F);
       for (auto &BB : F) {
         for (auto &I : BB) {
+          if (I.hasMetadata("noobf")) {
+            continue;
+          }
           if (I.isEHPad() || isa<AllocaInst>(&I) ||
               isa<IntrinsicInst>(&I) || isa<SwitchInst>(I) ||
               I.isAtomic()) {
@@ -101,10 +104,17 @@ struct ConstantFPEncryption : public FunctionPass {
     // Effective minimum constant width: built-in floor (8 bits) raised by
     // the user-configured minConstSize. Narrower FP types are skipped.
     const unsigned MinBits = std::max(8u, opt.minConstSize());
+    const bool UseRuntimeSeed = opt.level() >= 2;
+    AllocaInst *SeedCache = UseRuntimeSeed
+                                 ? createConstantSeedCache(F, RNG,
+                                                           opt.volatileSeed())
+                                 : nullptr;
 
     // Count constant occurrences for deduplication
     DenseMap<ConstantFP *, unsigned> ConstUseCount;
     for (auto I : FuncModifyIRs) {
+      if (I->hasMetadata("noobf"))
+        continue;
       auto CI = dyn_cast<CallInst>(I);
       auto GEP = dyn_cast<GetElementPtrInst>(I);
       auto PHI = dyn_cast<PHINode>(I);
@@ -150,13 +160,18 @@ struct ConstantFPEncryption : public FunctionPass {
       if (!DecryptPt)
         DecryptPt = EntryBB.getTerminator();
       for (auto &KV : DedupCache) {
-        Value *Dec = encryptConstant(KV.first, DecryptPt, RNG, opt.level());
+        Value *Dec = encryptConstant(KV.first, DecryptPt, RNG, opt.level(),
+                                     SeedCache, opt.volatileSeed(),
+                                     opt.constDecryptorMBA());
         IRBuilder<NoFolder> SIB(DecryptPt);
-        SIB.CreateAlignedStore(Dec, KV.second, Align{1}, true);
+        auto *Store = SIB.CreateAlignedStore(Dec, KV.second, Align{1}, true);
+        Store->setMetadata("noobf", MDNode::get(F.getContext(), {}));
       }
     }
 
     for (auto I : FuncModifyIRs) {
+      if (I->hasMetadata("noobf"))
+        continue;
       auto CI = dyn_cast<CallInst>(I);
       auto GEP = dyn_cast<GetElementPtrInst>(I);
       auto PHI = dyn_cast<PHINode>(I);
@@ -185,7 +200,9 @@ struct ConstantFPEncryption : public FunctionPass {
                 CFP->getType(), CacheIt->second, Align{1}, true);
           } else {
             CipherConstant = encryptConstant(CFP, InsertPoint, RNG,
-                                             opt.level());
+                                             opt.level(), SeedCache,
+                                             opt.volatileSeed(),
+                                             opt.constDecryptorMBA());
           }
           if (PHI)
             PHI->setIncomingValue(i, CipherConstant);
