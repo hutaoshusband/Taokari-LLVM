@@ -657,6 +657,58 @@ This should be treated as advanced / expensive protection.
 * [x] Add minimal VM interpreter
 * [x] Add one toy test function
 
+## Level 1.5 — Capability & Safety Bridge
+
+Motivation: L1 only handles `add/sub/xor`, signed compares, `select`,
+`br`, `ret`. `hasUnsupportedIR` rejects every function with `mul`, `and`,
+`or`, shifts, unsigned compares, `phi`, real loads/stores, atomics, or
+casts. The single test (`vmp_basic`) is `(a+b)^17` + one `if`. Jumping
+straight to L2 (bytecode encryption, per-function opcode mapping, handler
+shuffling/flattening) would build crypto on top of a VM that almost no
+real function qualifies for, with no way to catch regressions.
+
+This tier widens coverage, refactors the dispatch so L2 has something to
+shuffle, and adds the differential test harness + benchmark that L2's
+correctness/performance claims depend on.
+
+### 1.5.1 — Widen IR Coverage (unblocks "Virtualize selected functions")
+
+* [ ] Add integer binary: `Mul`, `And`, `Or`, `Shl`, `LShr`, `AShr`
+* [ ] Add integer div/rem: `SDiv`, `UDiv`, `SRem`, `URem`
+* [ ] Add unsigned compares: `UGT`, `ULT`, `UGE`, `ULE`
+* [ ] Handle `PHINode` (lower to slot copies in predecessors → unlocks loops)
+* [ ] Handle real `LoadInst`/`StoreInst` with pointer operands (memory
+      opcode should mean real memory, not just locals)
+* [ ] Track per-operand width/signedness instead of blind i64 promotion
+* [ ] Audit `SExtOrTrunc` arg path for sign/width correctness under new ops
+
+### 1.5.2 — Refactor Handler Table (unblocks shuffling / opcode mapping / fake handlers)
+
+* [ ] Replace inline `switch` with handler descriptor table (name, arity, builder)
+* [ ] Make opcodes table indices, not magic numbers `1..17`
+* [ ] Add per-handler arity/validation
+
+### 1.5.3 — Differential Correctness Harness (must precede any dispatch/encryption change)
+
+* [ ] Build case function per opcode (binary, cmp, select, shift, div/rem)
+* [ ] Add loop + nested branch + multi-return case functions
+* [ ] Run each case compiled native vs VMP over input grid, compare outputs
+* [ ] This is what catches the i64-promotion class of bug before L2
+
+### 1.5.4 — Baseline Benchmark + Safety Bounds
+
+* [ ] Measure interpreter overhead vs native (baseline for L2 benchmark)
+* [ ] Add build-time stack-depth check (current 64-slot stack silently overflows)
+* [ ] Add PC bounds check in interpreter (matters once L2 encrypts bytecode)
+* [ ] Add locals-slot count check (current 64 silent cap)
+
+**Definition of done for L1.5:**
+Each new opcode is differentially tested native vs VM. The dispatcher is
+table-driven so L2 can shuffle/map without rewriting the interpreter. Real
+functions (loops, pointer loads, multi-return) virtualize and pass the
+differential harness. A baseline benchmark exists so L2 overhead claims are
+measurable.
+
 ## Level 2 — Practical VM
 
 * [ ] Virtualize selected functions
