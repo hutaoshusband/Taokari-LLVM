@@ -262,6 +262,16 @@ bool Flattening::flatten(Function *f) {
     switchI->addCase(CaseVal[bb], bb);
   }
 
+  const size_t fakeCaseCount = std::max<size_t>(1, origBB.size() / 2);
+  for (size_t i = 0; i < fakeCaseCount; ++i) {
+    uint64_t v;
+    do {
+      v = randWord();
+    } while (v == 0 || UsedCases.count(v));
+    UsedCases.insert(v);
+    switchI->addCase(ConstantInt::get(IntTy, v), swDefaultJunk);
+  }
+
   // Recalculate switchVar
   for (auto bi = origBB.begin(); bi != origBB.end(); ++bi) {
     const auto bb = *bi;
