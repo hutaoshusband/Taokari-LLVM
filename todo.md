@@ -355,17 +355,17 @@ Main weakness: plaintext decrypt status and predictable decrypt flow.
 
 ## Level 3 — Fortress StringEnc
 
-* [ ] Add polymorphic decryptors
-* [ ] Add decryptor MBA
-* [ ] Add decryptor flattening
-* [ ] Add decryptor indirect calls
-* [ ] Add string shards
-* [ ] Add split string pools
-* [ ] Add fake string pools
-* [ ] Add string access through page table
-* [ ] Add delayed decrypt mode
-* [ ] Add memory lifetime tests
-* [ ] Add string dump resistance tests
+* [x] Add polymorphic decryptors
+* [x] Add decryptor MBA
+* [x] Add decryptor flattening
+* [x] Add decryptor indirect calls
+* [x] Add string shards
+* [x] Add split string pools
+* [x] Add fake string pools
+* [x] Add string access through page table
+* [x] Add delayed decrypt mode
+* [x] Add memory lifetime tests
+* [x] Add string dump resistance tests
 
 **Definition of done for L3:**
 A `strings` scan should reveal nothing important, and a memory dump should not trivially contain every decrypted string forever.
