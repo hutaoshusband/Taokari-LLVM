@@ -287,13 +287,32 @@ bool Flattening::flatten(Function *f) {
 
     IRB.SetInsertPoint(bb->getTerminator());
 
+    auto buildXorExpr = [&](Value *LHS, Value *RHS,
+                            const Twine &Name) -> Value * {
+      if ((RNG() & 1) == 0) {
+        return IRB.CreateXor(LHS, RHS, Name);
+      }
+      Value *orV = IRB.CreateOr(LHS, RHS);
+      Value *andV = IRB.CreateAnd(LHS, RHS);
+      return IRB.CreateAnd(orV, IRB.CreateNot(andV), Name);
+    };
+
     auto writeNextEncoded = [&](Value *NextCaseVal) {
-      // NextEnc = NextCase ^ NewXor
-      ConstantInt *newXor = randConst();
-      Value *      nextEnc = IRB.CreateXor(NextCaseVal, newXor);
+      Value *nextXor = randConst();
+      switch (RNG() % 3) {
+      case 1:
+        nextXor = IRB.CreateNot(nextXor, "nextXor.not");
+        break;
+      case 2:
+        nextXor = buildXorExpr(nextXor, randConst(), "nextXor.mix");
+        break;
+      default:
+        break;
+      }
+      Value *nextEnc = buildXorExpr(NextCaseVal, nextXor, "nextEnc");
 
       IRB.CreateStore(nextEnc, switchVar, true);
-      IRB.CreateStore(newXor, switchXorVar, true);
+      IRB.CreateStore(nextXor, switchXorVar, true);
 
       IRB.CreateBr(bbLoopEnd);
       bb->getTerminator()->eraseFromParent();
