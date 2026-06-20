@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import shutil
 import subprocess
@@ -17,6 +18,9 @@ DEFAULT_CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
 DEFAULT_CLANG_CL = ROOT / "build" / "taokari-local" / "bin" / "clang-cl.exe"
 VSDEVCMD = Path(r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat")
 
+# Base obfuscation flags: every IR pass enabled at once. RTTI is excluded
+# here because the RTTI eraser needs a randomSeed from a config file; it is
+# enabled via the dedicated --rtti matrix axis instead.
 OBF_FLAGS = [
     "-O2",
     "-mllvm", "-taokari",
@@ -28,6 +32,10 @@ OBF_FLAGS = [
     "-mllvm", "-taokari-cie",
     "-mllvm", "-taokari-cfe",
 ]
+# Passes that accept a 0-3 level. The harness permutes these via --level.
+LEVEL_PASSES = ["indbr", "icall", "indgv", "fla", "cie", "cfe"]
+RTTI_CONFIG = TESTING / "configs" / "rtti.json"
+
 COLOR = {
     "reset": "\033[0m",
     "blue": "\033[36m",
@@ -84,6 +92,11 @@ CASES = [
         # Ported from FireflyProtector/test64/realworld_c. Output is deterministic.
         "FireflyRealWorldFixture:bf3bec2ca306c59b:d0029f74\n",
     ),
+    Case(
+        "flattening_stress",
+        (case_path("flattening_stress") / "src" / "main.cpp",),
+        "flattening-stress:2287845297:2439064602\n",
+    ),
     Case("c_seh", (case_path("c_seh") / "src" / "main.c",), "seh:12:16\n"),
     Case("cpp_funclet", (case_path("cpp_funclet") / "src" / "main.cpp",), "funclet:14:24\n"),
     # Constant encryption folding-risk fixture: int/FP constants across widths,
@@ -132,7 +145,14 @@ def object_name(source: Path) -> str:
     return "_".join(source.with_suffix("").parts[-4:]) + ".obj"
 
 
-def compile_case(clang: Path, case: Case, mode: str = "default") -> Path:
+def compile_case(
+    clang: Path,
+    case: Case,
+    mode: str = "default",
+    *,
+    obfuscate: bool = True,
+    fla_level: int | None = None,
+) -> Path:
     case_root = case_path(case.name)
     build = case_root / "build"
     obj = case_root / "obj"
@@ -158,8 +178,10 @@ def compile_case(clang: Path, case: Case, mode: str = "default") -> Path:
             # clang-cl defaults to /EHs-c- (exceptions off); C++ tests need them.
             cmd.append("/EHsc")
         cmd += [f"-I{include}" for include in case.includes]
-        if not case.obfuscate_sources or source in case.obfuscate_sources:
+        if obfuscate and (not case.obfuscate_sources or source in case.obfuscate_sources):
             cmd += OBF_FLAGS
+            if fla_level is not None:
+                cmd += ["-mllvm", f"-taokari-level-fla={fla_level}"]
         cmd += extra
         cmd += ["-o", str(out)]
         result = run(cmd, use_vs_env=True)
@@ -190,6 +212,19 @@ def compile_case(clang: Path, case: Case, mode: str = "default") -> Path:
     return exe
 
 
+def measure_runtime(exe: Path, rounds: int = 3) -> tuple[float, subprocess.CompletedProcess[str]]:
+    best = float("inf")
+    last = None
+    for _ in range(rounds):
+        start = time.perf_counter()
+        last = run([str(exe)])
+        best = min(best, time.perf_counter() - start)
+        if last.returncode:
+            break
+    assert last is not None
+    return best, last
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compile and run Taokari obfuscation tests.")
     parser.add_argument("--clang", type=Path, default=DEFAULT_CLANG)
@@ -198,6 +233,10 @@ def main() -> int:
     parser.add_argument("--case", action="append",
                         help="case name(s) to run; repeatable. default: all")
     parser.add_argument("--keep-going", action="store_true")
+    parser.add_argument("--fla-level", type=int, choices=range(0, 4),
+                        help="append -taokari-level-fla=N to obfuscated compiles")
+    parser.add_argument("--benchmark-out", type=Path,
+                        help="write plain-vs-obfuscated compile/runtime/size CSV")
     args = parser.parse_args()
 
     clang = args.clang.resolve()
@@ -210,6 +249,7 @@ def main() -> int:
         return 2
 
     modes = args.mode or list(MODE_FLAGS)
+    benchmark_rows: list[dict[str, str | int | float]] = []
     failures = 0
     for mode in modes:
         driver = MODE_DRIVER[mode]
@@ -225,9 +265,37 @@ def main() -> int:
             tag = f"{mode}/{case.name}"
             log("RUN", tag, "yellow")
             try:
-                exe = compile_case(driver, case, mode)
-                log("EXEC", f"{tag}: {exe.relative_to(ROOT)}", "blue")
-                ran = run([str(exe)])
+                if args.benchmark_out:
+                    start = time.perf_counter()
+                    plain_exe = compile_case(driver, case, mode, obfuscate=False)
+                    plain_compile = time.perf_counter() - start
+                    plain_runtime, plain_run = measure_runtime(plain_exe)
+                    if plain_run.returncode != case.expected_exit or (
+                        case.expected_stdout is not None and plain_run.stdout != case.expected_stdout
+                    ):
+                        raise RuntimeError(f"plain benchmark run {tag} failed\n{plain_run.stdout}{plain_run.stderr}")
+
+                    start = time.perf_counter()
+                    exe = compile_case(driver, case, mode, fla_level=args.fla_level)
+                    obf_compile = time.perf_counter() - start
+                    obf_runtime, ran = measure_runtime(exe)
+                    benchmark_rows.append({
+                        "mode": mode,
+                        "case": case.name,
+                        "plain_compile_s": f"{plain_compile:.6f}",
+                        "obf_compile_s": f"{obf_compile:.6f}",
+                        "compile_overhead": f"{(obf_compile / plain_compile if plain_compile else 0):.6f}",
+                        "plain_runtime_s": f"{plain_runtime:.6f}",
+                        "obf_runtime_s": f"{obf_runtime:.6f}",
+                        "runtime_overhead": f"{(obf_runtime / plain_runtime if plain_runtime else 0):.6f}",
+                        "plain_size": plain_exe.stat().st_size,
+                        "obf_size": exe.stat().st_size,
+                        "size_overhead": f"{(exe.stat().st_size / plain_exe.stat().st_size if plain_exe.stat().st_size else 0):.6f}",
+                    })
+                else:
+                    exe = compile_case(driver, case, mode, fla_level=args.fla_level)
+                    log("EXEC", f"{tag}: {exe.relative_to(ROOT)}", "blue")
+                    ran = run([str(exe)])
                 if ran.returncode != case.expected_exit or (case.expected_stdout is not None and ran.stdout != case.expected_stdout):
                     raise RuntimeError(
                         f"run {tag}\n"
@@ -241,6 +309,13 @@ def main() -> int:
                 log("FAIL", f"{tag}: {exc}", "red")
                 if not args.keep_going:
                     return 1
+    if args.benchmark_out and benchmark_rows:
+        args.benchmark_out.parent.mkdir(parents=True, exist_ok=True)
+        with args.benchmark_out.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(benchmark_rows[0]))
+            writer.writeheader()
+            writer.writerows(benchmark_rows)
+        log("BENCH", str(args.benchmark_out), "green")
     return 1 if failures else 0
 
 
