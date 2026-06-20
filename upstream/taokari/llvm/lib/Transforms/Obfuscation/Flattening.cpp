@@ -226,6 +226,8 @@ bool Flattening::flatten(Function *f) {
 
   auto swDefault =
       BasicBlock::Create(f->getContext(), "switchDefault", f, bbLoopEnd);
+  auto swFakeCaseGate =
+      BasicBlock::Create(f->getContext(), "switchFakeCaseGate", f, bbLoopEnd);
   auto swDefaultJunk =
       BasicBlock::Create(f->getContext(), "switchDefaultJunk", f, bbLoopEnd);
   auto swTrap =
@@ -235,6 +237,16 @@ bool Flattening::flatten(Function *f) {
   Value *junkB = IRB.CreateAdd(junkA, randConst(), "defaultJunkB");
   IRB.CreateStore(junkB, switchXorVar, true);
   IRB.CreateBr(swDefaultJunk);
+
+  IRB.SetInsertPoint(swFakeCaseGate);
+  Value *fakeSeed = IRB.CreateLoad(IntTy, switchXorVar, "fakeSeed");
+  Value *fakeEven = IRB.CreateAnd(
+      IRB.CreateAdd(IRB.CreateMul(fakeSeed, fakeSeed), fakeSeed), randConst(),
+      "fakeEven");
+  Value *fakePred = IRB.CreateICmpEQ(
+      IRB.CreateAnd(fakeEven, ConstantInt::get(IntTy, 1)), ConstantInt::get(IntTy, 0),
+      "fakePred");
+  IRB.CreateCondBr(fakePred, swDefaultJunk, swTrap);
 
   IRB.SetInsertPoint(swDefaultJunk);
   Value *junkC = IRB.CreateXor(
@@ -273,7 +285,7 @@ bool Flattening::flatten(Function *f) {
       v = randWord();
     } while (v == 0 || UsedCases.count(v));
     UsedCases.insert(v);
-    switchI->addCase(ConstantInt::get(IntTy, v), swDefaultJunk);
+    switchI->addCase(ConstantInt::get(IntTy, v), swFakeCaseGate);
   }
 
   // Recalculate switchVar
