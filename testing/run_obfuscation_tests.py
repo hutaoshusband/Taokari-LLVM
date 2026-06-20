@@ -270,6 +270,7 @@ def main() -> int:
                     plain_exe = compile_case(driver, case, mode, obfuscate=False)
                     plain_compile = time.perf_counter() - start
                     plain_runtime, plain_run = measure_runtime(plain_exe)
+                    plain_size = plain_exe.stat().st_size
                     if plain_run.returncode != case.expected_exit or (
                         case.expected_stdout is not None and plain_run.stdout != case.expected_stdout
                     ):
@@ -288,9 +289,9 @@ def main() -> int:
                         "plain_runtime_s": f"{plain_runtime:.6f}",
                         "obf_runtime_s": f"{obf_runtime:.6f}",
                         "runtime_overhead": f"{(obf_runtime / plain_runtime if plain_runtime else 0):.6f}",
-                        "plain_size": plain_exe.stat().st_size,
+                        "plain_size": plain_size,
                         "obf_size": exe.stat().st_size,
-                        "size_overhead": f"{(exe.stat().st_size / plain_exe.stat().st_size if plain_exe.stat().st_size else 0):.6f}",
+                        "size_overhead": f"{(exe.stat().st_size / plain_size if plain_size else 0):.6f}",
                     })
                 else:
                     exe = compile_case(driver, case, mode, fla_level=args.fla_level)

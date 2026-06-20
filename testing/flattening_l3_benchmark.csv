@@ -1,0 +1,2 @@
+mode,case,plain_compile_s,obf_compile_s,compile_overhead,plain_runtime_s,obf_runtime_s,runtime_overhead,plain_size,obf_size,size_overhead
+default,flattening_stress,3.016684,2.898119,0.960697,0.006463,0.006704,1.037226,142848,151040,1.057348
