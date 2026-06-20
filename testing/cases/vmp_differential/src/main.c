@@ -1,0 +1,90 @@
+// VMP differential correctness harness (L1.5.3).
+//
+// One case function per IR feature currently supported by the VM. The
+// harness is compiled twice by verify_vmp_differential.py:
+//   * NATIVE build  -- VMP_ATTR is empty, case fns compile to plain native
+//                      code. This is the reference oracle.
+//   * VMP build     -- VMP_ATTR expands to __annotate__("+vmp"), so the case
+//                      fns are virtualized. Their output must match NATIVE.
+//
+// main() reads two integer inputs from argv and dispatches to each case,
+// printing "<case>:<a>:<b>:<result>\n". The Python driver sweeps a grid of
+// (a, b) pairs and diffs the two stdout streams.
+//
+// Constraints mirrored from CodeVirtualization.cpp::hasUnsupportedIR so the
+// case fns actually qualify for virtualization: integer-only args/return
+// (<=64 bits), <=8 args, no PHI/calls/allocas/loads/stores. Each case is kept
+// small and self-contained.
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+// VMP_CASE_ATTRS is injected via -D by the build driver:
+//   * NATIVE build  -- "__attribute__((noinline))" so case fns compile to plain
+//                      native code. This is the reference oracle.
+//   * VMP build     -- "__attribute__((noinline, annotate(\"+vmp\")))" so the
+//                      case fns are virtualized by CodeVirtualization.
+#ifndef VMP_CASE_ATTRS
+#define VMP_CASE_ATTRS __attribute__((noinline))
+#endif
+
+#define VMP_CASE(name, body) \
+  static int VMP_CASE_ATTRS name(int a, int b) body
+
+// --- Arithmetic: add/sub/xor (the only binary ops in L1). ---
+VMP_CASE(add_case, { return a + b; })
+VMP_CASE(sub_case, { return a - b; })
+VMP_CASE(xor_case, { return (a ^ b) ^ 17; })
+
+// --- Comparisons (signed only in L1). Result is 0/1 to keep it integer. ---
+VMP_CASE(cmpeq_case,  { return (a == b); })
+VMP_CASE(cmpne_case,  { return (a != b); })
+VMP_CASE(cmpsgt_case, { return (a > b); })
+VMP_CASE(cmpslt_case, { return (a < b); })
+VMP_CASE(cmpsge_case, { return (a >= b); })
+VMP_CASE(cmpsle_case, { return (a <= b); })
+
+// --- select ---
+VMP_CASE(select_case, { return (a > b) ? a + 7 : b - 3; })
+
+// --- branch + ret (one conditional, two returns) ---
+VMP_CASE(branch_case, {
+  int x = (a + b) ^ 5;
+  if (x > 40)
+    return x - b;
+  return x + a;
+})
+
+// --- combined: chained arithmetic + compare + select + branch ---
+VMP_CASE(mixed_case, {
+  int x = (a + b) ^ 17;
+  int y = x - a;
+  if (y > b) {
+    return (y == x) ? x + 1 : y - 1;
+  }
+  return (a < b) ? a ^ b : b ^ a;
+})
+
+int main(int argc, char **argv) {
+  if (argc < 3) {
+    fprintf(stderr, "usage: %s <a> <b>\n", argv[0]);
+    return 2;
+  }
+  int a = (int)strtol(argv[1], 0, 10);
+  int b = (int)strtol(argv[2], 0, 10);
+
+  printf("add_case:%d:%d:%d\n",     a, b, add_case(a, b));
+  printf("sub_case:%d:%d:%d\n",     a, b, sub_case(a, b));
+  printf("xor_case:%d:%d:%d\n",     a, b, xor_case(a, b));
+  printf("cmpeq_case:%d:%d:%d\n",   a, b, cmpeq_case(a, b));
+  printf("cmpne_case:%d:%d:%d\n",   a, b, cmpne_case(a, b));
+  printf("cmpsgt_case:%d:%d:%d\n",  a, b, cmpsgt_case(a, b));
+  printf("cmpslt_case:%d:%d:%d\n",  a, b, cmpslt_case(a, b));
+  printf("cmpsge_case:%d:%d:%d\n",  a, b, cmpsge_case(a, b));
+  printf("cmpsle_case:%d:%d:%d\n",  a, b, cmpsle_case(a, b));
+  printf("select_case:%d:%d:%d\n",  a, b, select_case(a, b));
+  printf("branch_case:%d:%d:%d\n",  a, b, branch_case(a, b));
+  printf("mixed_case:%d:%d:%d\n",   a, b, mixed_case(a, b));
+  return 0;
+}
