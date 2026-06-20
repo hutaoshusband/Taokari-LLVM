@@ -671,14 +671,29 @@ This tier widens coverage, refactors the dispatch so L2 has something to
 shuffle, and adds the differential test harness + benchmark that L2's
 correctness/performance claims depend on.
 
+**Execution order (decided):** 1.5.2 (refactor dispatch) → 1.5.3 (harness)
+→ 1.5.1 (widen IR) → 1.5.4 (benchmark/bounds). Refactor lands before any
+behavior change; harness covers the widened IR; benchmark closes the tier.
+
+**Scope decisions:**
+- Memory: middle way now — `AllocaInst` + load/store to **VM-local** stack
+  only. Full real pointers (external pointer args, globals, aliasing) are a
+  separate L2 step, not 1.5.
+- Calls: allow all **direct** calls in 1.5.1 (internal + declared). External
+  calls trampoline out of the VM. Indirect/virtual calls stay deferred.
+- Harness: Python orchestrator driving build/run + C/C++ self-comparing
+  case functions doing the actual output diff.
+
 ### 1.5.1 — Widen IR Coverage (unblocks "Virtualize selected functions")
 
 * [ ] Add integer binary: `Mul`, `And`, `Or`, `Shl`, `LShr`, `AShr`
 * [ ] Add integer div/rem: `SDiv`, `UDiv`, `SRem`, `URem`
 * [ ] Add unsigned compares: `UGT`, `ULT`, `UGE`, `ULE`
 * [ ] Handle `PHINode` (lower to slot copies in predecessors → unlocks loops)
-* [ ] Handle real `LoadInst`/`StoreInst` with pointer operands (memory
-      opcode should mean real memory, not just locals)
+* [ ] Handle `AllocaInst` + `LoadInst`/`StoreInst` to **VM-local** stack
+      (middle way — local arrays/scalars; no external pointer args yet)
+* [ ] Allow all **direct** `CallBase`: internal VMP'd calls + declared/external
+      callees trampoline out of the VM
 * [ ] Track per-operand width/signedness instead of blind i64 promotion
 * [ ] Audit `SExtOrTrunc` arg path for sign/width correctness under new ops
 
@@ -712,6 +727,9 @@ measurable.
 ## Level 2 — Practical VM
 
 * [ ] Virtualize selected functions
+* [ ] **Add full real pointer support** (`LoadInst`/`StoreInst` on external
+      pointer args + globals, aliasing, alignment) — promoted from 1.5
+      middle-way; unblocks virtualizing real C/C++ pointer-heavy functions
 * [ ] Encrypt bytecode
 * [ ] Add per-function VM key
 * [ ] Add per-function opcode mapping
