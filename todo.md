@@ -647,15 +647,15 @@ This should be treated as advanced / expensive protection.
 ## Level 1 — Research Prototype
 
 * [x] Study xVMP architecture
-* [ ] Define Taokari VM scope
-* [ ] Choose stack VM or register VM
-* [ ] Choose bytecode format
-* [ ] Add annotation: `vmp`
-* [ ] Add one arithmetic opcode
-* [ ] Add one memory opcode
-* [ ] Add one branch opcode
-* [ ] Add minimal VM interpreter
-* [ ] Add one toy test function
+* [x] Define Taokari VM scope
+* [x] Choose stack VM or register VM
+* [x] Choose bytecode format
+* [x] Add annotation: `vmp`
+* [x] Add one arithmetic opcode
+* [x] Add one memory opcode
+* [x] Add one branch opcode
+* [x] Add minimal VM interpreter
+* [x] Add one toy test function
 
 ## Level 2 — Practical VM
 
