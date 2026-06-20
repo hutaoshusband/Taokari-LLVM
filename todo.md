@@ -176,7 +176,9 @@ Opaque predicates should survive the normal LLVM cleanup pipeline and be reusabl
 
 # 3. Bogus Control Flow
 
-Current status: missing.
+Current status: implemented (L1 + most of L2). `BogusControlFlow.cpp` exists,
+is wired into the ObfuscationPassManager, and runs before and/or after
+flattening via `-taokari-bcf-before-fla` / `-taokari-bcf-after-fla`.
 This is one of the most important differentiators against plain Arkari.
 
 ## Level 1 — Classic BCF
@@ -705,17 +707,15 @@ Goal: make Taokari controllable instead of “all or nothing”.
 
 ## Level 2 — Per-Function Control
 
-* [ ] Add annotation: `fla`
-* [ ] Add annotation: `bcf`
-* [ ] Add annotation: `mba`
-* [ ] Add annotation: `icall`
-* [ ] Add annotation: `indbr`
-* [ ] Add annotation: `indgv`
-* [ ] Add annotation: `strenc`
-* [ ] Add annotation: `constenc`
-* [ ] Add annotation: `outline`
-* [ ] Add annotation: `vmp`
-* [ ] Add annotation: `noobf`
+* [x] Add annotation: `fla`
+* [x] Add annotation: `bcf`
+* [x] Add annotation: `mba`
+* [x] Add annotation: `icall`
+* [x] Add annotation: `indbr`
+* [x] Add annotation: `indgv`
+* [x] Add annotation: `strenc` (alias `cse`)
+* [x] Add annotation: `constenc` (alias `cie`)
+* [x] Add annotation: `noobf`
 
 ## Level 3 — Profiles
 

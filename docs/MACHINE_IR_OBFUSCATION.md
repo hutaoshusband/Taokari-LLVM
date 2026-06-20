@@ -296,6 +296,17 @@ IDA-Pro research doc §A Level 3:
   behavior.
 - **Hex-Rays snapshot gate** — `verify_machine_obf_l3_ida_snapshot.py` records
   plain vs Fortress MIR pseudocode and gates on measurable decompiler noise.
+  `--fixture sse` snapshots the SSE string-op fixture (`testing/cases/
+  sse_string`) whose plain decompile shows the textbook `case N: shift by N`
+  SSE dispatch, and asserts the obfuscated function has zero IDA
+  `switch_sites` plus substantial pseudocode growth.
+- **SSE body-walking anti-microcode-lift** — planned `+mir:sse` Fortress
+  sub-pass. The current `unmodelled` blob emits guarded bytes at function
+  entry only; Hex-Rays' CFG-directed microcode lifter skips past it and
+  cleanly lifts the SSE ops (`psrldq`/`pcmpeqb`/`pmovmskb`) inside the body.
+  `+mir:sse` will scatter non-foldable `rdrand`-seeded `x*(x+1)` guards plus
+  modeled-SSE dead bytes across the function body so the lifter cannot prune
+  them. Tracked as the §21 L3 backlog item.
 - **Unmodelled instruction emission** — explicit `unmodelled` opt-in emits
   skipped privileged/SIMD bytes the microcode lifter may not model.
 - **Runtime-dependent dirty-byte guards** — dirty-byte branches depend on live
@@ -311,3 +322,29 @@ IDA-Pro research doc §A Level 3:
   target-native port sequence and safety gates.
 
 These remain gated future work, not part of the current Level 2 pass.
+
+## Phase A: IR-stack coverage for SSE string functions
+
+The MIR layer only attacks code that survives below the IR layer; the IR
+obfuscation stack (`-taokari-fla` L4, `-taokari-bcf`, `-taokari-mba`,
+`-taokari-cie` L2, `-taokari-icall`) destroys the *dispatch* of an SSE
+string function at the IR layer before it ever reaches codegen. The
+full-stack recipe that addresses complaints 1, 3, 4, 5, 6, 7, 8 of the SSE
+audit is captured in `testing/scripts/verify_sse_string_protection.py`:
+
+```
+-mllvm -taokari \
+  -mllvm -taokari-fla -mllvm -taokari-level-fla=4 \
+  -mllvm -taokari-bcf  -mllvm -taokari-level-bcf=2 \
+  -mllvm -taokari-mba  -mllvm -taokari-level-mba=1 \
+  -mllvm -taokari-cie  -mllvm -taokari-level-cie=2 \
+  -mllvm -taokari-icall \
+  -mllvm -taokari-mir=split
+```
+
+Verified against `testing/cases/sse_string/src/main.c`: the obfuscated IR
+contains no `switch`, the obfuscated `.obj` no longer exposes the clean
+`psrldq $N` jump-table dispatch, and the IDA Hex-Rays decompile grows
+7x+ with zero `switch_sites` remaining. Complaint 2 (SSE intrinsics still
+modeled cleanly inside each flattened block) is the remaining gap that
+the `+mir:sse` Phase B pass above closes.
