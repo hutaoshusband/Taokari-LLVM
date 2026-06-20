@@ -28,12 +28,13 @@ OBF_FLAGS = [
     "-mllvm", "-taokari-indgv",
     "-mllvm", "-taokari-fla",
     "-mllvm", "-taokari-bcf",
+    "-mllvm", "-taokari-mba",
     "-mllvm", "-taokari-cse",
     "-mllvm", "-taokari-cie",
     "-mllvm", "-taokari-cfe",
 ]
 # Passes that accept a 0-4 level. Default tests use the strongest level.
-LEVEL_PASSES = ["indbr", "icall", "indgv", "fla", "bcf", "cie", "cfe"]
+LEVEL_PASSES = ["indbr", "icall", "indgv", "fla", "bcf", "mba", "cie", "cfe"]
 DEFAULT_LEVEL = 4
 RTTI_CONFIG = TESTING / "configs" / "rtti.json"
 
@@ -106,6 +107,9 @@ CASES = [
     # Constant encryption folding-risk fixture: int/FP constants across widths,
     # switch dispatch and phi feeds. Must stay identical under -O2/LTO/clang-cl.
     Case("const_enc", (case_path("const_enc") / "src" / "main.c",), "const:338181490:4.3442:3\n"),
+    # MBA substitution fixture: add/sub/xor/and/or across i32/i64 plus a
+    # chained addition block. Output must stay identical under -O2/LTO/clang-cl.
+    Case("mba_basic", (case_path("mba_basic") / "src" / "main.c",), "mba-basic:3894:-4:189\n"),
     # Dedicated per-pass stress fixtures. Each targets one obfuscation surface
     # so a regression localises quickly, but all passes still run together.
     # Virtual dispatch -> IndirectCall vtable path.

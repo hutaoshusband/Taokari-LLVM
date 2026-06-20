@@ -222,21 +222,22 @@ The CFG should contain convincing fake regions that static analysis cannot cheap
 
 # 4. Mixed Boolean Arithmetic
 
-Current status: missing.
+Current status: Level 1 done (add/sub/xor/and/or identities, i32/i64, config
+probability, `mba` annotation, correctness tests). Level 2 pending.
 This is needed to hide simple arithmetic, constants and dispatch calculations.
 
 ## Level 1 — Basic MBA
 
-* [ ] Add `MBA.cpp`
-* [ ] Replace `add`
-* [ ] Replace `sub`
-* [ ] Replace `xor`
-* [ ] Replace `and`
-* [ ] Replace `or`
-* [ ] Support integer types
-* [ ] Add config probability
-* [ ] Add annotation: `mba`
-* [ ] Add correctness tests
+* [x] Add `MBA.cpp`
+* [x] Replace `add`
+* [x] Replace `sub`
+* [x] Replace `xor`
+* [x] Replace `and`
+* [x] Replace `or`
+* [x] Support integer types
+* [x] Add config probability
+* [x] Add annotation: `mba`
+* [x] Add correctness tests
 
 Example identities:
 
