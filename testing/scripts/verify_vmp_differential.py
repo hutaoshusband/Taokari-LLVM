@@ -33,17 +33,12 @@ VSDEVCMD = Path(
 
 # Input grid: (a, b) pairs exercising edge values for the current integer ISA.
 #
-# CAVEAT (L1.5.2 baseline): the current VM promotes every operand to i64 and
-# only truncates at return (CodeVirtualization.cpp:468, 472). That means an
-# intermediate step that would wrap in i32 native arithmetic does NOT wrap
-# inside the VM, so inputs triggering intermediate overflow diverge. This is
-# the documented blind-i64-promotion hazard that L1.5.1 width tracking fixes.
-# Until then, inputs that overflow an i32 *intermediate* (not just the final
-# result) are excluded from the grid. Inputs that overflow only the final
-# result are fine because the trunc-at-return restores i32 semantics.
-#
-# Example excluded: (INT_MAX, 1) -- (a+b) overflows mid-expression in
-# branch_case's `int x = (a+b) ^ 5`.
+# (INT_MAX, 1) was the regression target for L1.5.1 width tracking: it
+# overflows an i32 *intermediate* in branch_case's `int x = (a+b) ^ 5`.
+# Before width tracking the VM promoted operands to i64 (no wraparound) and
+# only truncated at return, diverging from native i32 semantics. With width
+# tracking (per-operand VmTy, narrowing after every binary op) both builds
+# must agree on every input including this one.
 INPUTS: list[tuple[int, int]] = [
     (0, 0),
     (1, 1),
@@ -55,7 +50,8 @@ INPUTS: list[tuple[int, int]] = [
     (41, 1),
     (17, 17),
     (100, -100),
-    (-2147483648, 1),   # INT_MIN + 1: final-result overflow only, OK
+    (2147483647, 1),    # INT_MAX + 1: intermediate i32 overflow, must wrap
+    (-2147483648, 1),   # INT_MIN + 1
     (22, 19),
     (2, 4),
 ]

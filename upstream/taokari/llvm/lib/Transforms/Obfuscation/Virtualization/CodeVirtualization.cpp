@@ -59,6 +59,42 @@ struct HandlerStackShape {
   unsigned Immediates = 0;
 };
 
+// ponytail: Per-value width+signedness. The VM stores everything as i64, but
+// arithmetic must wrap at the operand's native width and signed/unsigned
+// distinctions (compare, shift, div/rem) must be preserved. The encoder
+// records VmTy per value and emits it as immediates alongside the opcodes
+// that need it; the interpreter narrows results back to the operand width.
+//
+// This is the L1.5.1 fix for the blind i64-promotion hazard: previously
+// `int x = (a+b) ^ 5` with a=INT_MAX,b=1 computed (a+b) in i64 (no overflow)
+// and only truncated at return, diverging from native i32 wraparound.
+struct VmTy {
+  uint8_t Bits = 64;
+  bool Signed = true;
+};
+
+static VmTy vmTyFromType(Type *Ty) {
+  VmTy T;
+  if (auto *IntTy = dyn_cast<IntegerType>(Ty))
+    T.Bits = IntTy->getBitWidth();
+  // Integer types in C are signed by default; the encoder overrides Signed
+  // per-use when it knows the signedness from the instruction (e.g. UDiv is
+  // unsigned). For plain loads/args the conservative default is signed.
+  return T;
+}
+
+// ponytail: Pack VmTy into a single int64 immediate (bits 0..7 = width,
+// bit 8 = signed). One word instead of two keeps the bytecode compact.
+static int64_t packVmTy(VmTy T) {
+  return static_cast<int64_t>(T.Bits) | (T.Signed ? (1LL << 8) : 0);
+}
+static VmTy unpackVmTy(int64_t V) {
+  VmTy T;
+  T.Bits = static_cast<uint8_t>(V & 0xFF);
+  T.Signed = (V >> 8) & 1;
+  return T;
+}
+
 struct Fixup {
   size_t Index;
   const BasicBlock *Target;
@@ -188,13 +224,24 @@ struct CodeVirtualization : public ModulePass {
     return Slot;
   }
 
+  // ponytail: Emit a value-push that carries the value's VmTy so the
+  // interpreter can sign/zero-extend into the i64 slot correctly. For a
+  // ConstantInt we encode the full sext/zext value directly; for a slot we
+  // emit its index. In both cases a packed VmTy immediate follows so the
+  // interpreter narrows/promotes the right way before any consumer sees it.
   bool emitValue(BytecodeProgram &P, DenseMap<const Value *, unsigned> &Slots,
                  Value *V) {
+    VmTy Ty = vmTyFromType(V->getType());
     if (auto *CI = dyn_cast<ConstantInt>(V)) {
       if (CI->getBitWidth() > 64)
         return false;
       P.Words.push_back(OpPushConst);
+      // getSExtValue is correct for signed and for unsigned values that fit
+      // in 63 bits; for unsigned i64 constants with the top bit set the
+      // encoder would lose information, but isSupportedInt already gates on
+      // <=64-bit and the interpreter re-narrows from VmTy, so this is safe.
       P.Words.push_back(CI->getSExtValue());
+      P.Words.push_back(packVmTy(Ty));
       return true;
     }
     auto It = Slots.find(V);
@@ -202,6 +249,7 @@ struct CodeVirtualization : public ModulePass {
       return false;
     P.Words.push_back(OpLoadSlot);
     P.Words.push_back(It->second);
+    P.Words.push_back(packVmTy(Ty));
     return true;
   }
 
@@ -225,6 +273,7 @@ struct CodeVirtualization : public ModulePass {
           if (!emitValue(P, Slots, BO->getOperand(0)) ||
               !emitValue(P, Slots, BO->getOperand(1)))
             return false;
+          VmTy ResultTy = vmTyFromType(BO->getType());
           switch (BO->getOpcode()) {
           case Instruction::Add:
             P.Words.push_back(OpAdd);
@@ -238,6 +287,9 @@ struct CodeVirtualization : public ModulePass {
           default:
             return false;
           }
+          // ponytail: operand/result width so the interpreter truncates the
+          // i64 arithmetic back to the native width (fixes i32 wraparound).
+          P.Words.push_back(packVmTy(ResultTy));
           P.Words.push_back(OpStoreSlot);
           P.Words.push_back(slotFor(Slots, &I));
           continue;
@@ -246,6 +298,10 @@ struct CodeVirtualization : public ModulePass {
           if (!emitValue(P, Slots, Cmp->getOperand(0)) ||
               !emitValue(P, Slots, Cmp->getOperand(1)))
             return false;
+          // ponytail: cmp operands are already narrowed at push time (their
+          // VmTy immediate carried width+signedness), and the signedness of
+          // the comparison itself is encoded in the opcode choice
+          // (OpCmpSgt vs a future OpCmpUgt). No extra VmTy immediate needed.
           switch (Cmp->getPredicate()) {
           case CmpInst::ICMP_EQ:
             P.Words.push_back(OpCmpEq);
@@ -328,9 +384,11 @@ struct CodeVirtualization : public ModulePass {
     case OpInitArg:
       return {0, 0, 2};
     case OpPushConst:
-      return {0, 1, 1};
+      // value + VmTy immediate
+      return {0, 1, 2};
     case OpLoadSlot:
-      return {0, 1, 1};
+      // slot + VmTy immediate
+      return {0, 1, 2};
     case OpStoreSlot:
       return {1, 0, 1};
     case OpAdd:
@@ -342,7 +400,8 @@ struct CodeVirtualization : public ModulePass {
     case OpCmpSlt:
     case OpCmpSge:
     case OpCmpSle:
-      return {2, 1, 0};
+      // binary ops now carry a VmTy immediate (result width) for narrowing
+      return {2, 1, 1};
     case OpSelect:
       return {3, 1, 0};
     case OpJmp:
@@ -410,6 +469,42 @@ struct CodeVirtualization : public ModulePass {
     return pop(B, C.I64, C.Stack, C.SP);
   }
 
+  // ponytail: Narrow a full i64 value back to the VmTy width, preserving
+  // signedness. The VM stores everything as i64 internally; arithmetic must
+  // wrap at the operand width to match native semantics. We do this purely
+  // arithmetically so the IR stays branch-free:
+  //
+  //   Mask      = (1 << Width) - 1          // low `Width` bits
+  //   SignBit   = 1 << (Width - 1)          // top bit of the narrow value
+  //   Unsigned  = V & Mask                  // zero-extended
+  //   Signed    = (Unsigned ^ SignBit) - SignBit
+  //
+  // The SignBit trick arithmetically extends the narrow two's-complement
+  // value into i64. Width=64 is a no-op: Mask = all-ones, SignBit = MSB,
+  // and (V ^ MSB) - MSB == V.
+  //
+  // PackedTyImm is the runtime VmTy immediate fetched from the bytecode
+  // (low 8 bits = width, bit 8 = signed).
+  Value *narrowTo(IRBuilder<> &B, InterpCtx &C, Value *V,
+                  Value *PackedTyImm) {
+    Value *One = ConstantInt::get(C.I64, 1);
+    Value *Width = B.CreateAnd(PackedTyImm, ConstantInt::get(C.I64, 0xFF));
+    Value *SignedBit =
+        B.CreateAnd(B.CreateLShr(PackedTyImm, ConstantInt::get(C.I64, 8)),
+                    ConstantInt::get(C.I64, 1));
+    // Mask = (1 << Width) - 1
+    Value *Mask =
+        B.CreateSub(B.CreateShl(One, Width), ConstantInt::get(C.I64, 1));
+    Value *Lo = B.CreateAnd(V, Mask);
+    // SignBit = 1 << (Width - 1)
+    Value *SignBit =
+        B.CreateShl(One, B.CreateSub(Width, ConstantInt::get(C.I64, 1)));
+    // Signed extension: (Lo ^ SignBit) - SignBit. Apply only when SignedBit=1.
+    Value *Sext = B.CreateSub(B.CreateXor(Lo, SignBit), SignBit);
+    return B.CreateSelect(
+        B.CreateICmpNE(SignedBit, ConstantInt::get(C.I64, 0)), Sext, Lo);
+  }
+
   // ponytail: Build the handler table for the interpreter. Each entry owns
   // its case-block emission, including pop()/fetch() and the branch back to
   // Dispatch. OpRet intentionally does NOT branch back (it returns).
@@ -431,14 +526,17 @@ struct CodeVirtualization : public ModulePass {
                  }});
     H.push_back({OpPushConst, "pushconst", shapeOf(OpPushConst),
                  [this, &C](IRBuilder<> &B) {
-                   pushStk(B, C, fetchWord(B, C));
+                   Value *V = fetchWord(B, C);
+                   Value *Ty = fetchWord(B, C);
+                   pushStk(B, C, narrowTo(B, C, V, Ty));
                    B.CreateBr(C.Dispatch);
                  }});
     H.push_back({OpLoadSlot, "loadslot", shapeOf(OpLoadSlot),
                  [this, &C](IRBuilder<> &B) {
-                   pushStk(B, C, B.CreateLoad(C.I64, B.CreateGEP(
-                                                      C.I64, C.Locals,
-                                                      fetchWord(B, C))));
+                   Value *Slot = fetchWord(B, C);
+                   Value *Ty = fetchWord(B, C);
+                   Value *V = B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.Locals, Slot));
+                   pushStk(B, C, narrowTo(B, C, V, Ty));
                    B.CreateBr(C.Dispatch);
                  }});
     H.push_back({OpStoreSlot, "storeslot", shapeOf(OpStoreSlot),
@@ -454,33 +552,45 @@ struct CodeVirtualization : public ModulePass {
     // copy; capturing `Fn` by value (init-capture-free, named explicitly)
     // would be ill-formed under /permissive- with a default capture, so we
     // use an explicit capture list with no default and name Fn there.
-    auto addBinary = [&](Opcode Op, StringRef Name,
+    //
+    // NarrowResult=true (arithmetic ops): fetch a trailing VmTy immediate and
+    // narrow the i64 result back to the operand width so wraparound matches
+    // native semantics. NarrowResult=false (compare ops): no immediate; the
+    // result is already 0/1 zext'd to i64, width-agnostic.
+    auto addBinary = [&](Opcode Op, StringRef Name, bool NarrowResult,
                          std::function<Value *(IRBuilder<> &, Value *, Value *)>
                              Fn) {
-      H.push_back({Op, Name, shapeOf(Op), [this, &C, Fn](IRBuilder<> &B) {
+      H.push_back({Op, Name, shapeOf(Op),
+                   [this, &C, Fn, NarrowResult](IRBuilder<> &B) {
                      Value *R = popStk(B, C);
                      Value *L = popStk(B, C);
-                     pushStk(B, C, Fn(B, L, R));
+                     Value *Result = Fn(B, L, R);
+                     if (NarrowResult) {
+                       Value *Ty = fetchWord(B, C);
+                       Result = narrowTo(B, C, Result, Ty);
+                     }
+                     pushStk(B, C, Result);
                      B.CreateBr(C.Dispatch);
                    }});
     };
-    addBinary(OpAdd, "add",
+    addBinary(OpAdd, "add", /*NarrowResult=*/true,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateAdd(L, R);
               });
-    addBinary(OpSub, "sub",
+    addBinary(OpSub, "sub", /*NarrowResult=*/true,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateSub(L, R);
               });
-    addBinary(OpXor, "xor",
+    addBinary(OpXor, "xor", /*NarrowResult=*/true,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateXor(L, R);
               });
 
     auto addCmp = [&](Opcode Op, StringRef Name, CmpInst::Predicate Pred) {
       // Pred (by-value param) and C.I64 are captured by value into the
-      // owned std::function so they survive after addCmp returns.
-      addBinary(Op, Name,
+      // owned std::function so they survive after addCmp returns. Cmp results
+      // are 0/1, no width narrowing.
+      addBinary(Op, Name, /*NarrowResult=*/false,
                 [Pred, I64 = C.I64](IRBuilder<> &B, Value *L, Value *R) {
                   return B.CreateZExt(B.CreateICmp(Pred, L, R), I64);
                 });
