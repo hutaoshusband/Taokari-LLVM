@@ -10,6 +10,7 @@
 #include "llvm/IR/IntrinsicsAArch64.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 #include <random>
 #include <algorithm>
@@ -26,6 +27,17 @@ static GlobalVariable *getOrCreateConstantNonce(Module &M, uint64_t Seed) {
   auto *GV = new GlobalVariable(
       M, Int64, false, GlobalValue::InternalLinkage,
       ConstantInt::get(Int64, Seed), "__taokari_const_nonce");
+  GV->addMetadata("noobf", *MDNode::get(M.getContext(), {}));
+  return GV;
+}
+
+static GlobalVariable *getOrCreatePageRuntimeSeed(Module &M, IntegerType *IntTy,
+                                                  uint64_t Seed) {
+  if (auto *GV = M.getGlobalVariable("__taokari_page_seed", true))
+    return GV;
+  auto *GV = new GlobalVariable(
+      M, IntTy, false, GlobalValue::InternalLinkage,
+      ConstantInt::get(IntTy, Seed), "__taokari_page_seed");
   GV->addMetadata("noobf", *MDNode::get(M.getContext(), {}));
   return GV;
 }
@@ -317,18 +329,38 @@ void createPageTable(const CreatePageTableArgs &args) {
   const unsigned BitWidth = IntTy->getBitWidth();
 
   std::mt19937_64 re(args.RNG->operator()());
-  std::shuffle(args.Objects->begin(), args.Objects->end(), re);
+  auto buildEntries = [&]() {
+    std::vector<std::pair<Constant *, bool>> Entries;
+    for (auto *Obj : *args.Objects)
+      Entries.push_back({Obj, false});
+    auto *FakePtr = ConstantPointerNull::get(
+        PointerType::getUnqual(args.M->getContext()));
+    for (unsigned I = 0; I < args.FakeEntries; ++I)
+      Entries.push_back({FakePtr, true});
+    std::shuffle(Entries.begin(), Entries.end(), re);
+    return Entries;
+  };
 
   auto PtrEncKeyConst = ConstantInt::get(IntTy, args.PtrEncKey);
   std::vector<Constant *> GVObjects;
-  for (unsigned i = 0; i < args.Objects->size(); ++i) {
-    auto Obj = args.Objects->at(i);
+  std::vector<Constant *> GVObjectShares;
+  auto ObjectEntries = buildEntries();
+  for (unsigned i = 0; i < ObjectEntries.size(); ++i) {
+    auto Obj = ObjectEntries[i].first;
     if (auto *CPA = dyn_cast<ConstantPtrAuth>(Obj))
       Obj = CPA->getPointer();
     auto PtrInt = ConstantExpr::getPtrToInt(Obj, IntTy);
-    GVObjects.push_back(
-        ConstantExpr::get(Instruction::Add, PtrInt, PtrEncKeyConst));
-    args.IndexMap->insert_or_assign(Obj, i);
+    auto EncPtr =
+        ConstantExpr::get(Instruction::Add, PtrInt, PtrEncKeyConst);
+    if (args.TwoShare) {
+      auto Share = ConstantInt::get(IntTy, args.RNG->operator()());
+      GVObjects.push_back(ConstantExpr::get(Instruction::Add, EncPtr, Share));
+      GVObjectShares.push_back(Share);
+    } else {
+      GVObjects.push_back(EncPtr);
+    }
+    if (!ObjectEntries[i].second)
+      args.IndexMap->insert_or_assign(Obj, i);
   }
 
   {
@@ -341,13 +373,28 @@ void createPageTable(const CreatePageTableArgs &args) {
     GV->addMetadata("noobf", *MDNode::get(args.M->getContext(), {}));
     args.OutPageTable->push_back(GV);
   }
+  if (args.TwoShare && args.OutObjectShareTable) {
+    auto GVNameObjects(args.GVNamePrefix + "_objects_share");
+    auto ATy = ArrayType::get(IntTy, GVObjectShares.size());
+    auto CA = ConstantArray::get(ATy, ArrayRef(GVObjectShares));
+    auto GV = new GlobalVariable(*args.M, ATy, false,
+                                 GlobalValue::LinkageTypes::InternalLinkage,
+                                 CA, GVNameObjects);
+    GV->addMetadata("noobf", *MDNode::get(args.M->getContext(), {}));
+    *args.OutObjectShareTable = GV;
+  }
 
   for (unsigned i = 0; i < args.CountLoop; ++i) {
-    std::shuffle(args.Objects->begin(), args.Objects->end(), re);
+    auto PageEntries = buildEntries();
 
     std::vector<Constant *> ConstantObjectIndex;
-    for (unsigned j = 0; j < args.Objects->size(); ++j) {
-      const auto Obj = args.Objects->at(j);
+    for (unsigned j = 0; j < PageEntries.size(); ++j) {
+      const auto Obj = PageEntries[j].first;
+      if (PageEntries[j].second) {
+        ConstantObjectIndex.push_back(
+            ConstantInt::get(IntTy, args.RNG->operator()()));
+        continue;
+      }
       const auto ObjFullKey = args.ObjectKeys->at(Obj);
       const auto ObjMask = static_cast<uint32_t>(ObjFullKey >> 32);
 
@@ -383,12 +430,28 @@ void enhancedPageTable(const CreatePageTableArgs &     args,
   const unsigned BitWidth = IntTy->getBitWidth();
 
   std::mt19937_64 re(args.RNG->operator()());
+  auto buildEntries = [&]() {
+    std::vector<std::pair<Constant *, bool>> Entries;
+    for (auto *Obj : *args.Objects)
+      Entries.push_back({Obj, false});
+    auto *FakePtr = ConstantPointerNull::get(
+        PointerType::getUnqual(args.M->getContext()));
+    for (unsigned I = 0; I < args.FakeEntries; ++I)
+      Entries.push_back({FakePtr, true});
+    std::shuffle(Entries.begin(), Entries.end(), re);
+    return Entries;
+  };
 
   for (unsigned i = 0; i < args.CountLoop; ++i) {
-    std::shuffle(args.Objects->begin(), args.Objects->end(), re);
+    auto PageEntries = buildEntries();
     std::vector<Constant *> ConstantObjectIndex;
-    for (unsigned j = 0; j < args.Objects->size(); ++j) {
-      auto       Obj = args.Objects->at(j);
+    for (unsigned j = 0; j < PageEntries.size(); ++j) {
+      auto       Obj = PageEntries[j].first;
+      if (PageEntries[j].second) {
+        ConstantObjectIndex.push_back(
+            ConstantInt::get(IntTy, args.RNG->operator()()));
+        continue;
+      }
       const auto ObjFullKey = args.ObjectKeys->at(Obj);
       const auto ObjMask = static_cast<uint32_t>(ObjFullKey >> 32);
 
@@ -427,7 +490,21 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
   auto        Zero = ConstantInt::getNullValue(IntTy);
   const auto  ModuleMask = static_cast<uint32_t>(args.ModuleKey >> 32);
   const auto  FuncMask = static_cast<uint32_t>(args.FuncKey >> 32);
-  IRBuilder<> IRB{args.InsertBefore};
+  IRBuilder<NoFolder> IRB{args.InsertBefore};
+
+  auto addBoundsCheck = [&](Value *Index, GlobalVariable *Table) {
+    if (!args.IntegrityCheck)
+      return;
+    auto *ArrayTy = cast<ArrayType>(Table->getValueType());
+    auto *Limit = ConstantInt::get(IntTy, ArrayTy->getNumElements());
+    auto *BadIndex = IRB.CreateICmpUGE(Index, Limit, "taokari.pt.bad");
+    markNoObf(BadIndex);
+    auto *ThenTerm = SplitBlockAndInsertIfThen(BadIndex, args.InsertBefore,
+                                               /*Unreachable=*/true);
+    IRBuilder<> TrapB(ThenTerm);
+    TrapB.CreateCall(Intrinsic::getOrInsertDeclaration(M, Intrinsic::trap));
+    IRB.SetInsertPoint(args.InsertBefore);
+  };
 
   Value *NextIndex = args.NextIndexValue;
   if (!NextIndex) {
@@ -539,6 +616,7 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
     for (int i = args.FuncPageTable->size() - 1; i >= 0; --i) {
       auto   TargetPage = args.FuncPageTable->operator[](i);
       auto   PrevIndex = NextIndex;
+      addBoundsCheck(NextIndex, TargetPage);
       Value *GEP = IRB.CreateGEP(
           TargetPage->getValueType(), TargetPage,
           {Zero, NextIndex});
@@ -560,6 +638,7 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
   for (int i = args.ModulePageTable->size() - 1; i >= 0; --i) {
     auto   TargetPage = args.ModulePageTable->operator[](i);
     auto   PrevIndex = NextIndex;
+    addBoundsCheck(NextIndex, TargetPage);
     Value *GEP = IRB.CreateGEP(
         TargetPage->getValueType(), TargetPage,
         {Zero, NextIndex});
@@ -577,9 +656,40 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
       continue;
     }
     // Objects array stores encrypted integers: ptrtoint(Obj) + PtrEncKey
-    auto EncInt = IRB.CreateLoad(IntTy, GEP);
-    auto DecInt = IRB.
-        CreateSub(EncInt, ConstantInt::get(IntTy, args.PtrEncKey));
+    Value *EncInt = IRB.CreateLoad(IntTy, GEP);
+    markNoObf(EncInt);
+    if (args.ObjectShareTable) {
+      Value *ShareGEP = IRB.CreateGEP(args.ObjectShareTable->getValueType(),
+                                      args.ObjectShareTable, {Zero, NextIndex});
+      auto *Share = IRB.CreateLoad(IntTy, ShareGEP);
+      markNoObf(Share);
+      EncInt = IRB.CreateSub(EncInt, Share, "taokari.ptr.share");
+      markNoObf(EncInt);
+    }
+    if (args.RuntimeSeed) {
+      auto *SeedGV = getOrCreatePageRuntimeSeed(*M, IntTy, args.RuntimeSeed);
+      auto *SeedA = IRB.CreateAlignedLoad(IntTy, SeedGV, Align{1},
+                                          "taokari.ptr.seed.a");
+      SeedA->setVolatile(true);
+      markNoObf(SeedA);
+      auto *SeedB = IRB.CreateAlignedLoad(IntTy, SeedGV, Align{1},
+                                          "taokari.ptr.seed.b");
+      SeedB->setVolatile(true);
+      markNoObf(SeedB);
+      EncInt = IRB.CreateXor(EncInt, SeedA, "taokari.ptr.seed.mix");
+      markNoObf(EncInt);
+      EncInt = IRB.CreateXor(EncInt, SeedB, "taokari.ptr.seed.unmix");
+      markNoObf(EncInt);
+    }
+    auto *PtrKey = ConstantInt::get(IntTy, args.PtrEncKey);
+    Value *DecInt = args.UseMBA
+                        ? buildMBAAdd(IRB, EncInt,
+                                      ConstantInt::get(
+                                          IntTy, -APInt(IntTy->getBitWidth(),
+                                                        args.PtrEncKey)),
+                                      "taokari.ptr.decrypt")
+                        : IRB.CreateSub(EncInt, PtrKey);
+    markNoObf(DecInt);
     Value *DecPtr = IRB.CreateIntToPtr(DecInt, args.LoadTy);
     // Optional PAC pointer signing for AArch64
     if (args.PtrAuthKey >= 0) {

@@ -45,6 +45,13 @@ EnableIndirectCall("irobf-icall", cl::init(false), cl::NotHidden,
 static cl::opt<uint32_t>
 LevelIndirectCall("level-icall", cl::init(0), cl::NotHidden,
                   cl::desc("Set IR Indirect Call Obfuscation Level."));
+static cl::opt<uint32_t>
+TaokariIndirectCallProbability("taokari-icall-prob", cl::init(101),
+                               cl::NotHidden,
+                               cl::desc("Indirect call-site probability, 0..100."));
+static cl::opt<uint32_t> TaokariIndirectCallFunctionProbability(
+    "taokari-icall-func-prob", cl::init(101), cl::NotHidden,
+    cl::desc("Indirect call per-function probability, 0..100."));
 
 static cl::alias
 TaokariIndirectCall("taokari-icall", cl::desc("Alias for -irobf-icall"),
@@ -263,6 +270,11 @@ struct ObfuscationPassManager : public ModulePass {
 
     Opt->indBrOpt()->readOpt(EnableIndirectBr, LevelIndirectBr);
     Opt->iCallOpt()->readOpt(EnableIndirectCall, LevelIndirectCall);
+    if (TaokariIndirectCallProbability.getNumOccurrences())
+      Opt->iCallOpt()->setProbability(TaokariIndirectCallProbability);
+    if (TaokariIndirectCallFunctionProbability.getNumOccurrences())
+      Opt->iCallOpt()->setFunctionProbability(
+          TaokariIndirectCallFunctionProbability);
     Opt->indGvOpt()->readOpt(EnableIndirectGV, LevelIndirectGV);
     Opt->flaOpt()->readOpt(EnableIRFlattening, LevelIRFlattening);
     Opt->cseOpt()->readOpt(EnableIRStringEncryption);

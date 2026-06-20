@@ -23,6 +23,7 @@ protected:
   uint32_t MaxAllocas = 0;
   // 101 means unset; valid configured probability is 0..100.
   uint32_t Probability = 101;
+  uint32_t FunctionProbability = 101;
   uint32_t LoopCount = 0;
   // Minimum bit-width of a constant worth encrypting. Constants narrower
   // than this are skipped (cheap, low-value, blows up code size). 0 = use
@@ -89,6 +90,12 @@ public:
 
   uint32_t probability() const { return this->Probability; }
 
+  void setFunctionProbability(uint32_t probability) {
+    this->FunctionProbability = probability <= 100 ? probability : 101;
+  }
+
+  uint32_t functionProbability() const { return this->FunctionProbability; }
+
   void setLoopCount(uint32_t loopCount) { this->LoopCount = loopCount; }
 
   uint32_t loopCount() const { return this->LoopCount; }
@@ -153,6 +160,7 @@ public:
     Result.setMaxBlocks(MaxBlocks);
     Result.setMaxAllocas(MaxAllocas);
     Result.setProbability(Probability);
+    Result.setFunctionProbability(FunctionProbability);
     Result.setLoopCount(LoopCount);
     Result.setMinConstSize(MinConstSize);
     Result.setMinStringLength(MinStringLength);

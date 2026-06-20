@@ -143,6 +143,15 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
         }
         obfOpt->setProbability(static_cast<uint32_t>(*probability));
       }
+      if (const auto *probabilityValue = optObj->get("functionProbability")) {
+        auto probability = probabilityValue->getAsInteger();
+        if (!probability || *probability < 0 || *probability > 100) {
+          reportConfigError(
+              FileName, obfOpt->attributeName() +
+                            ".functionProbability must be integer from 0 to 100");
+        }
+        obfOpt->setFunctionProbability(static_cast<uint32_t>(*probability));
+      }
       if (const auto *loopCountValue = optObj->get("loopCount")) {
         auto loopCount = loopCountValue->getAsInteger();
         if (!loopCount || *loopCount < 0) {
@@ -374,6 +383,7 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
     result.setLevel(option->level());
   }
   result.setProbability(option->probability());
+  result.setFunctionProbability(option->functionProbability());
   result.setLoopCount(option->loopCount());
   result.setMaxInsts(option->maxInsts());
   result.setMaxBlocks(option->maxBlocks());

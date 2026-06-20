@@ -90,6 +90,7 @@ CASES = [
     Case("cpp_console", (case_path("cpp_console") / "src" / "main.cpp",), "cpp-console:144\n"),
     Case("cpp_classes", (case_path("cpp_classes") / "src" / "main.cpp",), "classes:124:taokari\n"),
     Case("cpp_templates", (case_path("cpp_templates") / "src" / "main.cpp",), "templates:55:29\n"),
+    Case("cpp_indirect_calls", (case_path("cpp_indirect_calls") / "src" / "main.cpp",), "indirect-calls:73\n"),
     Case("cpp_mixed", (case_path("cpp_mixed") / "src" / "main.cpp",), "mixed:3628800:1.4142:301\n"),
     Case(
         "realworld_c",

@@ -1,5 +1,6 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/Transforms/Obfuscation/IndirectCall.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/Transforms/Obfuscation/Utils.h"
@@ -11,6 +12,7 @@
 #include "llvm/Support/RandomNumberGenerator.h"
 #include "llvm/TargetParser/Triple.h"
 
+#include <algorithm>
 #include <random>
 
 #define DEBUG_TYPE "icall"
@@ -18,12 +20,34 @@
 using namespace llvm;
 
 namespace {
+Function *getDirectCallee(CallBase &CB) {
+  if (auto *Callee = CB.getCalledFunction())
+    return Callee;
+  return dyn_cast<Function>(CB.getCalledOperand()->stripPointerCasts());
+}
+
+bool isSafeCallee(CallBase &CB, Function *Callee) {
+  if (!Callee || Callee->isIntrinsic())
+    return false;
+  if (Callee->isDeclarationForLinker() || Callee->isWeakForLinker() ||
+      Callee->hasDLLImportStorageClass() || Callee->isInterposable() ||
+      (!Callee->hasLocalLinkage() && !Callee->hasHiddenVisibility()))
+    return false;
+  if (Callee->hasFnAttribute(Attribute::AlwaysInline) ||
+      CB.hasFnAttr(Attribute::AlwaysInline))
+    return false;
+  return true;
+}
+
+unsigned probabilityOrFull(uint32_t Probability) {
+  return Probability <= 100 ? Probability : 100;
+}
+
 struct IndirectCall : public FunctionPass {
   static char         ID;
   ObfuscationOptions *ArgsOptions;
 
   DenseMap<Function *, SmallPtrSet<CallInst *, 8>> FunctionCallSites;
-  DenseMap<Function *, SmallPtrSet<Function *, 8>> FunctionCallees;
 
   std::vector<Constant *>        Callees;
   DenseMap<Constant *, unsigned> CalleeIndex;
@@ -31,6 +55,7 @@ struct IndirectCall : public FunctionPass {
   //  Mask=======Key
   DenseMap<Constant *, uint64_t>   CalleeKeys;
   SmallVector<GlobalVariable *, 8> CalleePageTable;
+  GlobalVariable *                 CalleeObjectShareTable = nullptr;
   std::mt19937_64                  RNG;
   uint64_t                         PtrEncKey = 0;
 
@@ -62,20 +87,12 @@ struct IndirectCall : public FunctionPass {
         for (auto &I : BB) {
           if (auto CI = dyn_cast<CallInst>(&I)) {
             auto CB = dyn_cast<CallBase>(&I);
-            auto Callee = CB->getCalledFunction();
-            if (Callee == nullptr) {
-              Callee = dyn_cast<Function>(
-                  CB->getCalledOperand()->stripPointerCasts());
-              if (!Callee) {
-                continue;
-              }
-            }
-            if (Callee->isIntrinsic()) {
+            auto Callee = getDirectCallee(*CB);
+            if (!isSafeCallee(*CB, Callee)) {
               continue;
             }
 
             FunctionCallSites[&F].insert(CI);
-            FunctionCallees[&F].insert(Callee);
 
             if (CalleeKeys.count(Callee) == 0) {
               Callees.push_back(Callee);
@@ -90,9 +107,9 @@ struct IndirectCall : public FunctionPass {
   bool doInitialization(Module &M) override {
     CalleeIndex.clear();
     FunctionCallSites.clear();
-    FunctionCallees.clear();
     Callees.clear();
     CalleePageTable.clear();
+    CalleeObjectShareTable = nullptr;
     CalleeKeys.clear();
 
     NumberCallees(M);
@@ -112,6 +129,12 @@ struct IndirectCall : public FunctionPass {
     createPageTableArgs.ObjectKeys = &CalleeKeys;
     createPageTableArgs.OutPageTable = &CalleePageTable;
     createPageTableArgs.PtrEncKey = PtrEncKey;
+    if (ArgsOptions->iCallOpt()->level() > 1) {
+      createPageTableArgs.FakeEntries =
+          std::max<unsigned>(1, Callees.size() / 2);
+      createPageTableArgs.TwoShare = true;
+      createPageTableArgs.OutObjectShareTable = &CalleeObjectShareTable;
+    }
 
     createPageTable(createPageTableArgs);
     return false;
@@ -128,16 +151,31 @@ struct IndirectCall : public FunctionPass {
     if (Callees.empty()) {
       return false;
     }
-    const auto &CallSites = FunctionCallSites[&Fn];
-    auto &      FuncCalleesSet = FunctionCallees[&Fn];
+    if (std::uniform_int_distribution<unsigned>(1, 100)(RNG) >
+        probabilityOrFull(opt.functionProbability()))
+      return false;
 
-    if (CallSites.empty() || FuncCalleesSet.empty()) {
+    SmallVector<CallInst *, 8> SelectedCallSites;
+    SmallPtrSet<Function *, 8> SelectedCallees;
+    for (auto *CI : FunctionCallSites[&Fn]) {
+      CallBase *CB = CI;
+      auto *Callee = getDirectCallee(*CB);
+      if (!isSafeCallee(*CB, Callee))
+        continue;
+      if (std::uniform_int_distribution<unsigned>(1, 100)(RNG) >
+          probabilityOrFull(opt.probability()))
+        continue;
+      SelectedCallSites.push_back(CI);
+      SelectedCallees.insert(Callee);
+    }
+
+    if (SelectedCallSites.empty() || SelectedCallees.empty()) {
       return false;
     }
 
     std::vector<Constant *>        FuncCallees;
     DenseMap<Constant *, uint64_t> FuncKeys;
-    for (auto callee : FuncCalleesSet) {
+    for (auto callee : SelectedCallees) {
       FuncCallees.push_back(callee);
       FuncKeys[callee] = RNG();
     }
@@ -156,18 +194,18 @@ struct IndirectCall : public FunctionPass {
       createPageTableArgs.IndexMap = &CalleeIndex;
       createPageTableArgs.ObjectKeys = &FuncKeys;
       createPageTableArgs.OutPageTable = &FuncCalleePageTable;
+      if (opt.level() > 1)
+        createPageTableArgs.FakeEntries =
+            std::max<unsigned>(1, FuncCallees.size() / 2);
 
       enhancedPageTable(createPageTableArgs, &FuncCalleeIndex);
     }
 
     // Count callee references for deduplication
     DenseMap<Function *, unsigned> CalleeUseCount;
-    for (auto CI : CallSites) {
+    for (auto CI : SelectedCallSites) {
       CallBase *CB = CI;
-      Function *Callee = CB->getCalledFunction();
-      if (!Callee)
-        Callee = dyn_cast<Function>(
-            CB->getCalledOperand()->stripPointerCasts());
+      Function *Callee = getDirectCallee(*CB);
       if (Callee)
         CalleeUseCount[Callee]++;
     }
@@ -211,6 +249,10 @@ struct IndirectCall : public FunctionPass {
         buildDecrypt.ModuleKey = CalleeKeys[Callee];
         buildDecrypt.FuncKey = FuncKeys[Callee];
         buildDecrypt.PtrEncKey = PtrEncKey;
+        buildDecrypt.ObjectShareTable = CalleeObjectShareTable;
+        buildDecrypt.RuntimeSeed = opt.level() > 1 ? RNG() : 0;
+        buildDecrypt.UseMBA = opt.level() > 1;
+        buildDecrypt.IntegrityCheck = opt.level() > 1;
         buildDecrypt.PtrAuthKey = T.isAArch64() ? 0 : -1;
         buildDecrypt.PtrAuthDisc = 0;
         auto        DecPtr = buildPageTableDecryptIR(buildDecrypt);
@@ -219,18 +261,13 @@ struct IndirectCall : public FunctionPass {
       }
     }
 
-    for (auto CI : CallSites) {
+    for (auto CI : SelectedCallSites) {
 
       CallBase *CB = CI;
 
-      Function *Callee = CB->getCalledFunction();
-      if (Callee == nullptr) {
-        Callee = dyn_cast<
-          Function>(CB->getCalledOperand()->stripPointerCasts());
-        if (!Callee) {
-          continue;
-        }
-      }
+      Function *Callee = getDirectCallee(*CB);
+      if (!isSafeCallee(*CB, Callee))
+        continue;
 
       auto CacheIt = CalleeDedupCache.find(Callee);
       if (CacheIt != CalleeDedupCache.end()) {
@@ -254,6 +291,10 @@ struct IndirectCall : public FunctionPass {
         buildDecrypt.ModuleKey = CalleeKeys[Callee];
         buildDecrypt.FuncKey = FuncKeys[Callee];
         buildDecrypt.PtrEncKey = PtrEncKey;
+        buildDecrypt.ObjectShareTable = CalleeObjectShareTable;
+        buildDecrypt.RuntimeSeed = opt.level() > 1 ? RNG() : 0;
+        buildDecrypt.UseMBA = opt.level() > 1;
+        buildDecrypt.IntegrityCheck = opt.level() > 1;
         Triple T(M.getTargetTriple());
         buildDecrypt.PtrAuthKey = T.isAArch64() ? 0 : -1;
         buildDecrypt.PtrAuthDisc = 0;
@@ -274,6 +315,8 @@ struct IndirectCall : public FunctionPass {
     for (auto calleePage : CalleePageTable) {
       appendToCompilerUsed(M, {calleePage});
     }
+    if (CalleeObjectShareTable)
+      appendToCompilerUsed(M, {CalleeObjectShareTable});
     return true;
   }
 

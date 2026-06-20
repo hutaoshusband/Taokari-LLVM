@@ -22,7 +22,10 @@ struct CreatePageTableArgs {
   DenseMap<Constant *, unsigned> *   IndexMap;
   DenseMap<Constant *, uint64_t> *   ObjectKeys;
   SmallVectorImpl<GlobalVariable *> *OutPageTable;
-  uint64_t                           PtrEncKey;
+  uint64_t                           PtrEncKey = 0;
+  unsigned                           FakeEntries = 0;
+  bool                               TwoShare = false;
+  GlobalVariable **                  OutObjectShareTable = nullptr;
 };
 
 
@@ -38,6 +41,10 @@ struct BuildDecryptArgs {
   uint64_t ModuleKey;
   uint64_t FuncKey;
   uint64_t PtrEncKey;
+  GlobalVariable *ObjectShareTable = nullptr;
+  uint64_t RuntimeSeed = 0;
+  bool UseMBA = false;
+  bool IntegrityCheck = false;
   int PtrAuthKey; // -1 = no PAC, 0 = IA (code), 2 = DA (data)
   uint64_t PtrAuthDisc; // ptrauth discriminator
 };
