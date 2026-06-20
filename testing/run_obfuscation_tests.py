@@ -18,9 +18,8 @@ DEFAULT_CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
 DEFAULT_CLANG_CL = ROOT / "build" / "taokari-local" / "bin" / "clang-cl.exe"
 VSDEVCMD = Path(r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat")
 
-# Base obfuscation flags: every IR pass enabled at once. RTTI is excluded
-# here because the RTTI eraser needs a randomSeed from a config file; it is
-# enabled via the dedicated --rtti matrix axis instead.
+# Base obfuscation flags: every IR pass enabled at once. RTTI is added by the
+# harness because it needs a randomSeed from a config file.
 OBF_FLAGS = [
     "-O2",
     "-mllvm", "-taokari",
@@ -32,8 +31,9 @@ OBF_FLAGS = [
     "-mllvm", "-taokari-cie",
     "-mllvm", "-taokari-cfe",
 ]
-# Passes that accept a 0-3 level. The harness permutes these via --level.
+# Passes that accept a 0-4 level. Default tests use the strongest level.
 LEVEL_PASSES = ["indbr", "icall", "indgv", "fla", "cie", "cfe"]
+DEFAULT_LEVEL = 4
 RTTI_CONFIG = TESTING / "configs" / "rtti.json"
 
 COLOR = {
@@ -253,11 +253,14 @@ def main() -> int:
                         help="case name(s) to run; repeatable. default: all")
     parser.add_argument("--keep-going", action="store_true")
     parser.add_argument("--level", type=int, choices=range(0, 5),
+                        default=DEFAULT_LEVEL,
                         help="append -taokari-level-<pass>=N for all 6 level-aware "
-                             "passes (indbr/icall/indgv/fla/cie/cfe)")
-    parser.add_argument("--rtti", action="store_true",
-                        help="also enable the RTTI eraser (needs configs/rtti.json); "
+                             f"passes (indbr/icall/indgv/fla/cie/cfe); default: {DEFAULT_LEVEL}")
+    parser.add_argument("--rtti", action="store_true", default=True,
+                        help="enable the RTTI eraser (default; needs configs/rtti.json); "
                              "cases flagged no_rtti are skipped")
+    parser.add_argument("--no-rtti", action="store_false", dest="rtti",
+                        help="disable the RTTI eraser")
     parser.add_argument("--benchmark-out", type=Path,
                         help="write plain-vs-obfuscated compile/runtime/size CSV")
     args = parser.parse_args()
