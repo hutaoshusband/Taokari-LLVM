@@ -73,6 +73,9 @@ class Case:
     # Modes this case runs in. None = all modes. Heavy fixtures (imgui) are
     # default-only: they stress the whole obfuscator, not constant folding.
     modes: tuple[str, ...] | None = None
+    # RTTI eraser rewrites MSVC type descriptors; cases with none (pure C) or
+    # cases it must not touch opt out here so --rtti skips them cleanly.
+    no_rtti: bool = False
 
 
 def case_path(name: str) -> Path:
@@ -102,6 +105,14 @@ CASES = [
     # Constant encryption folding-risk fixture: int/FP constants across widths,
     # switch dispatch and phi feeds. Must stay identical under -O2/LTO/clang-cl.
     Case("const_enc", (case_path("const_enc") / "src" / "main.c",), "const:338181490:4.3442:3\n"),
+    # Dedicated per-pass stress fixtures. Each targets one obfuscation surface
+    # so a regression localises quickly, but all passes still run together.
+    # Virtual dispatch -> IndirectCall vtable path.
+    Case("cpp_virtual", (case_path("cpp_virtual") / "src" / "main.cpp",), "virtual:61\n"),
+    # Mutable + const + function-pointer globals -> IndirectGlobalVariable.
+    Case("c_globals", (case_path("c_globals") / "src" / "main.c",), "globals:11:51:18\n"),
+    # Literal, format and runtime-built strings -> ConstantStringEncryption.
+    Case("c_strings", (case_path("c_strings") / "src" / "main.c",), "strings:FX:108469760:1973234167\n"),
     Case(
         "imgui_headless",
         (
@@ -151,7 +162,8 @@ def compile_case(
     mode: str = "default",
     *,
     obfuscate: bool = True,
-    fla_level: int | None = None,
+    level: int | None = None,
+    rtti: bool = False,
 ) -> Path:
     case_root = case_path(case.name)
     build = case_root / "build"
@@ -180,8 +192,15 @@ def compile_case(
         cmd += [f"-I{include}" for include in case.includes]
         if obfuscate and (not case.obfuscate_sources or source in case.obfuscate_sources):
             cmd += OBF_FLAGS
-            if fla_level is not None:
-                cmd += ["-mllvm", f"-taokari-level-fla={fla_level}"]
+            if level is not None:
+                # Apply the requested 0-3 level to every level-aware pass.
+                for pass_name in LEVEL_PASSES:
+                    cmd += ["-mllvm", f"-taokari-level-{pass_name}={level}"]
+            if rtti and not case.no_rtti:
+                # RTTI eraser rewrites MSVC ??_R0 type descriptors; it needs a
+                # randomSeed from a config file.
+                cmd += ["-mllvm", "-taokari-rtti",
+                        "-mllvm", f"-taokari-cfg={RTTI_CONFIG}"]
         cmd += extra
         cmd += ["-o", str(out)]
         result = run(cmd, use_vs_env=True)
@@ -233,8 +252,12 @@ def main() -> int:
     parser.add_argument("--case", action="append",
                         help="case name(s) to run; repeatable. default: all")
     parser.add_argument("--keep-going", action="store_true")
-    parser.add_argument("--fla-level", type=int, choices=range(0, 4),
-                        help="append -taokari-level-fla=N to obfuscated compiles")
+    parser.add_argument("--level", type=int, choices=range(0, 4),
+                        help="append -taokari-level-<pass>=N for all 6 level-aware "
+                             "passes (indbr/icall/indgv/fla/cie/cfe)")
+    parser.add_argument("--rtti", action="store_true",
+                        help="also enable the RTTI eraser (needs configs/rtti.json); "
+                             "cases flagged no_rtti are skipped")
     parser.add_argument("--benchmark-out", type=Path,
                         help="write plain-vs-obfuscated compile/runtime/size CSV")
     args = parser.parse_args()
@@ -277,7 +300,7 @@ def main() -> int:
                         raise RuntimeError(f"plain benchmark run {tag} failed\n{plain_run.stdout}{plain_run.stderr}")
 
                     start = time.perf_counter()
-                    exe = compile_case(driver, case, mode, fla_level=args.fla_level)
+                    exe = compile_case(driver, case, mode, level=args.level, rtti=args.rtti)
                     obf_compile = time.perf_counter() - start
                     obf_runtime, ran = measure_runtime(exe)
                     benchmark_rows.append({
@@ -294,7 +317,7 @@ def main() -> int:
                         "size_overhead": f"{(exe.stat().st_size / plain_size if plain_size else 0):.6f}",
                     })
                 else:
-                    exe = compile_case(driver, case, mode, fla_level=args.fla_level)
+                    exe = compile_case(driver, case, mode, level=args.level, rtti=args.rtti)
                     log("EXEC", f"{tag}: {exe.relative_to(ROOT)}", "blue")
                     ran = run([str(exe)])
                 if ran.returncode != case.expected_exit or (case.expected_stdout is not None and ran.stdout != case.expected_stdout):

@@ -726,16 +726,16 @@ This is required before Taokari can become serious.
 ## Level 1 — Expand Tests
 
 * [x] Current test harness exists
-* [ ] Add all pass flags to matrix
-* [ ] Add levels 0–3 to matrix
-* [ ] Add C test
-* [ ] Add C++ test
-* [ ] Add template test
-* [ ] Add exception test
-* [ ] Add virtual call test
-* [ ] Add global variable test
-* [ ] Add string test
-* [ ] Add constant test
+* [x] Add all pass flags to matrix
+* [x] Add levels 0–3 to matrix
+* [x] Add C test
+* [x] Add C++ test
+* [x] Add template test
+* [x] Add exception test
+* [x] Add virtual call test
+* [x] Add global variable test
+* [x] Add string test
+* [x] Add constant test
 
 ## Level 2 — Measure Costs
 
