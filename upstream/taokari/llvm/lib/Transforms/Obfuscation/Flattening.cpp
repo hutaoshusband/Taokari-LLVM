@@ -138,6 +138,11 @@ bool Flattening::flatten(Function *f) {
     return ConstantInt::get(IntTy, randWord());
   };
 
+  const uint64_t functionStateKey = randWord();
+  auto randStateKey = [&]() ->ConstantInt * {
+    return ConstantInt::get(IntTy, randWord() ^ functionStateKey);
+  };
+
   // Lower switch
   auto lower = std::unique_ptr<FunctionPass>(createLegacyLowerSwitchPass());
   lower->runOnFunction(*f);
@@ -189,7 +194,7 @@ bool Flattening::flatten(Function *f) {
   const auto  switchXorVar = IRB.CreateAlloca(IntTy, nullptr, "switchXor");
 
   // init：Encoded = EntryCase ^ XorKey
-  ConstantInt *entryXor = randConst();
+  ConstantInt *entryXor = randStateKey();
   Value *      entryEnc = IRB.CreateXor(EntryCase, entryXor);
   IRB.CreateStore(entryEnc, switchVar, true);
   IRB.CreateStore(entryXor, switchXorVar, true);
@@ -207,7 +212,7 @@ bool Flattening::flatten(Function *f) {
 
   Value *switchCondition = nullptr;
   if (flaLevel > 0) {
-    ConstantInt *delta = randConst();
+    ConstantInt *delta = randStateKey();
     Value *      enc1 = IRB.CreateXor(enc0, delta, "switchVar.enc1");
     Value *      xor1 = IRB.CreateXor(xor0, delta, "switchXor.xor1");
     IRB.CreateStore(enc1, switchVar, true);
@@ -310,7 +315,7 @@ bool Flattening::flatten(Function *f) {
     };
 
     auto writeNextEncoded = [&](Value *NextCaseVal) {
-      Value *nextXor = randConst();
+      Value *nextXor = randStateKey();
       switch (RNG() % 3) {
       case 1:
         nextXor = IRB.CreateNot(nextXor, "nextXor.not");
