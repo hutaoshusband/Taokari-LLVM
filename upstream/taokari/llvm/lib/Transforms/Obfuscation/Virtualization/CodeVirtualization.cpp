@@ -437,6 +437,36 @@ struct CodeVirtualization : public ModulePass {
     return true;
   }
 
+  // ponytail: Build-time operand-stack depth check (L1.5.4). Walks the
+  // bytecode simulating the max operand-stack depth using HandlerStackShape.
+  // Fails (returns false) if the depth would exceed the fixed 64-slot Stack
+  // alloca at any point -- otherwise the interpreter would silently overflow
+  // into adjacent memory. Control-flow opcodes (Jmp/BrTrue/Ret) reset or
+  // terminate the simulation conservatively; this is a safety bound, not a
+  // precise abstract interpreter.
+  bool checkStackDepth(const BytecodeProgram &P) const {
+    constexpr unsigned kStackCap = 64;
+    int64_t Depth = 0;
+    int64_t MaxDepth = 0;
+    size_t I = 0;
+    size_t N = P.Words.size();
+    while (I < N) {
+      int64_t Op = P.Words[I++];
+      if (Op < 0)
+        return false;
+      HandlerStackShape Shape = shapeOf(static_cast<Opcode>(Op));
+      Depth -= static_cast<int64_t>(Shape.Pops);
+      if (Depth < 0)
+        return false; // underflow: malformed bytecode
+      Depth += static_cast<int64_t>(Shape.Pushes);
+      if (Depth > MaxDepth)
+        MaxDepth = Depth;
+      // Skip the trailing immediates this opcode consumes.
+      I += Shape.Immediates;
+    }
+    return MaxDepth <= kStackCap;
+  }
+
   bool buildBytecode(Function &F, BytecodeProgram &P) {
     DenseMap<const Value *, unsigned> Slots;
     DenseMap<const BasicBlock *, size_t> BlockStart;
@@ -766,7 +796,7 @@ struct CodeVirtualization : public ModulePass {
         return false;
       P.Words[Fup.Index] = static_cast<int64_t>(It->second);
     }
-    return Slots.size() <= 64 && !P.Words.empty();
+    return Slots.size() <= 64 && !P.Words.empty() && checkStackDepth(P);
   }
 
   // ponytail: Per-opcode stack shape. Used by the build-time depth check
@@ -1241,7 +1271,11 @@ struct CodeVirtualization : public ModulePass {
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
     Type *Ptr = PointerType::getUnqual(Ctx);
-    auto *FTy = FunctionType::get(I64, {Ptr, Ptr}, false);
+    // ponytail: signature is i64(i64* bc, i64 bcLen, i64* args). bcLen is the
+    // bytecode word count; the dispatch loop checks PC < bcLen before each
+    // fetch so a corrupted PC (relevant once L2 encrypts the bytecode) faults
+    // to the Bad block instead of reading out of bounds.
+    auto *FTy = FunctionType::get(I64, {Ptr, I64, Ptr}, false);
     auto *F = Function::Create(FTy, GlobalValue::InternalLinkage,
                                "__taokari_vmp_interp_i64", M);
     F->addFnAttr(Attribute::NoUnwind);
@@ -1249,6 +1283,8 @@ struct CodeVirtualization : public ModulePass {
     auto ArgIt = F->arg_begin();
     Value *BC = &*ArgIt++;
     BC->setName("bc");
+    Value *BCLen = &*ArgIt++;
+    BCLen->setName("bclen");
     Value *Args = &*ArgIt;
     Args->setName("args");
 
@@ -1273,6 +1309,14 @@ struct CodeVirtualization : public ModulePass {
 
     B.SetInsertPoint(Dispatch);
     Value *OpPC = B.CreateLoad(I64, PC);
+    // ponytail: PC bounds check (L1.5.4). If PC has run past the bytecode,
+    // fault to Bad rather than reading out of bounds. Matters once L2
+    // encrypts the bytecode and a corrupted PC could otherwise escape.
+    Value *InBounds = B.CreateICmpSLT(OpPC, BCLen);
+    BasicBlock *Fetch =
+        BasicBlock::Create(Ctx, "fetch", F);
+    B.CreateCondBr(InBounds, Fetch, Bad);
+    B.SetInsertPoint(Fetch);
     Value *Op = B.CreateLoad(I64, B.CreateGEP(I64, BC, OpPC));
     B.CreateStore(B.CreateAdd(OpPC, ConstantInt::get(I64, 1)), PC);
 
@@ -1327,7 +1371,10 @@ struct CodeVirtualization : public ModulePass {
       B.CreateStore(B.CreateSExtOrTrunc(&A, I64), ArgPtr);
     }
     Value *ArgsPtr = B.CreateGEP(ArgsArrayTy, Args, {Zero, Zero});
-    Value *Result = B.CreateCall(Interp, {BCPtr, ArgsPtr});
+    // ponytail: pass the bytecode word count as the bcLen argument so the
+    // interpreter can bound-check PC (L1.5.4).
+    Value *BCLen = ConstantInt::get(I64, Words.size());
+    Value *Result = B.CreateCall(Interp, {BCPtr, BCLen, ArgsPtr});
     B.CreateRet(B.CreateTruncOrBitCast(Result, F.getReturnType()));
     return true;
   }
