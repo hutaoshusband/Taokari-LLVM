@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -62,6 +63,8 @@ CASES = [
         # Ported from FireflyProtector/test64/realworld_c. Output is deterministic.
         "FireflyRealWorldFixture:bf3bec2ca306c59b:d0029f74\n",
     ),
+    Case("c_seh", (case_path("c_seh") / "src" / "main.c",), "seh:12:16\n"),
+    Case("cpp_funclet", (case_path("cpp_funclet") / "src" / "main.cpp",), "funclet:14:24\n"),
     Case(
         "imgui_headless",
         (
@@ -85,14 +88,18 @@ def log(tag: str, message: str, color: str = "reset") -> None:
 def run(command: list[str], *, cwd: Path = ROOT, use_vs_env: bool = False) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     if use_vs_env and VSDEVCMD.exists():
-        batch = TESTING / "_with_vs_env.cmd"
-        batch.write_text(
-            "@echo off\n"
-            f'call "{VSDEVCMD}" -arch=x64 -host_arch=x64 >nul\n'
-            f"{subprocess.list2cmdline(command)}\n",
-            encoding="utf-8",
-        )
-        command = ["cmd.exe", "/d", "/c", str(batch)]
+        with tempfile.NamedTemporaryFile("w", suffix=".cmd", delete=False, encoding="utf-8") as handle:
+            batch = Path(handle.name)
+            handle.write(
+                "@echo off\n"
+                f'call "{VSDEVCMD}" -arch=x64 -host_arch=x64 >nul\n'
+                f"{subprocess.list2cmdline(command)}\n"
+                "exit /b %ERRORLEVEL%\n"
+            )
+        try:
+            return subprocess.run(["cmd.exe", "/d", "/c", str(batch)], cwd=cwd, text=True, capture_output=True, env=env)
+        finally:
+            batch.unlink(missing_ok=True)
     return subprocess.run(command, cwd=cwd, text=True, capture_output=True, env=env)
 
 
@@ -122,6 +129,10 @@ def compile_case(clang: Path, case: Case) -> Path:
         result = run(cmd, use_vs_env=True)
         if result.returncode:
             raise RuntimeError(f"compile {source}\n{result.stdout}{result.stderr}")
+        if not out.exists():
+            result = run(cmd, use_vs_env=True)
+            if result.returncode or not out.exists():
+                raise RuntimeError(f"compile {source} did not create {out}\n{result.stdout}{result.stderr}")
         objects.append(out)
 
     exe = build / f"{case.name}.exe"
@@ -129,6 +140,10 @@ def compile_case(clang: Path, case: Case) -> Path:
     result = run([str(clang), *map(str, objects), *case.link_flags, "-o", str(exe)], use_vs_env=True)
     if result.returncode:
         raise RuntimeError(f"link {case.name}\n{result.stdout}{result.stderr}")
+    if not exe.exists():
+        result = run([str(clang), *map(str, objects), *case.link_flags, "-o", str(exe)], use_vs_env=True)
+        if result.returncode or not exe.exists():
+            raise RuntimeError(f"link {case.name} did not create {exe}\n{result.stdout}{result.stderr}")
     return exe
 
 
