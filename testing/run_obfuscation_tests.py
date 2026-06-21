@@ -156,6 +156,12 @@ CASES = [
     # Exercises the vtable-backed iostream path (IndirectCall) and the hex/oct
     # manipulator constants (ConstantIntEncryption).
     Case("file_io", (case_path("file_io") / "src" / "main.cpp",), "io:168:150:4399400:0xff 0100 00042\n"),
+    # Inline assembler & compiler-specifics fixture: GNU inline asm with
+    # input/output/clobber constraints, __attribute__((packed)) and
+    # __attribute__((aligned(32))) struct layouts, and a packed/asm mix.
+    # Inline asm must pass through unchanged; packed GEP offsets must stay
+    # byte-exact after ConstantIntEncryption.
+    Case("inline_asm", (case_path("inline_asm") / "src" / "main.cpp",), "asm:6912:260:130:305468953:1111:8710\n"),
     Case("cpp_console", (case_path("cpp_console") / "src" / "main.cpp",), "cpp-console:144\n"),
     Case("cpp_classes", (case_path("cpp_classes") / "src" / "main.cpp",), "classes:124:taokari\n"),
     Case("cpp_templates", (case_path("cpp_templates") / "src" / "main.cpp",), "templates:55:29\n"),
