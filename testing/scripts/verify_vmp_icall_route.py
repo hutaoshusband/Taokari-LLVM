@@ -56,6 +56,43 @@ def main() -> int:
             sys.stderr.write(result.stdout + result.stderr)
             return 1
 
+        obf_ll = tmpdir / "thunk_obf.ll"
+        obf_exe = tmpdir / "thunk_obf.exe"
+        obf_flags = [
+            str(CLANG), str(src), "-O2", "-fno-discard-value-names",
+            "-mllvm", "-taokari",
+            "-mllvm", "-taokari-vmp",
+            "-mllvm", "-taokari-mba",
+            "-mllvm", "-taokari-mba-prob=100",
+            "-mllvm", "-taokari-bcf",
+            "-mllvm", "-taokari-level-bcf=2",
+            "-mllvm", "-taokari-bcf-prob=100",
+            "-mllvm", "-taokari-bcf-loops=2",
+        ]
+        obf_ir = run([*obf_flags, "-S", "-emit-llvm", "-o", str(obf_ll)],
+                     use_vs_env=True)
+        if obf_ir.returncode:
+            sys.stderr.write(obf_ir.stdout + obf_ir.stderr)
+            return 1
+        obf_text = obf_ll.read_text(encoding="utf-8", errors="ignore")
+        thunk_bodies = re.findall(
+            r"define internal i64 @__taokari_vmp_callthunk_[^{]+{(.*?)^}",
+            obf_text, re.S | re.M)
+        if not thunk_bodies:
+            return fail("missing VMP call thunk bodies")
+        if not all(".bcf.fake" in body for body in thunk_bodies):
+            return fail("VMP call thunks were not BCF-obfuscated")
+        if not all(".mba." in body for body in thunk_bodies):
+            return fail("VMP call thunks were not MBA-obfuscated")
+        obf_build = run([*obf_flags, "-o", str(obf_exe)], use_vs_env=True)
+        if obf_build.returncode:
+            sys.stderr.write(obf_build.stdout + obf_build.stderr)
+            return 1
+        obf_result = run([str(obf_exe)])
+        if obf_result.returncode:
+            sys.stderr.write(obf_result.stdout + obf_result.stderr)
+            return 1
+
     print("vmp icall route: ok")
     return 0
 

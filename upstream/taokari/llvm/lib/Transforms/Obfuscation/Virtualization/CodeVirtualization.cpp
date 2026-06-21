@@ -2346,6 +2346,28 @@ struct CodeVirtualization : public ModulePass {
     return true;
   }
 
+  GlobalVariable *getOrCreateThunkSeed(Module &M) {
+    if (auto *Existing = M.getGlobalVariable("__taokari_vmp_thunk_seed"))
+      return Existing;
+    Type *I64 = Type::getInt64Ty(M.getContext());
+    uint64_t Seed = RNG();
+    if (!Seed)
+      Seed = 0x9E3779B97F4A7C15ULL;
+    auto *GV = new GlobalVariable(M, I64, false, GlobalValue::PrivateLinkage,
+                                  ConstantInt::get(I64, Seed),
+                                  "__taokari_vmp_thunk_seed");
+    GV->setAlignment(Align(8));
+    return GV;
+  }
+
+  Value *maskThunkResult(IRBuilder<> &B, Module &M, Value *Result) {
+    Type *I64 = Type::getInt64Ty(M.getContext());
+    Value *Key = B.CreateAlignedLoad(I64, getOrCreateThunkSeed(M), Align(8),
+                                     true, "thunk.ret.key");
+    return B.CreateXor(B.CreateXor(Result, Key, "thunk.ret.xor"), Key,
+                       "thunk.ret.unxor");
+  }
+
   // Materialize the per-module direct-callee table as masked tokens.
   // Each direct
   // callee gets a thunk i64(i64* %args) that loads typed args, calls the
@@ -2370,8 +2392,11 @@ struct CodeVirtualization : public ModulePass {
     Thunk->addFnAttr(Attribute::NoUnwind);
     Thunk->addFnAttr(Attribute::NoInline);
 
-    BasicBlock *BB = BasicBlock::Create(Ctx, "entry", Thunk);
-    IRBuilder<> B(BB);
+    BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Thunk);
+    BasicBlock *Body = BasicBlock::Create(Ctx, "body", Thunk);
+    IRBuilder<> B(Entry);
+    B.CreateBr(Body);
+    B.SetInsertPoint(Body);
     Argument *ArgsPtr = Thunk->getArg(0);
     ArgsPtr->setName("args");
 
@@ -2391,14 +2416,15 @@ struct CodeVirtualization : public ModulePass {
 
     if (Callee->getReturnType()->isVoidTy()) {
       B.CreateCall(Callee, CallArgs);
-      B.CreateRet(ConstantInt::get(I64, 0));
+      B.CreateRet(maskThunkResult(B, M, ConstantInt::get(I64, 0)));
     } else {
       Value *Result = B.CreateCall(Callee, CallArgs);
       // ZExt to i64 -- the call result is already in canonical form when the
       // callee is itself virtualized; for external callees we trust the
       // declared type. Sign vs zero: zext is safe because the OpCall handler
       // narrows via VmTy afterward.
-      B.CreateRet(B.CreateZExt(Result, I64));
+      Value *Wide = B.CreateZExt(Result, I64);
+      B.CreateRet(maskThunkResult(B, M, Wide));
     }
     return Thunk;
   }
