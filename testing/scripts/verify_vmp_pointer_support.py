@@ -15,6 +15,7 @@ VSDEVCMD = Path(
 )
 
 SOURCE = r"""
+#include <stdint.h>
 #include <stdio.h>
 
 #ifndef VMP
@@ -23,6 +24,10 @@ SOURCE = r"""
 
 static int g_value = 31;
 static int g_sink = 0;
+
+__attribute__((noinline)) uintptr_t keep_uintptr(uintptr_t v) {
+  return v;
+}
 
 VMP int ptr_load_case(int *p) {
   return *p + 3;
@@ -57,6 +62,12 @@ VMP int global_store_case(int v) {
   return g_sink;
 }
 
+VMP int ptr_roundtrip_case(int *p) {
+  uintptr_t raw = keep_uintptr((uintptr_t)p);
+  int *q = (int *)raw;
+  return *q + 13;
+}
+
 int main(void) {
   int a = 39;
   int b = 0;
@@ -69,8 +80,10 @@ int main(void) {
   int gep_store = ptr_gep_store_case(arr, 1, 44);
   int global_load = global_load_case();
   int global_store = global_store_case(50);
-  printf("ptr:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d\n", load, store, b, alias, c,
-         gep_load, gep_store, arr[1], global_load, global_store, g_sink);
+  int roundtrip = ptr_roundtrip_case(&arr[3]);
+  printf("ptr:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d\n", load, store, b, alias, c,
+         gep_load, gep_store, arr[1], global_load, global_store, g_sink,
+         roundtrip);
   return 0;
 }
 """
@@ -155,6 +168,7 @@ def main() -> int:
             "ptr_gep_store_case",
             "global_load_case",
             "global_store_case",
+            "ptr_roundtrip_case",
         }
         if not expected.issubset(names):
             print(f"vmp pointer support: FAIL (missing bytecode {expected - names})",

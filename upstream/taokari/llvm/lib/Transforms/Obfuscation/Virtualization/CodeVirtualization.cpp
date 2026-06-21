@@ -314,12 +314,22 @@ struct CodeVirtualization : public ModulePass {
           continue;
         }
         if (auto *Cast = dyn_cast<CastInst>(&I)) {
-          if (!isSupportedInt(Cast->getSrcTy()) ||
-              !isSupportedInt(Cast->getDestTy()))
-            return true;
           switch (Cast->getOpcode()) {
           case Instruction::ZExt:
           case Instruction::Trunc:
+            if (!isSupportedInt(Cast->getSrcTy()) ||
+                !isSupportedInt(Cast->getDestTy()))
+              return true;
+            break;
+          case Instruction::PtrToInt:
+            if (!Cast->getSrcTy()->isPointerTy() ||
+                !isSupportedInt(Cast->getDestTy()))
+              return true;
+            break;
+          case Instruction::IntToPtr:
+            if (!isSupportedInt(Cast->getSrcTy()) ||
+                !Cast->getDestTy()->isPointerTy())
+              return true;
             break;
           default:
             return true;
@@ -718,11 +728,22 @@ struct CodeVirtualization : public ModulePass {
           continue;
         }
         if (auto *Cast = dyn_cast<CastInst>(&I)) {
-          if (!isSupportedInt(Cast->getType()))
-            return false;
           switch (Cast->getOpcode()) {
           case Instruction::ZExt:
           case Instruction::Trunc:
+            if (!isSupportedInt(Cast->getSrcTy()) ||
+                !isSupportedInt(Cast->getDestTy()))
+              return false;
+            break;
+          case Instruction::PtrToInt:
+            if (!Cast->getSrcTy()->isPointerTy() ||
+                !isSupportedInt(Cast->getDestTy()))
+              return false;
+            break;
+          case Instruction::IntToPtr:
+            if (!isSupportedInt(Cast->getSrcTy()) ||
+                !Cast->getDestTy()->isPointerTy())
+              return false;
             break;
           default:
             return false;
