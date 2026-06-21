@@ -1905,11 +1905,29 @@ struct CodeVirtualization : public ModulePass {
                          L = signExtendFor(B, C, L, Ty);
                          R = signExtendFor(B, C, R, Ty);
                        }
-                       if (GuardDivisor)
-                         branchIfFalse(
-                             B, C,
-                             B.CreateICmpNE(R, ConstantInt::get(C.I64, 0)));
-                       Result = Fn(B, L, R);
+                      if (GuardDivisor) {
+                        branchIfFalse(
+                            B, C,
+                            B.CreateICmpNE(R, ConstantInt::get(C.I64, 0)));
+                        if (SignedOperands) {
+                          // INT_MIN / -1 (and INT_MIN % -1) overflow in
+                          // signed div/rem. LLVM would produce poison; trap
+                          // to Bad instead.
+                          Value *Width =
+                              B.CreateAnd(Ty, ConstantInt::get(C.I64, 0xFF));
+                          Value *SignBit = B.CreateShl(
+                              ConstantInt::get(C.I64, 1),
+                              B.CreateSub(Width, ConstantInt::get(C.I64, 1)));
+                          Value *MinSigned = B.CreateSub(
+                              ConstantInt::get(C.I64, 0), SignBit);
+                          Value *Overflow = B.CreateAnd(
+                              B.CreateICmpEQ(L, MinSigned),
+                              B.CreateICmpEQ(R,
+                                             ConstantInt::getSigned(C.I64, -1)));
+                          branchIfFalse(B, C, B.CreateNot(Overflow));
+                        }
+                      }
+                      Result = Fn(B, L, R);
                        Result = narrowTo(B, C, Result, Ty);
                      } else {
                        Result = Fn(B, L, R);

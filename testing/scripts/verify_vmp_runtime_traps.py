@@ -393,6 +393,16 @@ def main() -> int:
                                       (OP_PUSH_CONST, [0, TY_I32]),
                                       (OP_SREM, [TY_I32]),
                                       (OP_RET, []))),
+            ("sdiv-int-min-overflow", *program(
+                (OP_PUSH_CONST, [-2147483648, TY_I32]),
+                (OP_PUSH_CONST, [-1, TY_I32]),
+                (OP_SDIV, [TY_I32]),
+                (OP_RET, []))),
+            ("srem-int-min-overflow", *program(
+                (OP_PUSH_CONST, [-2147483648, TY_I32]),
+                (OP_PUSH_CONST, [-1, TY_I32]),
+                (OP_SREM, [TY_I32]),
+                (OP_RET, []))),
             ("invalid-opcode", *program((999, []))),
             ("pc-mid-immediate", *program((OP_JMP, [1]),
                                            (OP_PUSH_CONST, [5, TY_I32]),
