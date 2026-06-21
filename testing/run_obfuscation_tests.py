@@ -98,6 +98,10 @@ RELEASE_GATES = [
 IMGUI = TESTING / "vendor" / "imgui"
 CASES = [
     Case("c_console", (case_path("c_console") / "src" / "main.c",), "c-console:104\n"),
+    # Arithmetic & logic operator fixture: + - * / %, unary, pre/post
+    # inc/dec, all relational operators, short-circuit &&/||/!, ternary on
+    # int and FP. Exercises ConstantInt/FP encryption and MBA on add/sub.
+    Case("arith_logic", (case_path("arith_logic") / "src" / "main.c",), "arith:6160:5775:42:110:142:301.142857\n"),
     Case("cpp_console", (case_path("cpp_console") / "src" / "main.cpp",), "cpp-console:144\n"),
     Case("cpp_classes", (case_path("cpp_classes") / "src" / "main.cpp",), "classes:124:taokari\n"),
     Case("cpp_templates", (case_path("cpp_templates") / "src" / "main.cpp",), "templates:55:29\n"),
