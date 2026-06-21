@@ -1,8 +1,8 @@
 """Build and validate a fully virtualized max-protection VMP sample."""
 from __future__ import annotations
 
+import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,6 +15,9 @@ OUT = ROOT / "build" / "vmp-validation"
 VSDEVCMD = Path(
     r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
 )
+DIRTY = bytes.fromhex("9c 50 8a 04 24 34 a7 34 a7 3a 04 24 74 08 0f 0b eb fe cc f1 0f 0b 58 9d")
+JUNK = bytes.fromhex("9c 50 80 34 24 5a 80 34 24 5a 58 9d")
+SUB = bytes.fromhex("9c 50 48 89 e0 48 8d 40 13 48 83 e8 13 58 9d")
 
 SOURCE = r'''
 #include <stdint.h>
@@ -78,8 +81,11 @@ MAX_FLAGS = [
     "-mllvm", "-taokari-cse",
     "-mllvm", "-taokari-cie",
     "-mllvm", "-taokari-cfe",
+    "-mllvm", "-taokari-rtti",
     "-mllvm", "-taokari-meta",
     "-mllvm", f"-taokari-cfg={ROOT / 'testing' / 'configs' / 'rtti.json'}",
+    "-mllvm", "-taokari-mir=max",
+    "-mllvm", "-verify-machineinstrs",
 ]
 
 LEVEL_FLAGS = [
@@ -109,8 +115,12 @@ def run(cmd: list[str], use_vs_env: bool = False) -> subprocess.CompletedProcess
     return subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True)
 
 
-def compile_exe(src: Path, out: Path, max_protection: bool) -> subprocess.CompletedProcess[str]:
+def compile_output(
+    src: Path, out: Path, max_protection: bool, *, obj: bool = False
+) -> subprocess.CompletedProcess[str]:
     flags = [str(CLANG), str(src), "-o", str(out)]
+    if obj:
+        flags[2:2] = ["-c"]
     if max_protection:
         flags[2:2] = MAX_FLAGS
         for name in LEVEL_FLAGS:
@@ -121,6 +131,16 @@ def compile_exe(src: Path, out: Path, max_protection: bool) -> subprocess.Comple
     return run(flags, use_vs_env=True)
 
 
+def require_mir_bytes(path: Path) -> None:
+    data = path.read_bytes()
+    missing = [
+        name for name, pattern in (("dirtybytes", DIRTY), ("junk", JUNK), ("sub", SUB))
+        if pattern not in data
+    ]
+    if missing:
+        raise SystemExit(f"missing MIR max bytes in {path}: {', '.join(missing)}")
+
+
 def main() -> int:
     if not CLANG.exists():
         print(f"missing clang: {CLANG}", file=sys.stderr)
@@ -128,22 +148,26 @@ def main() -> int:
 
     OUT.mkdir(parents=True, exist_ok=True)
     src = OUT / "full_vmp_sample.c"
-    native = OUT / "full_vmp_native.exe"
-    protected = OUT / "full_vmp_max_vmp.exe"
+    run_id = os.getpid()
+    native = OUT / f"full_vmp_native_{run_id}.exe"
+    protected = OUT / f"full_vmp_max_vmp_mir_{run_id}.exe"
+    protected_obj = OUT / f"full_vmp_max_vmp_mir_{run_id}.obj"
     src.write_text(SOURCE, encoding="utf-8")
 
-    for exe in (native, protected):
-        exe.unlink(missing_ok=True)
-
-    native_build = compile_exe(src, native, max_protection=False)
+    native_build = compile_output(src, native, max_protection=False)
     if native_build.returncode:
         sys.stderr.write(native_build.stdout + native_build.stderr)
         return 1
 
-    max_build = compile_exe(src, protected, max_protection=True)
+    max_build = compile_output(src, protected, max_protection=True)
     if max_build.returncode:
         sys.stderr.write(max_build.stdout + max_build.stderr)
         return 1
+    obj_build = compile_output(src, protected_obj, max_protection=True, obj=True)
+    if obj_build.returncode:
+        sys.stderr.write(obj_build.stdout + obj_build.stderr)
+        return 1
+    require_mir_bytes(protected_obj)
 
     native_run = run([str(native)])
     max_run = run([str(protected)])
@@ -172,6 +196,7 @@ def main() -> int:
 
     print(f"vmp full virtualization: ok ({virtualized}/{target_count})")
     print(f"binary: {protected}")
+    print(f"object: {protected_obj}")
     print(max_run.stdout, end="")
     return 0
 
