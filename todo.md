@@ -824,20 +824,20 @@ The L1.5 bounds checks (stack depth, PC < bcLen, frame/locals cap) are
 not write out of bounds. This phase makes the VM safe under active
 tampering before any crypto is piled on top.
 
-* [ ] Add runtime SP bounds check (underflow → trap; overflow into the
+* [x] Add runtime SP bounds check (underflow → trap; overflow into the
       64-slot `Stack` alloca → trap). Build-time `checkStackDepth` does
       not help once the attacker patches bytecode at rest.
-* [ ] Add runtime `Locals` slot index bounds check (`OpLoadSlot`/
+* [x] Add runtime `Locals` slot index bounds check (`OpLoadSlot`/
       `OpStoreSlot` currently do `Locals[slot]` with no check)
-* [ ] Add runtime `Frame` slot index bounds check (`OpLoadPtr`/`OpStorePtr`
+* [x] Add runtime `Frame` slot index bounds check (`OpLoadPtr`/`OpStorePtr`
       currently do `Frame[idx]` with no check; a patched frame index walks
       into adjacent stack)
-* [ ] Add handler-arity / PC-desync detection (if a fetch lands mid-opcode
+* [x] Add handler-arity / PC-desync detection (if a fetch lands mid-opcode
       because an immediate was patched, trap instead of silently skewing PC
       for the rest of the run)
-* [ ] Add div/rem-by-zero guard (`OpSDiv`/`OpUDiv`/`OpSRem`/`OpURem` —
+* [x] Add div/rem-by-zero guard (`OpSDiv`/`OpUDiv`/`OpSRem`/`OpURem` —
       defined trap, not host `#DE` killing the whole process)
-* [ ] Replace silent `ret 0` Bad block with trap + tamper flag (silent
+* [x] Replace silent `ret 0` Bad block with trap + tamper flag (silent
       wrong results are worse than a loud crash; the flag feeds Phase F's
       anti-analysis and L3's tamper-response)
 
