@@ -1069,14 +1069,41 @@ struct CodeVirtualization : public ModulePass {
     return false;
   }
 
+  static constexpr unsigned kOpcodeTableSize = 64;
+
+  bool buildOpcodeMaps(SmallVectorImpl<int64_t> &Encode,
+                       SmallVectorImpl<int64_t> &Decode) {
+    Encode.assign(kOpcodeTableSize, -1);
+    Decode.assign(kOpcodeTableSize, -1);
+    SmallVector<int64_t, kOpcodeTableSize> Tokens;
+    for (unsigned I = 0; I < kOpcodeTableSize; ++I)
+      Tokens.push_back(I);
+    std::shuffle(Tokens.begin(), Tokens.end(), RNG);
+
+    unsigned TokenI = 0;
+    for (unsigned Op = 0; Op < kOpcodeTableSize; ++Op) {
+      unsigned Immediates = 0;
+      if (!opcodeImmediateCount(static_cast<int64_t>(Op), Immediates))
+        continue;
+      int64_t Token = Tokens[TokenI++];
+      Encode[Op] = Token;
+      Decode[Token] = Op;
+    }
+    return true;
+  }
+
   bool mapOpcodeWords(SmallVectorImpl<int64_t> &Words,
-                      int64_t OpcodeMask) const {
+                      ArrayRef<int64_t> OpcodeEncode) const {
     size_t I = 0;
     while (I < Words.size()) {
       unsigned Immediates = 0;
       if (!opcodeImmediateCount(Words[I], Immediates))
         return false;
-      Words[I] ^= OpcodeMask;
+      if (Words[I] < 0 ||
+          static_cast<size_t>(Words[I]) >= OpcodeEncode.size() ||
+          OpcodeEncode[Words[I]] < 0)
+        return false;
+      Words[I] = OpcodeEncode[Words[I]];
       I += 1 + Immediates;
     }
     return I == Words.size();
@@ -1222,8 +1249,8 @@ struct CodeVirtualization : public ModulePass {
     Value *ArgLen;
     Value *TamperFlag;
     Value *ExpectedTag;
+    Value *OpcodeMap;
     Value *BytecodeKey;
-    Value *OpcodeMask;
     BasicBlock *Dispatch;
     BasicBlock *Bad;
     bool LittleEndian;
@@ -1795,14 +1822,14 @@ struct CodeVirtualization : public ModulePass {
     Type *I8 = Type::getInt8Ty(Ctx);
     Type *Ptr = PointerType::getUnqual(Ctx);
     // signature is i64(i64* bc, i64 bcLen, i8* pcMap, ptr* ptrs,
-    // i64 ptrCount, i64* args, i64 argLen, i64* tamper, i64 tag, i64 key,
-    // i64 opmask). bcLen is the
+    // i64 ptrCount, i64* args, i64 argLen, i64* tamper, i64 tag,
+    // i64* opcodeMap, i64 key). bcLen is the
     // bytecode word count; the dispatch loop checks PC < bcLen before each
     // fetch so a corrupted PC (relevant once L2 encrypts the bytecode) faults
     // to the Bad block instead of reading out of bounds.
     auto *FTy =
         FunctionType::get(
-            I64, {Ptr, I64, Ptr, Ptr, I64, Ptr, I64, Ptr, I64, I64, I64},
+            I64, {Ptr, I64, Ptr, Ptr, I64, Ptr, I64, Ptr, I64, Ptr, I64},
             false);
     auto *F = Function::Create(FTy, GlobalValue::InternalLinkage,
                                "__taokari_vmp_interp_i64", M);
@@ -1827,10 +1854,10 @@ struct CodeVirtualization : public ModulePass {
     TamperFlag->setName("tamper");
     Value *ExpectedTag = &*ArgIt++;
     ExpectedTag->setName("bytecode.tag");
+    Value *OpcodeMap = &*ArgIt++;
+    OpcodeMap->setName("opcode.map");
     Value *BytecodeKey = &*ArgIt++;
     BytecodeKey->setName("bytecode.key");
-    Value *OpcodeMask = &*ArgIt;
-    OpcodeMask->setName("opcode.mask");
 
     BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", F);
     BasicBlock *Dispatch = BasicBlock::Create(Ctx, "dispatch", F);
@@ -1895,10 +1922,15 @@ struct CodeVirtualization : public ModulePass {
     InterpCtx IC{I64,   F,       &Ctx, BC,       BCLen, PCMap, PtrTable, PtrCount, PC,
                  SP,    Stack,   Locals, Frame,  CallArgs,
                  CalleeTable, static_cast<unsigned>(CalleeOrder.size()),
-                 Args,  ArgLen,  TamperFlag, ExpectedTag, BytecodeKey, OpcodeMask,
+                 Args,  ArgLen,  TamperFlag, ExpectedTag, OpcodeMap, BytecodeKey,
                  Dispatch, Bad, M.getDataLayout().isLittleEndian()};
     Value *MappedOp = fetchWord(B, IC);
-    Value *Op = B.CreateXor(MappedOp, OpcodeMask);
+    branchIfFalse(B, IC,
+                  B.CreateICmpULT(MappedOp,
+                                  ConstantInt::get(I64, kOpcodeTableSize)));
+    Value *Op = B.CreateLoad(I64, B.CreateGEP(I64, OpcodeMap, MappedOp));
+    branchIfFalse(B, IC,
+                  B.CreateICmpNE(Op, ConstantInt::getSigned(I64, -1)));
     SmallVector<Handler, 24> Handlers = buildHandlerTable(IC);
     auto *Sw = B.CreateSwitch(Op, Bad, Handlers.size());
 
@@ -1923,12 +1955,15 @@ struct CodeVirtualization : public ModulePass {
     uint64_t BytecodeKey = RNG();
     if (!BytecodeKey)
       BytecodeKey = 0xD1B54A32D192ED03ULL;
-    int64_t OpcodeMask = static_cast<int64_t>((RNG() & 0x7FFF) | 0x40);
+    SmallVector<int64_t, kOpcodeTableSize> OpcodeEncode;
+    SmallVector<int64_t, kOpcodeTableSize> OpcodeDecode;
+    if (!buildOpcodeMaps(OpcodeEncode, OpcodeDecode))
+      return false;
     SmallVector<int64_t, 64> EncodedWords(P.Words.begin(), P.Words.end());
     SmallVector<uint8_t, 64> OpcodeStarts;
     if (!computeOpcodeStarts(P.Words, OpcodeStarts))
       return false;
-    if (!mapOpcodeWords(EncodedWords, OpcodeMask))
+    if (!mapOpcodeWords(EncodedWords, OpcodeEncode))
       return false;
 
     SmallVector<Constant *, 64> Words;
@@ -1959,6 +1994,17 @@ struct CodeVirtualization : public ModulePass {
     PCMap->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
     PCMap->setAlignment(Align(1));
 
+    SmallVector<Constant *, kOpcodeTableSize> OpcodeMapEntries;
+    for (int64_t V : OpcodeDecode)
+      OpcodeMapEntries.push_back(ConstantInt::getSigned(I64, V));
+    auto *OpcodeMapArrayTy = ArrayType::get(I64, OpcodeMapEntries.size());
+    auto *OpcodeMap = new GlobalVariable(
+        M, OpcodeMapArrayTy, true, GlobalValue::PrivateLinkage,
+        ConstantArray::get(OpcodeMapArrayTy, OpcodeMapEntries),
+        "__taokari_vmp_opmap_" + F.getName());
+    OpcodeMap->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+    OpcodeMap->setAlignment(Align(8));
+
     Function *Interp = getOrCreateInterpreter(M);
     F.deleteBody();
     BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", &F);
@@ -1968,6 +2014,7 @@ struct CodeVirtualization : public ModulePass {
     Value *Zero = ConstantInt::get(I64, 0);
     Value *BCPtr = B.CreateGEP(ArrayTy, Bytecode, {Zero, Zero});
     Value *PCMapPtr = B.CreateGEP(PCMapArrayTy, PCMap, {Zero, Zero});
+    Value *OpcodeMapPtr = B.CreateGEP(OpcodeMapArrayTy, OpcodeMap, {Zero, Zero});
     Type *Ptr = PointerType::getUnqual(Ctx);
     Value *PtrTablePtr = ConstantPointerNull::get(PointerType::getUnqual(Ctx));
     Value *PtrCount = ConstantInt::get(I64, 0);
@@ -2004,9 +2051,8 @@ struct CodeVirtualization : public ModulePass {
     Value *Result = B.CreateCall(
         Interp, {BCPtr, BCLen, PCMapPtr, PtrTablePtr, PtrCount, ArgsPtr,
                  ConstantInt::get(I64, F.arg_size()), TamperFlag,
-                 ConstantInt::get(I64, BytecodeTag),
-                 RuntimeKey,
-                 ConstantInt::get(I64, OpcodeMask)});
+                 ConstantInt::get(I64, BytecodeTag), OpcodeMapPtr,
+                 RuntimeKey});
     Value *Tampered = B.CreateLoad(I64, TamperFlag);
     B.CreateCondBr(B.CreateICmpNE(Tampered, Zero), Trap, Ok);
     B.SetInsertPoint(Trap);
