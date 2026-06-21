@@ -2474,6 +2474,7 @@ struct CodeVirtualization : public ModulePass {
     InterpName += std::to_string(RNG());
     auto *F = Function::Create(FTy, GlobalValue::InternalLinkage, InterpName, M);
     F->addFnAttr(Attribute::NoUnwind);
+    F->addFnAttr(Attribute::NoInline);
 
     auto ArgIt = F->arg_begin();
     Value *BC = &*ArgIt++;
@@ -2696,6 +2697,9 @@ struct CodeVirtualization : public ModulePass {
     OpcodeMap->setAlignment(Align(8));
 
     Function *Interp = createInterpreter(M, F);
+    F.removeFnAttr(Attribute::AlwaysInline);
+    F.removeFnAttr(Attribute::InlineHint);
+    F.addFnAttr(Attribute::NoInline);
     F.deleteBody();
     BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", &F);
     BasicBlock *Ok = BasicBlock::Create(Ctx, "vmp.ok", &F);

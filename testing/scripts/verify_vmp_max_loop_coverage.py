@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import re
 import subprocess
 import sys
 import tempfile
@@ -73,6 +74,14 @@ def compile_exe(src: Path, out: Path, *, report: Path | None) -> subprocess.Comp
     return run(cmd, use_vs_env=True)
 
 
+def attr_text(ir: str, function: str) -> str:
+    match = re.search(rf"define .* @{re.escape(function)}(?:_[0-9]+)?\(.*\) #(\d+)", ir)
+    if not match:
+        return ""
+    attrs = dict(re.findall(r"attributes #(\d+) = \{([^}]*)\}", ir))
+    return attrs.get(match.group(1), "")
+
+
 def main() -> int:
     if not CLANG.exists():
         print(f"missing clang: {CLANG}", file=sys.stderr)
@@ -83,6 +92,7 @@ def main() -> int:
         src = tmpdir / "loop_coverage.c"
         native = tmpdir / "native.exe"
         protected = tmpdir / "protected.exe"
+        ll = tmpdir / "protected.ll"
         report = tmpdir / "compat.tsv"
         obj = tmpdir / "probe.obj"
         src.write_text(SOURCE, encoding="utf-8")
@@ -107,6 +117,25 @@ def main() -> int:
             sys.stderr.write(native_build.stdout + native_build.stderr)
             sys.stderr.write(protected_build.stdout + protected_build.stderr)
             return 1
+
+        ir_build = run([
+            str(CLANG), "-O2", "-S", "-emit-llvm", str(src), "-o", str(ll),
+            "-mllvm", "-taokari-vmp",
+        ], use_vs_env=True)
+        if ir_build.returncode:
+            sys.stderr.write(ir_build.stdout + ir_build.stderr)
+            return 1
+        ir = ll.read_text(encoding="utf-8", errors="ignore")
+        for name in ("vm_counter", "vm_obfuscate_string"):
+            interp = f"__taokari_vmp_interp_i64_{name}"
+            if "noinline" not in attr_text(ir, name):
+                print(f"vmp max loop coverage: FAIL ({name} not noinline)",
+                      file=sys.stderr)
+                return 1
+            if "noinline" not in attr_text(ir, interp):
+                print(f"vmp max loop coverage: FAIL ({interp} not noinline)",
+                      file=sys.stderr)
+                return 1
 
         rows = {row["function"]: row for row in csv.DictReader(
             report.read_text(encoding="utf-8").splitlines(), delimiter="\t"
