@@ -385,6 +385,14 @@ struct CodeVirtualization : public ModulePass {
         if (isa<AllocaInst>(I) || isa<LoadInst>(I) || isa<StoreInst>(I) ||
             isa<GetElementPtrInst>(I))
           continue;
+        if (auto *SI = dyn_cast<SwitchInst>(&I)) {
+          if (!isSupportedInt(SI->getCondition()->getType()))
+            return true;
+          for (auto Case : SI->cases())
+            if (!isSupportedInt(Case.getCaseValue()->getType()))
+              return true;
+          continue;
+        }
         // direct CallInst allowed (L1.5.1); indirect/non-integer
         // signature still rejects via buildBytecode's isVMCompatibleCall.
         if (isa<CallInst>(I))
@@ -956,6 +964,45 @@ struct CodeVirtualization : public ModulePass {
           P.Words.push_back(OpJmp);
           P.Fixups.push_back({P.Words.size(), Br->getSuccessor(0)});
           P.Words.push_back(0);
+          continue;
+        }
+        if (auto *SW = dyn_cast<SwitchInst>(&I)) {
+          if (!isSupportedInt(SW->getCondition()->getType()))
+            return false;
+          SmallVector<std::pair<ConstantInt *, BasicBlock *>, 8> Cases;
+          SmallVector<size_t, 8> CaseFixups;
+          for (auto Case : SW->cases()) {
+            if (!isSupportedInt(Case.getCaseValue()->getType()))
+              return false;
+            Cases.push_back({Case.getCaseValue(), Case.getCaseSuccessor()});
+          }
+          for (auto &[CaseValue, Succ] : Cases) {
+            (void)Succ;
+            if (!emitValue(P, Slots, AllocaBase, NextFrameSlot,
+                           SW->getCondition()) ||
+                !emitValue(P, Slots, AllocaBase, NextFrameSlot, CaseValue))
+              return false;
+            P.Words.push_back(OpCmpEq);
+            P.Words.push_back(OpBrTrue);
+            CaseFixups.push_back(P.Words.size());
+            P.Words.push_back(0);
+          }
+          if (!emitPhiCopies(P, Slots, AllocaBase, NextFrameSlot, &BB,
+                             SW->getDefaultDest()))
+            return false;
+          P.Words.push_back(OpJmp);
+          P.Fixups.push_back({P.Words.size(), SW->getDefaultDest()});
+          P.Words.push_back(0);
+          for (unsigned CaseIdx = 0; CaseIdx < Cases.size(); ++CaseIdx) {
+            BasicBlock *Succ = Cases[CaseIdx].second;
+            P.Words[CaseFixups[CaseIdx]] =
+                static_cast<int64_t>(P.Words.size());
+            if (!emitPhiCopies(P, Slots, AllocaBase, NextFrameSlot, &BB, Succ))
+              return false;
+            P.Words.push_back(OpJmp);
+            P.Fixups.push_back({P.Words.size(), Succ});
+            P.Words.push_back(0);
+          }
           continue;
         }
         if (auto *Ret = dyn_cast<ReturnInst>(&I)) {

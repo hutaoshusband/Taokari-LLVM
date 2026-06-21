@@ -692,7 +692,7 @@ What should not be forced through the VM by default:
 Compatibility roadmap:
 
 * [x] Add `void` protected-function support
-* [ ] Add raw `switch` lowering
+* [x] Add raw `switch` lowering
 * [ ] Add `memcpy` / `memset` / `memmove` intrinsic support
 * [ ] Add multi-index and struct-field GEP support
 * [ ] Add pointer args and pointer returns in VM direct calls
