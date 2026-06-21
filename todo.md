@@ -846,17 +846,17 @@ tampering before any crypto is piled on top.
 Unblocks virtualizing real C/C++ pointer-heavy functions. Each sub-step
 is independently landable and differentially testable.
 
-* [ ] Add external pointer arg support (`LoadInst`/`StoreInst` through
-      pointer params — currently rejected in `resolveFramePtr`)
-* [ ] Add global pointer access (loads/stores through `GlobalVariable` addrs)
-* [ ] Add non-constant GEP support (runtime offset, not just
-      `accumulateConstantOffset` — currently defers to L2)
-* [ ] Add alignment handling (respect `LoadInst`/`StoreInst::getAlign`;
-      misaligned access under VM must match native semantics)
-* [ ] Add pointer aliasing differential cases (native vs VM over aliasing
-      patterns — two pointers to the same frame slot, etc.)
-* [ ] Add pointer-width correctness (`ptrtoint`/`inttoptr` at the right
-      width; opaque-pointer-aware)
+* [x] Add external pointer arg support (`LoadInst`/`StoreInst` through
+      pointer params via `OpLoadMem` / `OpStoreMem`)
+* [x] Add global pointer access (loads/stores through `GlobalVariable` addrs
+      via the VMP pointer table)
+* [x] Add non-constant GEP support (runtime offset via `OpGep`)
+* [x] Add alignment handling (misaligned access under VM matches native
+      semantics through bytewise memory ops)
+* [x] Add pointer aliasing differential cases (native vs VM over aliasing
+      patterns)
+* [x] Add pointer-width correctness (`ptrtoint`/`inttoptr` uses `DataLayout`
+      pointer-width gates; opaque-pointer-aware)
 
 ### Phase C — Cipher & key hardening (current scheme is trivially recoverable)
 
