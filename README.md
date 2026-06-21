@@ -1,4 +1,4 @@
-# Taokari LLVM
+# Taokari LLVM - Built to survive the post-D810 era
 
 ![Taokari](docs/Taokari_Banner.png)
 
@@ -7,23 +7,14 @@
 ![Pass Manager](https://img.shields.io/badge/codegen-legacy%20PM%20%2B%20new--PM%20wrapper-orange)
 ![License](https://img.shields.io/badge/license-Apache--2.0%20%2B%20LLVM%20exceptions-green)
 
-Taokari is my hardened fork of [Arkari](https://github.com/komimoe/Arkari), itself in
+Taokari is my fork of [Arkari](https://github.com/komimoe/Arkari), itself in
 the Goron / Hikari / OLLVM lineage, focused on one question:
 
 > **What makes an obfuscator survive a serious analyst on IDA Pro 9.2 + D810?**
 
-The answer is **not** only more IR passes. D810's default rule sets recognise and collapse
-classic OLLVM-class IR patterns, and the Hex-Rays microcode lifter sees every IR pass in
-clean form. Taokari adds these layers on top of Arkari's existing IR obfuscator:
-
-1. **A Machine-IR backend layer** that runs after register allocation, where D810 never
-   sees it.
-2. **Optimizer-resistant IR transforms** — opaque predicates and constant/string
-   encryption engineered to survive the LLVM cleanup pipeline, not just look noisy.
-
-Everything Arkari already does (control-flow flattening, two-tier page tables for
-indirect calls/branches/globals, MSVC RTTI erasing, SEH/funclet handling) is inherited
-and preserved. Taokari adds on top of it.
+Not more IR passes — D810 folds those, and the Hex-Rays microcode lifter sees every IR
+pass clean. Taokari moves the fight somewhere they can't reach: below the IR optimizer,
+into a bytecode VM, and behind runtime integrity checks that refuse to be patched.
 
 ---
 
@@ -121,7 +112,7 @@ capped at 4.
 | **indgv** — indirect globals | `-irobf-indgv` | 0-4 | Two-tier page table, skips thread-local/DLL-import/EH globals, AArch64 PAC key 2 (data) |
 | **rtti** — MSVC RTTI eraser | `-irobf-rtti` | — | BLAKE3-keyed type-name rewrite (requires `randomSeed` in config) |
 | **meta** — metadata hygiene | `-irobf-meta` | 0-4 | Strips `llvm.ident`/debug/source-path metadata, renames internal helper symbols, supports export allowlists, and randomizes helper sections for PE/ELF/Mach-O at L3 |
-| **vmp** — selected-function virtualization | `-irobf-vmp` | 0-3 | *(Taokari addition)* `+vmp` functions lower to bytecode and an interpreter; current work includes pointer support, per-function interpreter diversity, runtime-derived keys, opcode permutation tables, indirect handler dispatch, fake handlers, runtime traps, DLL load checks, and IDA inspection gates |
+| **vmp** — selected-function virtualization | `-irobf-vmp` | 0-3 | *(Taokari addition)* `+vmp` functions lower to bytecode and an interpreter; current work includes pointer support, per-function interpreter diversity, runtime-derived keys, opcode permutation tables, indirect handler dispatch, fake handlers, runtime traps, INT_MIN/-1 div/rem overflow guards, memcpy/memset/memmove intrinsics, multi-index/struct GEP, raw switch lowering, void functions, direct + indirect pointer calls, function splitting around unsupported IR, a per-function compatibility report, DLL load + manual-map validation, and IDA/Hex-Rays inspection gates |
 
 ### Per-function control
 
@@ -218,9 +209,14 @@ python testing\run_obfuscation_tests.py --keep-going
 - `--rtti` / `--no-rtti` — toggles the RTTI eraser via `testing\configs\rtti.json`.
 - `--benchmark-out report.csv` — records compile time, runtime, and binary-size overhead.
 
-**16 cases** cover C, C++, templates, exceptions/SEH, virtual dispatch, globals, strings,
-constants, MBA, a FLA stress test, a real-world fixture, and a whole-obfuscator **ImGui**
-stress case. See [`testing/README.md`](testing/README.md).
+**35 cases** cover C, C++, templates (basic and advanced), inheritance / polymorphism /
+virtual dispatch, exceptions & RAII, SEH / funclets, globals, strings, constants, MBA,
+arithmetic / logic / bitwise / shift operators, control flow & loops, functions &
+parameter passing, dynamic memory, file & stream I/O, multithreading &
+synchronisation, STL containers & algorithms, inline asm & compiler-specifics,
+preprocessor & macros, security & sanitizer-compat edge cases, a FLA stress test, a
+real-world fixture, and a whole-obfuscator **ImGui** stress case. See
+[`testing/README.md`](testing/README.md).
 
 **Per-pass verification scripts** under `testing\scripts\` gate the harder claims:
 
@@ -237,12 +233,17 @@ stress case. See [`testing/README.md`](testing/README.md).
   bytes; the normal set does not.
 - `verify_mba.py`, `verify_bogus_control_flow.py`, `verify_string_encryption_level1.py`,
   `verify_constant_runtime_mix.py` — per-pass correctness.
+- `verify_page_table_ptr_key.py` — indirect-branch page-table pointer key (regression
+  gate for the decryptor-IR fix).
+- `verify_vmp_*.py` (void / switch / memintrin / struct-gep / call-pointer / indirect-call
+  / function-split / compat-report / runtime-traps / dll-load / ida-l2 / guardrails /
+  padding / differential / benchmark) — VMP capability, compatibility, and overhead gates.
 - `ida_switch_recovery_check.py` — runs *inside IDA* and asserts the Level-4 target has
   zero switch-info sites.
 
 ---
 
-## Roadmap status (honest)
+## Roadmap status: detailed in the todo.md!
 
 Taokari ships a **tiered L1 → L2 → L3** progression per pass. `L3` here means "hardened
 enough that reversing is expensive, annoying, and slow for a serious analyst" — not
@@ -267,8 +268,15 @@ mathematically impossible. The full living list is in [`todo.md`](todo.md).
   callee-table token hardening, per-block keys, indirect handler dispatch, fake handlers,
   bytecode and overhead guardrails, dummy opcode padding, BCF/MBA-hardened call thunks,
   manual-map DLL validation, and IDA/Hex-Rays inspection gates.
+- VMP compatibility coverage landed: `void` functions, raw `switch` lowering,
+  `memcpy`/`memset`/`memmove` intrinsics, multi-index / struct-field GEP, pointer args
+  and pointer returns in direct calls, indirect/function-pointer call stubs with
+  split-around fallback, function splitting (VM-supported regions become bytecode,
+  unsupported islands stay native), a per-function compatibility report
+  (`-taokari-vmp-compat-report=<path>`), the `INT_MIN / -1` signed div/rem overflow
+  guard, and release-blocking EXE / normal-DLL / manual-map / native↔VM interop gates.
 
-**Partial / needs hardening:**
+**Partial**
 
 - MIR per-sub-pass config keys (the numeric suffix after `:` / `=` in
   `-taokari-mir=dirtybytes:75` is parsed but currently ignored).
@@ -277,15 +285,15 @@ mathematically impossible. The full living list is in [`todo.md`](todo.md).
   their own predicates inline.
 - New-PM codegen wiring: the new-PM `TaokariMachineObfPass` class is registered but not
   yet plugged into `X86CodeGenPassBuilder` — only the legacy `addPreEmitPass` hook is live.
-- VMP is strong enough to be a real selected-function protection path now, but it is not
-  full-program virtualization. It still needs compatibility reporting, function splitting
-  around unsupported IR, wider pointer/aggregate coverage, and release-blocking EXE/DLL
-  matrix runs before I call it full compatibility.
+- VMP is strong enough to be a real selected-function protection path now, and the
+  compatibility report plus function splitting make unsupported IR explicit rather than
+  fatal. It is still not full-program virtualization: wider pointer / aggregate coverage
+  and the remaining L3 hardening below are still work.
 - VMP L3 is not done: PC encryption, stack/locals encryption between handlers,
   anti-debug/anti-trace behavior inside the interpreter loop, cross-function VM state,
   and devirtualization sample gates are still work.
 
-**Backlog (not implemented — do not expect these yet):**
+**Backlog (not implemented — will be implemented):**
 
 - Function outlining / callout obfuscation.
 - Dynamic / anti-debug runtime protections.
@@ -295,7 +303,7 @@ mathematically impossible. The full living list is in [`todo.md`](todo.md).
 
 ---
 
-## Honest caveats
+## Caveats right now
 
 - **Constant encryption at level 0-1 is intra-unit and re-foldable.** The decrypt IR is
   built from constants and a `constant` global, so any re-running optimizer can fold it
@@ -305,8 +313,10 @@ mathematically impossible. The full living list is in [`todo.md`](todo.md).
   reserved but not shipped.
 - **The MIR layer is x86_64-only.** No 32-bit x86, no AArch64.
 - **VMP is selected-function protection, not automatic whole-program protection.** Loader
-  glue, CRT startup, EH-heavy code, TLS setup, hot loops, and unsupported IR should stay
-  native or be split around until the compatibility report and function splitting are done.
+  glue, CRT startup, EH-heavy code, TLS setup, hot loops, and unsupported IR stay native
+  or are split around — the compatibility report (`-taokari-vmp-compat-report=<path>`)
+  says exactly which functions were virtualized, partially virtualized, or skipped, and
+  why.
 - **Flattening refuses EH-heavy functions** (`hasPersonalityFn`, invoke/cleanup/catch
   pads) and oversized/alloca-heavy functions — the `c_seh` and `cpp_funclet` test cases
   exist precisely to guard this.
