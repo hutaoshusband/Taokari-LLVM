@@ -660,7 +660,7 @@ diagnostics explaining what was virtualized and what stayed native.
 
 Protection target:
 
-* [ ] Native EXE programs keep working under normal process startup
+* [x] Native EXE programs keep working under normal process startup
 * [ ] DLLs keep working under `LoadLibrary` / `GetProcAddress`
 * [ ] DLLs keep working under manual mapping when imports, relocations, TLS,
       section protections, and entrypoint invocation are handled by the loader
