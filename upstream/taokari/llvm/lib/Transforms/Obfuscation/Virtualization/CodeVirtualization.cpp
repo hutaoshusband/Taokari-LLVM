@@ -967,6 +967,22 @@ struct CodeVirtualization : public ModulePass {
     return I == Words.size();
   }
 
+  bool computeOpcodeStarts(const SmallVectorImpl<int64_t> &Words,
+                           SmallVectorImpl<uint8_t> &Starts) const {
+    Starts.assign(Words.size(), 0);
+    size_t I = 0;
+    while (I < Words.size()) {
+      unsigned Immediates = 0;
+      if (!opcodeImmediateCount(Words[I], Immediates))
+        return false;
+      if (I + 1 + Immediates > Words.size())
+        return false;
+      Starts[I] = 1;
+      I += 1 + Immediates;
+    }
+    return I == Words.size();
+  }
+
   int64_t encryptBytecodeWord(int64_t Word, size_t Index,
                               uint64_t BytecodeKey) const {
     uint64_t Schedule =
@@ -1006,6 +1022,8 @@ struct CodeVirtualization : public ModulePass {
     Function *F;
     LLVMContext *Ctx;
     Value *BC;
+    Value *BCLen;
+    Value *PCMap;
     Value *PC;
     Value *SP;
     Value *Stack;
@@ -1013,14 +1031,35 @@ struct CodeVirtualization : public ModulePass {
     Value *Frame;
     Value *CallArgs;
     GlobalVariable *CalleeTable;
+    unsigned CalleeCount;
     Value *Args;
+    Value *ArgLen;
+    Value *TamperFlag;
     Value *BytecodeKey;
     Value *OpcodeMask;
     BasicBlock *Dispatch;
+    BasicBlock *Bad;
   };
+
+  void branchIfFalse(IRBuilder<> &B, InterpCtx &C, Value *Ok) {
+    BasicBlock *Cont = BasicBlock::Create(*C.Ctx, "guard.ok", C.F);
+    B.CreateCondBr(Ok, Cont, C.Bad);
+    B.SetInsertPoint(Cont);
+  }
+
+  Value *checkedWidth(IRBuilder<> &B, InterpCtx &C, Value *PackedTyImm) {
+    Value *Width = B.CreateAnd(PackedTyImm, ConstantInt::get(C.I64, 0xFF));
+    Value *NonZero =
+        B.CreateICmpUGE(Width, ConstantInt::get(C.I64, 1));
+    Value *InRange =
+        B.CreateICmpULE(Width, ConstantInt::get(C.I64, 64));
+    branchIfFalse(B, C, B.CreateAnd(NonZero, InRange));
+    return Width;
+  }
 
   Value *fetchWord(IRBuilder<> &B, InterpCtx &C) {
     Value *Cur = B.CreateLoad(C.I64, C.PC);
+    branchIfFalse(B, C, B.CreateICmpULT(Cur, C.BCLen));
     Value *Enc = B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.BC, Cur));
     B.CreateStore(B.CreateAdd(Cur, ConstantInt::get(C.I64, 1)), C.PC);
     Value *Mix = B.CreateMul(Cur, ConstantInt::get(C.I64, 0x9E3779B97F4A7C15ULL));
@@ -1029,10 +1068,14 @@ struct CodeVirtualization : public ModulePass {
   }
 
   void pushStk(IRBuilder<> &B, InterpCtx &C, Value *V) {
+    Value *Idx = B.CreateLoad(C.I64, C.SP);
+    branchIfFalse(B, C, B.CreateICmpULT(Idx, ConstantInt::get(C.I64, 64)));
     push(B, C.I64, C.Stack, C.SP, V);
   }
 
   Value *popStk(IRBuilder<> &B, InterpCtx &C) {
+    Value *Idx = B.CreateLoad(C.I64, C.SP);
+    branchIfFalse(B, C, B.CreateICmpUGT(Idx, ConstantInt::get(C.I64, 0)));
     return pop(B, C.I64, C.Stack, C.SP);
   }
 
@@ -1049,11 +1092,16 @@ struct CodeVirtualization : public ModulePass {
   // immediate (low 8 bits = width; the signed bit is ignored here).
   Value *narrowTo(IRBuilder<> &B, InterpCtx &C, Value *V,
                   Value *PackedTyImm) {
-    Value *Width = B.CreateAnd(PackedTyImm, ConstantInt::get(C.I64, 0xFF));
+    Value *Width = checkedWidth(B, C, PackedTyImm);
     // Mask = (1 << Width) - 1
+    Value *Is64 = B.CreateICmpEQ(Width, ConstantInt::get(C.I64, 64));
+    Value *ShiftWidth =
+        B.CreateSelect(Is64, ConstantInt::get(C.I64, 63), Width);
     Value *Mask =
-        B.CreateSub(B.CreateShl(ConstantInt::get(C.I64, 1), Width),
-                    ConstantInt::get(C.I64, 1));
+        B.CreateSelect(Is64, ConstantInt::get(C.I64, ~0ULL),
+                       B.CreateSub(B.CreateShl(ConstantInt::get(C.I64, 1),
+                                               ShiftWidth),
+                                   ConstantInt::get(C.I64, 1)));
     return B.CreateAnd(V, Mask);
   }
 
@@ -1069,9 +1117,14 @@ struct CodeVirtualization : public ModulePass {
   Value *signExtendFor(IRBuilder<> &B, InterpCtx &C, Value *V,
                        Value *PackedTyImm) {
     Value *One = ConstantInt::get(C.I64, 1);
-    Value *Width = B.CreateAnd(PackedTyImm, ConstantInt::get(C.I64, 0xFF));
+    Value *Width = checkedWidth(B, C, PackedTyImm);
+    Value *Is64 = B.CreateICmpEQ(Width, ConstantInt::get(C.I64, 64));
+    Value *ShiftWidth =
+        B.CreateSelect(Is64, ConstantInt::get(C.I64, 63), Width);
     Value *Mask =
-        B.CreateSub(B.CreateShl(One, Width), ConstantInt::get(C.I64, 1));
+        B.CreateSelect(Is64, ConstantInt::get(C.I64, ~0ULL),
+                       B.CreateSub(B.CreateShl(One, ShiftWidth),
+                                   ConstantInt::get(C.I64, 1)));
     Value *Lo = B.CreateAnd(V, Mask);
     Value *SignBit =
         B.CreateShl(One, B.CreateSub(Width, ConstantInt::get(C.I64, 1)));
@@ -1092,6 +1145,10 @@ struct CodeVirtualization : public ModulePass {
                  [this, &C](IRBuilder<> &B) {
                    Value *Slot = fetchWord(B, C);
                    Value *ArgNo = fetchWord(B, C);
+                   branchIfFalse(B, C,
+                                 B.CreateICmpULT(Slot,
+                                                 ConstantInt::get(C.I64, 64)));
+                   branchIfFalse(B, C, B.CreateICmpULT(ArgNo, C.ArgLen));
                    Value *ArgVal =
                        B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.Args, ArgNo));
                    B.CreateStore(ArgVal, B.CreateGEP(C.I64, C.Locals, Slot));
@@ -1108,14 +1165,21 @@ struct CodeVirtualization : public ModulePass {
                  [this, &C](IRBuilder<> &B) {
                    Value *Slot = fetchWord(B, C);
                    Value *Ty = fetchWord(B, C);
+                   branchIfFalse(B, C,
+                                 B.CreateICmpULT(Slot,
+                                                 ConstantInt::get(C.I64, 64)));
                    Value *V = B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.Locals, Slot));
                    pushStk(B, C, narrowTo(B, C, V, Ty));
                    B.CreateBr(C.Dispatch);
                  }});
     H.push_back({OpStoreSlot, "storeslot", shapeOf(OpStoreSlot),
                  [this, &C](IRBuilder<> &B) {
-                   B.CreateStore(popStk(B, C),
-                                 B.CreateGEP(C.I64, C.Locals, fetchWord(B, C)));
+                   Value *V = popStk(B, C);
+                   Value *Slot = fetchWord(B, C);
+                   branchIfFalse(B, C,
+                                 B.CreateICmpULT(Slot,
+                                                 ConstantInt::get(C.I64, 64)));
+                   B.CreateStore(V, B.CreateGEP(C.I64, C.Locals, Slot));
                    B.CreateBr(C.Dispatch);
                  }});
 
@@ -1129,6 +1193,9 @@ struct CodeVirtualization : public ModulePass {
                  [this, &C](IRBuilder<> &B) {
                    Value *FrameIdx = popStk(B, C);
                    Value *Ty = fetchWord(B, C);
+                   branchIfFalse(B, C,
+                                 B.CreateICmpULT(FrameIdx,
+                                                 ConstantInt::get(C.I64, 64)));
                    Value *V = B.CreateLoad(C.I64,
                                            B.CreateGEP(C.I64, C.Frame, FrameIdx));
                    pushStk(B, C, narrowTo(B, C, V, Ty));
@@ -1139,6 +1206,9 @@ struct CodeVirtualization : public ModulePass {
                    Value *FrameIdx = popStk(B, C);
                    Value *V = popStk(B, C);
                    Value *Ty = fetchWord(B, C);
+                   branchIfFalse(B, C,
+                                 B.CreateICmpULT(FrameIdx,
+                                                 ConstantInt::get(C.I64, 64)));
                    Value *Narrowed = narrowTo(B, C, V, Ty);
                    B.CreateStore(Narrowed,
                                  B.CreateGEP(C.I64, C.Frame, FrameIdx));
@@ -1162,6 +1232,13 @@ struct CodeVirtualization : public ModulePass {
                      Value *CalleeIdx = fetchWord(B, C);
                      Value *NArgs = fetchWord(B, C);
                      Value *Ty = fetchWord(B, C);
+                     branchIfFalse(B, C,
+                                   B.CreateICmpULT(
+                                       CalleeIdx,
+                                       ConstantInt::get(C.I64, C.CalleeCount)));
+                     branchIfFalse(B, C,
+                                   B.CreateICmpULE(NArgs,
+                                                   ConstantInt::get(C.I64, 8)));
                      // Pop into CallArgs[0..NArgs-1] via a runtime-indexed
                      // loop (max 8 iters per isVMCompatibleCall's gate).
                      Value *Zero = ConstantInt::get(C.I64, 0);
@@ -1177,7 +1254,7 @@ struct CodeVirtualization : public ModulePass {
                      B.CreateBr(LoopHdr);
                      B.SetInsertPoint(LoopHdr);
                      Value *Cur = B.CreateLoad(C.I64, Counter);
-                     B.CreateCondBr(B.CreateICmpSLT(Cur, NArgs), LoopBody, LoopDone);
+                     B.CreateCondBr(B.CreateICmpULT(Cur, NArgs), LoopBody, LoopDone);
                      B.SetInsertPoint(LoopBody);
                      Value *Arg = popStk(B, C);
                      B.CreateStore(Arg, B.CreateGEP(C.I64, C.CallArgs, Cur));
@@ -1217,11 +1294,12 @@ struct CodeVirtualization : public ModulePass {
     //                     operands in place because two's-complement bit ops
     //                     give the same result either way once narrowed.
     auto addBinary = [&](Opcode Op, StringRef Name, bool NarrowResult,
-                         bool SignedOperands,
+                         bool SignedOperands, bool GuardDivisor,
                          std::function<Value *(IRBuilder<> &, Value *, Value *)>
                              Fn) {
       H.push_back({Op, Name, shapeOf(Op),
-                   [this, &C, Fn, NarrowResult, SignedOperands](IRBuilder<> &B) {
+                   [this, &C, Fn, NarrowResult, SignedOperands,
+                    GuardDivisor](IRBuilder<> &B) {
                      Value *R = popStk(B, C);
                      Value *L = popStk(B, C);
                      Value *Result;
@@ -1231,6 +1309,10 @@ struct CodeVirtualization : public ModulePass {
                          L = signExtendFor(B, C, L, Ty);
                          R = signExtendFor(B, C, R, Ty);
                        }
+                       if (GuardDivisor)
+                         branchIfFalse(
+                             B, C,
+                             B.CreateICmpNE(R, ConstantInt::get(C.I64, 0)));
                        Result = Fn(B, L, R);
                        Result = narrowTo(B, C, Result, Ty);
                      } else {
@@ -1241,14 +1323,17 @@ struct CodeVirtualization : public ModulePass {
                    }});
     };
     addBinary(OpAdd, "add", /*Narrow=*/true, /*Signed=*/false,
+              /*GuardDivisor=*/false,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateAdd(L, R);
               });
     addBinary(OpSub, "sub", /*Narrow=*/true, /*Signed=*/false,
+              /*GuardDivisor=*/false,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateSub(L, R);
               });
     addBinary(OpXor, "xor", /*Narrow=*/true, /*Signed=*/false,
+              /*GuardDivisor=*/false,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateXor(L, R);
               });
@@ -1257,42 +1342,52 @@ struct CodeVirtualization : public ModulePass {
     // the SignedOperands flag: AShr/SDiv/SRem sign-extend operands first;
     // the rest operate on the canonical zext bit pattern.
     addBinary(OpMul, "mul", /*Narrow=*/true, /*Signed=*/false,
+              /*GuardDivisor=*/false,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateMul(L, R);
               });
     addBinary(OpAnd, "and", /*Narrow=*/true, /*Signed=*/false,
+              /*GuardDivisor=*/false,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateAnd(L, R);
               });
     addBinary(OpOr, "or", /*Narrow=*/true, /*Signed=*/false,
+              /*GuardDivisor=*/false,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateOr(L, R);
               });
     addBinary(OpShl, "shl", /*Narrow=*/true, /*Signed=*/false,
+              /*GuardDivisor=*/false,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateShl(L, R);
               });
     addBinary(OpLShr, "lshr", /*Narrow=*/true, /*Signed=*/false,
+              /*GuardDivisor=*/false,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateLShr(L, R);
               });
     addBinary(OpAShr, "ashr", /*Narrow=*/true, /*Signed=*/true,
+              /*GuardDivisor=*/false,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateAShr(L, R);
               });
     addBinary(OpSDiv, "sdiv", /*Narrow=*/true, /*Signed=*/true,
+              /*GuardDivisor=*/true,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateSDiv(L, R);
               });
     addBinary(OpUDiv, "udiv", /*Narrow=*/true, /*Signed=*/false,
+              /*GuardDivisor=*/true,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateUDiv(L, R);
               });
     addBinary(OpSRem, "srem", /*Narrow=*/true, /*Signed=*/true,
+              /*GuardDivisor=*/true,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateSRem(L, R);
               });
     addBinary(OpURem, "urem", /*Narrow=*/true, /*Signed=*/false,
+              /*GuardDivisor=*/true,
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateURem(L, R);
               });
@@ -1324,6 +1419,7 @@ struct CodeVirtualization : public ModulePass {
       // any immediate; the S* predicates are handled by the encoder emitting
       // a VmTy and the handler fetching it.
       addBinary(Op, Name, /*Narrow=*/SignedOperands, /*Signed=*/SignedOperands,
+                /*GuardDivisor=*/false,
                 [Pred, I64 = C.I64](IRBuilder<> &B, Value *L, Value *R) {
                   return B.CreateZExt(B.CreateICmp(Pred, L, R), I64);
                 });
@@ -1356,7 +1452,9 @@ struct CodeVirtualization : public ModulePass {
 
     H.push_back({OpJmp, "jmp", shapeOf(OpJmp),
                  [this, &C](IRBuilder<> &B) {
-                   B.CreateStore(fetchWord(B, C), C.PC);
+                   Value *Target = fetchWord(B, C);
+                   branchIfFalse(B, C, B.CreateICmpULT(Target, C.BCLen));
+                   B.CreateStore(Target, C.PC);
                    B.CreateBr(C.Dispatch);
                  }});
     H.push_back({OpBrTrue, "brtrue", shapeOf(OpBrTrue),
@@ -1365,6 +1463,7 @@ struct CodeVirtualization : public ModulePass {
                    Value *Cond = popStk(B, C);
                    BasicBlock *SetTarget =
                        BasicBlock::Create(*C.Ctx, "brtrue.set", C.F);
+                   branchIfFalse(B, C, B.CreateICmpULT(Target, C.BCLen));
                    B.CreateCondBr(
                        B.CreateICmpNE(Cond, ConstantInt::get(C.I64, 0)),
                        SetTarget, C.Dispatch);
@@ -1389,12 +1488,15 @@ struct CodeVirtualization : public ModulePass {
 
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
+    Type *I8 = Type::getInt8Ty(Ctx);
     Type *Ptr = PointerType::getUnqual(Ctx);
-    // signature is i64(i64* bc, i64 bcLen, i64* args, i64 key, i64 opmask). bcLen is the
+    // signature is i64(i64* bc, i64 bcLen, i8* pcMap, i64* args,
+    // i64 argLen, i64* tamper, i64 key, i64 opmask). bcLen is the
     // bytecode word count; the dispatch loop checks PC < bcLen before each
     // fetch so a corrupted PC (relevant once L2 encrypts the bytecode) faults
     // to the Bad block instead of reading out of bounds.
-    auto *FTy = FunctionType::get(I64, {Ptr, I64, Ptr, I64, I64}, false);
+    auto *FTy =
+        FunctionType::get(I64, {Ptr, I64, Ptr, Ptr, I64, Ptr, I64, I64}, false);
     auto *F = Function::Create(FTy, GlobalValue::InternalLinkage,
                                "__taokari_vmp_interp_i64", M);
     F->addFnAttr(Attribute::NoUnwind);
@@ -1404,8 +1506,14 @@ struct CodeVirtualization : public ModulePass {
     BC->setName("bc");
     Value *BCLen = &*ArgIt++;
     BCLen->setName("bclen");
+    Value *PCMap = &*ArgIt++;
+    PCMap->setName("pc.map");
     Value *Args = &*ArgIt++;
     Args->setName("args");
+    Value *ArgLen = &*ArgIt++;
+    ArgLen->setName("arg.len");
+    Value *TamperFlag = &*ArgIt++;
+    TamperFlag->setName("tamper");
     Value *BytecodeKey = &*ArgIt++;
     BytecodeKey->setName("bytecode.key");
     Value *OpcodeMask = &*ArgIt;
@@ -1435,16 +1543,23 @@ struct CodeVirtualization : public ModulePass {
     // PC bounds check (L1.5.4). If PC has run past the bytecode,
     // fault to Bad rather than reading out of bounds. Matters once L2
     // encrypts the bytecode and a corrupted PC could otherwise escape.
-    Value *InBounds = B.CreateICmpSLT(OpPC, BCLen);
-    BasicBlock *Fetch =
-        BasicBlock::Create(Ctx, "fetch", F);
-    B.CreateCondBr(InBounds, Fetch, Bad);
+    Value *InBounds = B.CreateICmpULT(OpPC, BCLen);
+    BasicBlock *PcMapCheck = BasicBlock::Create(Ctx, "pcmap.check", F);
+    BasicBlock *Fetch = BasicBlock::Create(Ctx, "fetch", F);
+    B.CreateCondBr(InBounds, PcMapCheck, Bad);
+    B.SetInsertPoint(PcMapCheck);
+    Value *IsOpStart =
+        B.CreateLoad(I8, B.CreateGEP(I8, PCMap, OpPC));
+    B.CreateCondBr(B.CreateICmpNE(IsOpStart, ConstantInt::get(I8, 0)), Fetch,
+                   Bad);
     B.SetInsertPoint(Fetch);
     // Build handler table, then emit one switch case per entry.
     // The table is the source of truth; the switch is generated from it.
-    InterpCtx IC{I64, F,     &Ctx, BC,     PC,     SP, Stack,
-                 Locals, Frame, CallArgs, CalleeTable, Args,
-                 BytecodeKey, OpcodeMask, Dispatch};
+    InterpCtx IC{I64,   F,       &Ctx, BC,       BCLen, PCMap, PC,
+                 SP,    Stack,   Locals, Frame,  CallArgs,
+                 CalleeTable, static_cast<unsigned>(CalleeOrder.size()),
+                 Args,  ArgLen,  TamperFlag, BytecodeKey, OpcodeMask,
+                 Dispatch, Bad};
     Value *MappedOp = fetchWord(B, IC);
     Value *Op = B.CreateXor(MappedOp, OpcodeMask);
     SmallVector<Handler, 24> Handlers = buildHandlerTable(IC);
@@ -1458,6 +1573,7 @@ struct CodeVirtualization : public ModulePass {
     }
 
     B.SetInsertPoint(Bad);
+    B.CreateStore(ConstantInt::get(I64, 1), TamperFlag);
     B.CreateRet(ConstantInt::get(I64, 0));
     return F;
   }
@@ -1472,6 +1588,9 @@ struct CodeVirtualization : public ModulePass {
       BytecodeKey = 0xD1B54A32D192ED03ULL;
     int64_t OpcodeMask = static_cast<int64_t>((RNG() & 0x7FFF) | 0x40);
     SmallVector<int64_t, 64> EncodedWords(P.Words.begin(), P.Words.end());
+    SmallVector<uint8_t, 64> OpcodeStarts;
+    if (!computeOpcodeStarts(P.Words, OpcodeStarts))
+      return false;
     if (!mapOpcodeWords(EncodedWords, OpcodeMask))
       return false;
 
@@ -1488,12 +1607,27 @@ struct CodeVirtualization : public ModulePass {
     Bytecode->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
     Bytecode->setAlignment(Align(8));
 
+    Type *I8 = Type::getInt8Ty(Ctx);
+    SmallVector<Constant *, 64> Starts;
+    for (uint8_t V : OpcodeStarts)
+      Starts.push_back(ConstantInt::get(I8, V));
+    auto *PCMapArrayTy = ArrayType::get(I8, Starts.size());
+    auto *PCMap = new GlobalVariable(
+        M, PCMapArrayTy, true, GlobalValue::PrivateLinkage,
+        ConstantArray::get(PCMapArrayTy, Starts),
+        "__taokari_vmp_pcmap_" + F.getName());
+    PCMap->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+    PCMap->setAlignment(Align(1));
+
     Function *Interp = getOrCreateInterpreter(M);
     F.deleteBody();
     BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", &F);
+    BasicBlock *Ok = BasicBlock::Create(Ctx, "vmp.ok", &F);
+    BasicBlock *Trap = BasicBlock::Create(Ctx, "vmp.trap", &F);
     IRBuilder<> B(Entry);
     Value *Zero = ConstantInt::get(I64, 0);
     Value *BCPtr = B.CreateGEP(ArrayTy, Bytecode, {Zero, Zero});
+    Value *PCMapPtr = B.CreateGEP(PCMapArrayTy, PCMap, {Zero, Zero});
 
     auto *ArgsArrayTy = ArrayType::get(I64, std::max<unsigned>(1, F.arg_size()));
     auto *Args = B.CreateAlloca(ArgsArrayTy, nullptr, "vmp.args");
@@ -1504,13 +1638,27 @@ struct CodeVirtualization : public ModulePass {
       B.CreateStore(B.CreateSExtOrTrunc(&A, I64), ArgPtr);
     }
     Value *ArgsPtr = B.CreateGEP(ArgsArrayTy, Args, {Zero, Zero});
+    auto *TamperFlag = B.CreateAlloca(I64, nullptr, "vmp.tamper");
+    B.CreateStore(Zero, TamperFlag);
     // pass the bytecode word count as the bcLen argument so the
     // interpreter can bound-check PC (L1.5.4).
     Value *BCLen = ConstantInt::get(I64, Words.size());
     Value *Result = B.CreateCall(
-        Interp, {BCPtr, BCLen, ArgsPtr,
+        Interp, {BCPtr, BCLen, PCMapPtr, ArgsPtr,
+                 ConstantInt::get(I64, F.arg_size()), TamperFlag,
                  ConstantInt::get(I64, BytecodeKey),
                  ConstantInt::get(I64, OpcodeMask)});
+    Value *Tampered = B.CreateLoad(I64, TamperFlag);
+    B.CreateCondBr(B.CreateICmpNE(Tampered, Zero), Trap, Ok);
+    B.SetInsertPoint(Trap);
+    auto *ExitTy =
+        FunctionType::get(Type::getVoidTy(Ctx), {Type::getInt32Ty(Ctx)}, false);
+    FunctionCallee Exit = M.getOrInsertFunction("exit", ExitTy);
+    if (auto *ExitFn = dyn_cast<Function>(Exit.getCallee()))
+      ExitFn->addFnAttr(Attribute::NoReturn);
+    B.CreateCall(Exit, {ConstantInt::get(Type::getInt32Ty(Ctx), 86)});
+    B.CreateUnreachable();
+    B.SetInsertPoint(Ok);
     B.CreateRet(B.CreateTruncOrBitCast(Result, F.getReturnType()));
     return true;
   }
