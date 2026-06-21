@@ -94,6 +94,7 @@ CALL_RE = re.compile(
     r"call i64 @__taokari_vmp_interp_i64\("
     r"ptr [^,]*@__taokari_vmp_bc_(\w+), i64 \d+, "
     r"ptr [^,]*@__taokari_vmp_pcmap_\w+, ptr [^,]+, i64 \d+, "
+    r"ptr [^,]+, i64 \d+, "
     r"ptr [^,]+, i64 (-?\d+), i64 (-?\d+), i64 (-?\d+)\)"
 )
 I64_RE = re.compile(r"i64 (-?\d+)")
@@ -207,9 +208,9 @@ def replace_encoded_ir(text: str, name: str, encoded: list[int],
     if update_tag:
         tag = bytecode_tag(encoded)
         text = re.sub(
-            rf"(@__taokari_vmp_bc_{re.escape(name)}, i64 \d+, "
-            rf"ptr @__taokari_vmp_pcmap_{re.escape(name)}, ptr [^,]+, "
-            rf"i64 \d+, ptr [^,]+, i64 )-?\d+",
+        rf"(@__taokari_vmp_bc_{re.escape(name)}, i64 \d+, "
+        rf"ptr @__taokari_vmp_pcmap_{re.escape(name)}, ptr [^,]+, "
+            rf"i64 \d+, ptr [^,]+, i64 \d+, ptr [^,]+, i64 )-?\d+",
             rf"\g<1>{tag}",
             text,
         )

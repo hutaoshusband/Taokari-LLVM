@@ -21,6 +21,9 @@ SOURCE = r"""
 #define VMP __attribute__((noinline))
 #endif
 
+static int g_value = 31;
+static int g_sink = 0;
+
 VMP int ptr_load_case(int *p) {
   return *p + 3;
 }
@@ -45,6 +48,15 @@ VMP int ptr_gep_store_case(int *p, unsigned i, int v) {
   return p[i & 3];
 }
 
+VMP int global_load_case(void) {
+  return g_value + 6;
+}
+
+VMP int global_store_case(int v) {
+  g_sink = v + 2;
+  return g_sink;
+}
+
 int main(void) {
   int a = 39;
   int b = 0;
@@ -55,8 +67,10 @@ int main(void) {
   int alias = ptr_alias_case(&c, &c);
   int gep_load = ptr_gep_load_case(arr, 6);
   int gep_store = ptr_gep_store_case(arr, 1, 44);
-  printf("ptr:%d:%d:%d:%d:%d:%d:%d:%d\n", load, store, b, alias, c,
-         gep_load, gep_store, arr[1]);
+  int global_load = global_load_case();
+  int global_store = global_store_case(50);
+  printf("ptr:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d\n", load, store, b, alias, c,
+         gep_load, gep_store, arr[1], global_load, global_store, g_sink);
   return 0;
 }
 """
@@ -132,13 +146,15 @@ def main() -> int:
             sys.stderr.write(ir.stdout + ir.stderr)
             return 1
         text = ll.read_text(encoding="utf-8", errors="ignore")
-        names = set(re.findall(r"@__taokari_vmp_bc_(ptr_\w+_case)", text))
+        names = set(re.findall(r"@__taokari_vmp_bc_((?:ptr|global)_\w+_case)", text))
         expected = {
             "ptr_load_case",
             "ptr_store_case",
             "ptr_alias_case",
             "ptr_gep_load_case",
             "ptr_gep_store_case",
+            "global_load_case",
+            "global_store_case",
         }
         if not expected.issubset(names):
             print(f"vmp pointer support: FAIL (missing bytecode {expected - names})",
@@ -150,6 +166,10 @@ def main() -> int:
             return 1
         if "i64 37, label" not in text:
             print("vmp pointer support: FAIL (external GEP handler missing)",
+                  file=sys.stderr)
+            return 1
+        if "i64 38, label" not in text or "__taokari_vmp_ptrs_" not in text:
+            print("vmp pointer support: FAIL (global pointer table missing)",
                   file=sys.stderr)
             return 1
 

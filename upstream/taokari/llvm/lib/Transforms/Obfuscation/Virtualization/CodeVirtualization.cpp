@@ -89,6 +89,7 @@ enum Opcode : int64_t {
   OpStoreMem = 36,
   // External pointer GEP with one runtime index: base + index * byte stride.
   OpGep = 37,
+  OpPtrConst = 38,
 };
 
 // How many operand-stack pops and bytecode immediates a handler
@@ -146,6 +147,8 @@ struct Fixup {
 struct BytecodeProgram {
   SmallVector<int64_t, 64> Words;
   SmallVector<Fixup, 8> Fixups;
+  SmallVector<Constant *, 8> PointerConsts;
+  DenseMap<const Value *, unsigned> PointerConstIndex;
 };
 
 // Handler descriptor. The interpreter builder iterates the table
@@ -351,6 +354,16 @@ struct CodeVirtualization : public ModulePass {
     return Slot;
   }
 
+  unsigned pointerConstFor(BytecodeProgram &P, Constant *C) {
+    auto It = P.PointerConstIndex.find(C);
+    if (It != P.PointerConstIndex.end())
+      return It->second;
+    unsigned Idx = P.PointerConsts.size();
+    P.PointerConstIndex[C] = Idx;
+    P.PointerConsts.push_back(C);
+    return Idx;
+  }
+
   // True if Ty can live in the VM-local frame (integer scalars,
   // arrays of integers, or simple aggregates of integers -- anything we can
   // bucket into i64 slots). Pointers, floats, and nested pointer/float
@@ -380,6 +393,11 @@ struct CodeVirtualization : public ModulePass {
                  unsigned &NextFrameSlot, Value *V) {
     // VM-local pointer: alloca or constant-offset GEP of an alloca.
     if (V->getType()->isPointerTy()) {
+      if (auto *GV = dyn_cast<GlobalVariable>(V)) {
+        P.Words.push_back(OpPtrConst);
+        P.Words.push_back(pointerConstFor(P, GV));
+        return true;
+      }
       int64_t FrameIdx = 0;
       if (resolveFramePtr(V, AllocaBase, NextFrameSlot, FrameIdx)) {
         P.Words.push_back(OpPushConst);
@@ -938,6 +956,8 @@ struct CodeVirtualization : public ModulePass {
       return {2, 0, 1};
     case OpGep:
       return {2, 1, 1};
+    case OpPtrConst:
+      return {0, 1, 1};
     case OpCall:
       // pops NArgs values (runtime), fetches calleeIdx + nargs + VmTy, pushes
       // 1 result. Pops/Pushes are conservative (actual pop count is data).
@@ -987,6 +1007,7 @@ struct CodeVirtualization : public ModulePass {
     case OpLoadMem:
     case OpStoreMem:
     case OpGep:
+    case OpPtrConst:
       Count = 1;
       return true;
     case OpCmpEq:
@@ -1081,6 +1102,8 @@ struct CodeVirtualization : public ModulePass {
     Value *BC;
     Value *BCLen;
     Value *PCMap;
+    Value *PtrTable;
+    Value *PtrCount;
     Value *PC;
     Value *SP;
     Value *Stack;
@@ -1361,6 +1384,16 @@ struct CodeVirtualization : public ModulePass {
                    pushStk(B, C, B.CreateAdd(Base, B.CreateMul(Index, Scale)));
                    B.CreateBr(C.Dispatch);
                  }});
+    H.push_back({OpPtrConst, "ptrconst", shapeOf(OpPtrConst),
+                 [this, &C](IRBuilder<> &B) {
+                   Type *Ptr = PointerType::getUnqual(*C.Ctx);
+                   Value *Idx = fetchWord(B, C);
+                   branchIfFalse(B, C, B.CreateICmpULT(Idx, C.PtrCount));
+                   Value *PtrVal =
+                       B.CreateLoad(Ptr, B.CreateGEP(Ptr, C.PtrTable, Idx));
+                   pushStk(B, C, B.CreatePtrToInt(PtrVal, C.I64));
+                   B.CreateBr(C.Dispatch);
+                 }});
 
     // direct call (L1.5.1). Only registered when a callee table
     // exists (i.e. at least one direct call was encoded). Modules with no
@@ -1637,14 +1670,16 @@ struct CodeVirtualization : public ModulePass {
     Type *I64 = Type::getInt64Ty(Ctx);
     Type *I8 = Type::getInt8Ty(Ctx);
     Type *Ptr = PointerType::getUnqual(Ctx);
-    // signature is i64(i64* bc, i64 bcLen, i8* pcMap, i64* args,
-    // i64 argLen, i64* tamper, i64 tag, i64 key, i64 opmask). bcLen is the
+    // signature is i64(i64* bc, i64 bcLen, i8* pcMap, ptr* ptrs,
+    // i64 ptrCount, i64* args, i64 argLen, i64* tamper, i64 tag, i64 key,
+    // i64 opmask). bcLen is the
     // bytecode word count; the dispatch loop checks PC < bcLen before each
     // fetch so a corrupted PC (relevant once L2 encrypts the bytecode) faults
     // to the Bad block instead of reading out of bounds.
     auto *FTy =
-        FunctionType::get(I64, {Ptr, I64, Ptr, Ptr, I64, Ptr, I64, I64, I64},
-                          false);
+        FunctionType::get(
+            I64, {Ptr, I64, Ptr, Ptr, I64, Ptr, I64, Ptr, I64, I64, I64},
+            false);
     auto *F = Function::Create(FTy, GlobalValue::InternalLinkage,
                                "__taokari_vmp_interp_i64", M);
     F->addFnAttr(Attribute::NoUnwind);
@@ -1656,6 +1691,10 @@ struct CodeVirtualization : public ModulePass {
     BCLen->setName("bclen");
     Value *PCMap = &*ArgIt++;
     PCMap->setName("pc.map");
+    Value *PtrTable = &*ArgIt++;
+    PtrTable->setName("ptr.table");
+    Value *PtrCount = &*ArgIt++;
+    PtrCount->setName("ptr.count");
     Value *Args = &*ArgIt++;
     Args->setName("args");
     Value *ArgLen = &*ArgIt++;
@@ -1729,7 +1768,7 @@ struct CodeVirtualization : public ModulePass {
     B.SetInsertPoint(Fetch);
     // Build handler table, then emit one switch case per entry.
     // The table is the source of truth; the switch is generated from it.
-    InterpCtx IC{I64,   F,       &Ctx, BC,       BCLen, PCMap, PC,
+    InterpCtx IC{I64,   F,       &Ctx, BC,       BCLen, PCMap, PtrTable, PtrCount, PC,
                  SP,    Stack,   Locals, Frame,  CallArgs,
                  CalleeTable, static_cast<unsigned>(CalleeOrder.size()),
                  Args,  ArgLen,  TamperFlag, ExpectedTag, BytecodeKey, OpcodeMask,
@@ -1804,6 +1843,20 @@ struct CodeVirtualization : public ModulePass {
     Value *Zero = ConstantInt::get(I64, 0);
     Value *BCPtr = B.CreateGEP(ArrayTy, Bytecode, {Zero, Zero});
     Value *PCMapPtr = B.CreateGEP(PCMapArrayTy, PCMap, {Zero, Zero});
+    Type *Ptr = PointerType::getUnqual(Ctx);
+    Value *PtrTablePtr = ConstantPointerNull::get(PointerType::getUnqual(Ctx));
+    Value *PtrCount = ConstantInt::get(I64, 0);
+    if (!P.PointerConsts.empty()) {
+      auto *PtrArrayTy = ArrayType::get(Ptr, P.PointerConsts.size());
+      auto *PtrTable = new GlobalVariable(
+          M, PtrArrayTy, true, GlobalValue::PrivateLinkage,
+          ConstantArray::get(PtrArrayTy, P.PointerConsts),
+          "__taokari_vmp_ptrs_" + F.getName());
+      PtrTable->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+      PtrTable->setAlignment(Align(8));
+      PtrTablePtr = B.CreateGEP(PtrArrayTy, PtrTable, {Zero, Zero});
+      PtrCount = ConstantInt::get(I64, P.PointerConsts.size());
+    }
 
     auto *ArgsArrayTy = ArrayType::get(I64, std::max<unsigned>(1, F.arg_size()));
     auto *Args = B.CreateAlloca(ArgsArrayTy, nullptr, "vmp.args");
@@ -1823,7 +1876,7 @@ struct CodeVirtualization : public ModulePass {
     // interpreter can bound-check PC (L1.5.4).
     Value *BCLen = ConstantInt::get(I64, Words.size());
     Value *Result = B.CreateCall(
-        Interp, {BCPtr, BCLen, PCMapPtr, ArgsPtr,
+        Interp, {BCPtr, BCLen, PCMapPtr, PtrTablePtr, PtrCount, ArgsPtr,
                  ConstantInt::get(I64, F.arg_size()), TamperFlag,
                  ConstantInt::get(I64, BytecodeTag),
                  ConstantInt::get(I64, BytecodeKey),

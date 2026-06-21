@@ -20,7 +20,8 @@ GLOBAL_RE = re.compile(
 CALL_RE = re.compile(
     r"call i64 @__taokari_vmp_interp_i64\("
     r"ptr nonnull @__taokari_vmp_bc_(\w+), i64 \d+, "
-    r"ptr nonnull @__taokari_vmp_pcmap_\w+, ptr nonnull %\d+, "
+    r"ptr nonnull @__taokari_vmp_pcmap_\w+, ptr (?:nonnull %\d+|null), "
+    r"i64 \d+, ptr nonnull %\d+, "
     r"i64 \d+, ptr nonnull %\d+, i64 -?\d+, "
     r"i64 (-?\d+), i64 (-?\d+)\)"
 )
