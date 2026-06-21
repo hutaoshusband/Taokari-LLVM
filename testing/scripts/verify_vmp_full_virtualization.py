@@ -74,8 +74,13 @@ NO_VMP int main(void) {
 
 MAX_FLAGS = [
     "-O2",
+    "-fno-ident",
+    f"-ffile-prefix-map={ROOT}=.",
+    f"-fdebug-prefix-map={ROOT}=.",
+    f"-fmacro-prefix-map={ROOT}=.",
     "-mllvm", "-taokari-max",
     "-mllvm", "-verify-machineinstrs",
+    "-Wl,/DEBUG:NONE",
 ]
 
 def run(cmd: list[str], use_vs_env: bool = False) -> subprocess.CompletedProcess[str]:
@@ -133,6 +138,24 @@ def require_max_bytes(path: Path) -> None:
         raise SystemExit(f"missing max-protection bytes in {path}: {', '.join(missing)}")
 
 
+def require_metadata_clean(path: Path) -> None:
+    data = path.read_bytes().lower()
+    leaks = [
+        item for item in (
+            b"c:\\users",
+            b"github",
+            b"taokari-llvm",
+            b"full_vmp_sample.c",
+            b"__taokari",
+            b"clang version",
+        )
+        if item in data
+    ]
+    if leaks:
+        names = ", ".join(item.decode("ascii", errors="replace") for item in leaks)
+        raise SystemExit(f"metadata leak in {path}: {names}")
+
+
 def main() -> int:
     if not CLANG.exists():
         print(f"missing clang: {CLANG}", file=sys.stderr)
@@ -161,6 +184,7 @@ def main() -> int:
         return 1
     require_max_bytes(protected)
     require_max_bytes(protected_obj)
+    require_metadata_clean(protected)
 
     native_run = run([str(native)])
     max_run = run([str(protected)])

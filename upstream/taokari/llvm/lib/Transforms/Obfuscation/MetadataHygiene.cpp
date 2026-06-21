@@ -7,12 +7,17 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/BLAKE3.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 #define DEBUG_TYPE "metadata-hygiene"
 
 using namespace llvm;
+
+namespace llvm {
+extern cl::opt<bool> TaokariMaxProtection;
+}
 
 namespace {
 
@@ -38,7 +43,7 @@ public:
       report_fatal_error(
           "No random seed found in config file, but metadata hygiene enabled.");
 
-    bool Changed = stripMetadata(M);
+    bool Changed = stripMetadata(M, *Opt);
     if (Opt->level() > 1) {
       Changed |= addFakeHelpers(M);
       Changed |= renamePrivateSymbols(M, *Opt);
@@ -49,11 +54,17 @@ public:
     return Changed;
   }
 
-  bool stripMetadata(Module &M) {
+  bool stripMetadata(Module &M, const ObfOpt &Opt) {
     bool Changed = StripDebugInfo(M);
     for (StringRef Name : {"llvm.ident", "llvm.commandline"}) {
       if (auto *NMD = M.getNamedMetadata(Name)) {
         M.eraseNamedMetadata(NMD);
+        Changed = true;
+      }
+    }
+    if (TaokariMaxProtection || Opt.releaseStrip()) {
+      if (auto *Annotations = M.getGlobalVariable("llvm.global.annotations")) {
+        Annotations->eraseFromParent();
         Changed = true;
       }
     }
