@@ -155,6 +155,40 @@ def main() -> int:
                   file=sys.stderr)
             return 1
 
+        expansion_ll = tmpdir / "expansion.ll"
+        expansion_exe = tmpdir / "expansion.exe"
+        expansion_flags = [
+            str(CLANG), str(src), "-O2",
+            "-mllvm", "-taokari", "-mllvm", "-taokari-vmp",
+            "-mllvm", "-taokari-vmp-max-bytecode-words=0",
+            "-mllvm", "-taokari-vmp-max-bytecode-expansion=1",
+            "-Rpass=taokari-vmp", "-Rpass-missed=taokari-vmp",
+        ]
+        expansion_ir = run(
+            [*expansion_flags, "-S", "-emit-llvm", "-o", str(expansion_ll)],
+            use_vs_env=True)
+        if expansion_ir.returncode:
+            sys.stderr.write(expansion_ir.stdout + expansion_ir.stderr)
+            return 1
+        expansion_remarks = expansion_ir.stdout + expansion_ir.stderr
+        if "bytecode expansion budget exceeded" not in expansion_remarks:
+            print("vmp guardrails: FAIL (expansion budget not enforced)",
+                  file=sys.stderr)
+            return 1
+        expansion_build = run([*expansion_flags, "-o", str(expansion_exe)],
+                              use_vs_env=True)
+        if expansion_build.returncode:
+            sys.stderr.write(expansion_build.stdout + expansion_build.stderr)
+            return 1
+        expansion_result = run([str(expansion_exe)])
+        if expansion_result.returncode:
+            sys.stderr.write(expansion_result.stdout + expansion_result.stderr)
+            return 1
+        if not expansion_result.stdout.startswith("guard:"):
+            print("vmp guardrails: FAIL (bad expansion fallback stdout)",
+                  file=sys.stderr)
+            return 1
+
     print("vmp guardrails: ok")
     return 0
 

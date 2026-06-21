@@ -48,6 +48,11 @@ static cl::opt<uint32_t> VMPMaxBackEdges(
     cl::desc("Maximum CFG back edges allowed before VMP refuses a function; "
              "UINT32_MAX disables the limit."));
 
+static cl::opt<uint32_t> VMPMaxBytecodeExpansion(
+    "taokari-vmp-max-bytecode-expansion", cl::init(0), cl::NotHidden,
+    cl::desc("Maximum bytecode words per original IR instruction before VMP "
+             "refuses a function; 0 disables the limit."));
+
 // Opcode encoding is the stable on-the-wire bytecode value. These
 // integers must NOT change once bytecode is shipped; the interpreter handler
 // table is keyed off them. L2 opcode-mapping/encryption layers will sit on
@@ -1272,6 +1277,16 @@ struct CodeVirtualization : public ModulePass {
     return BackEdges;
   }
 
+  unsigned countInstructions(Function &F) const {
+    unsigned Count = 0;
+    for (BasicBlock &BB : F)
+      for (Instruction &I : BB) {
+        (void)I;
+        ++Count;
+      }
+    return Count;
+  }
+
   uint64_t bytecodeDomain(bool IsOpcodeWord) const {
     return IsOpcodeWord ? 0xA5A5A5A5D3C3B2A1ULL : 0x3C6EF372FE94F82AULL;
   }
@@ -2473,6 +2488,19 @@ struct CodeVirtualization : public ModulePass {
         OptimizationRemarkMissed R(DEBUG_TYPE, "PaddingFailed", F);
         R << "skipped: bytecode padding failed (invalid branch target or "
              "opcode shape)";
+        ORE.emit(R);
+        ++Skipped;
+        continue;
+      }
+      unsigned InstCount = countInstructions(*F);
+      if (VMPMaxBytecodeExpansion && InstCount &&
+          P.Words.size() >
+              static_cast<uint64_t>(InstCount) * VMPMaxBytecodeExpansion) {
+        OptimizationRemarkMissed R(DEBUG_TYPE, "ExpansionBudgetExceeded", F);
+        R << "skipped: bytecode expansion budget exceeded ("
+          << ore::NV("Words", (unsigned)P.Words.size()) << " > "
+          << ore::NV("Instructions", InstCount) << " * "
+          << ore::NV("Multiplier", VMPMaxBytecodeExpansion.getValue()) << ")";
         ORE.emit(R);
         ++Skipped;
         continue;
