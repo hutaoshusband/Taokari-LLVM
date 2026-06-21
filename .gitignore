@@ -9,6 +9,8 @@ testing/_with_vs_env.cmd
 testing/__pycache__/
 testing/ida_l3/
 testing/ida_l4/
+testing/performance/__pycache__/
+testing/performance/results/
 imgui.ini
 INFORMATION/private/
 xy_follow_guideline.md

@@ -1,5 +1,6 @@
 #include "llvm/Transforms/Obfuscation/ObfuscationPassManager.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
@@ -7,8 +8,6 @@
 #include "llvm/Transforms/Obfuscation/CodeVirtualization.h"
 #include "llvm/Transforms/Obfuscation/MBA.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
-#include "llvm/IR/Module.h"
-
 
 #define DEBUG_TYPE "ir-obfuscation"
 
@@ -19,53 +18,46 @@ extern cl::opt<bool> TaokariMaxProtection;
 }
 
 static cl::opt<bool>
-EnableIRObfuscation("irobf", cl::init(false), cl::NotHidden,
-                    cl::desc("Enable IR Code Obfuscation."));
+    EnableIRObfuscation("irobf", cl::init(false), cl::NotHidden,
+                        cl::desc("Enable IR Code Obfuscation."));
 
 // Taokari alias of the master -irobf flag.
-static cl::alias
-TaokariIRObfuscation("taokari", cl::desc("Alias for -irobf"),
-                     cl::aliasopt(EnableIRObfuscation));
-
+static cl::alias TaokariIRObfuscation("taokari", cl::desc("Alias for -irobf"),
+                                      cl::aliasopt(EnableIRObfuscation));
 
 static cl::opt<bool>
-EnableIndirectBr("irobf-indbr", cl::init(false), cl::NotHidden,
-                 cl::desc("Enable IR Indirect Branch Obfuscation."));
+    EnableIndirectBr("irobf-indbr", cl::init(false), cl::NotHidden,
+                     cl::desc("Enable IR Indirect Branch Obfuscation."));
 static cl::opt<uint32_t>
-LevelIndirectBr("level-indbr", cl::init(0), cl::NotHidden,
-                cl::desc("Set IR Indirect Branch Obfuscation Level."));
+    LevelIndirectBr("level-indbr", cl::init(0), cl::NotHidden,
+                    cl::desc("Set IR Indirect Branch Obfuscation Level."));
 
-static cl::alias
-TaokariIndirectBr("taokari-indbr", cl::desc("Alias for -irobf-indbr"),
-                  cl::aliasopt(EnableIndirectBr));
-static cl::alias
-TaokariLevelIndirectBr("taokari-level-indbr",
-                       cl::desc("Alias for -level-indbr"),
-                       cl::aliasopt(LevelIndirectBr));
-
+static cl::alias TaokariIndirectBr("taokari-indbr",
+                                   cl::desc("Alias for -irobf-indbr"),
+                                   cl::aliasopt(EnableIndirectBr));
+static cl::alias TaokariLevelIndirectBr("taokari-level-indbr",
+                                        cl::desc("Alias for -level-indbr"),
+                                        cl::aliasopt(LevelIndirectBr));
 
 static cl::opt<bool>
-EnableIndirectCall("irobf-icall", cl::init(false), cl::NotHidden,
-                   cl::desc("Enable IR Indirect Call Obfuscation."));
+    EnableIndirectCall("irobf-icall", cl::init(false), cl::NotHidden,
+                       cl::desc("Enable IR Indirect Call Obfuscation."));
 static cl::opt<uint32_t>
-LevelIndirectCall("level-icall", cl::init(0), cl::NotHidden,
-                  cl::desc("Set IR Indirect Call Obfuscation Level."));
-static cl::opt<uint32_t>
-TaokariIndirectCallProbability("taokari-icall-prob", cl::init(101),
-                               cl::NotHidden,
-                               cl::desc("Indirect call-site probability, 0..100."));
+    LevelIndirectCall("level-icall", cl::init(0), cl::NotHidden,
+                      cl::desc("Set IR Indirect Call Obfuscation Level."));
+static cl::opt<uint32_t> TaokariIndirectCallProbability(
+    "taokari-icall-prob", cl::init(101), cl::NotHidden,
+    cl::desc("Indirect call-site probability, 0..100."));
 static cl::opt<uint32_t> TaokariIndirectCallFunctionProbability(
     "taokari-icall-func-prob", cl::init(101), cl::NotHidden,
     cl::desc("Indirect call per-function probability, 0..100."));
 
-static cl::alias
-TaokariIndirectCall("taokari-icall", cl::desc("Alias for -irobf-icall"),
-                    cl::aliasopt(EnableIndirectCall));
-static cl::alias
-TaokariLevelIndirectCall("taokari-level-icall",
-                         cl::desc("Alias for -level-icall"),
-                         cl::aliasopt(LevelIndirectCall));
-
+static cl::alias TaokariIndirectCall("taokari-icall",
+                                     cl::desc("Alias for -irobf-icall"),
+                                     cl::aliasopt(EnableIndirectCall));
+static cl::alias TaokariLevelIndirectCall("taokari-level-icall",
+                                          cl::desc("Alias for -level-icall"),
+                                          cl::aliasopt(LevelIndirectCall));
 
 static cl::opt<bool> EnableIndirectGV(
     "irobf-indgv", cl::init(false), cl::NotHidden,
@@ -74,14 +66,12 @@ static cl::opt<uint32_t> LevelIndirectGV(
     "level-indgv", cl::init(0), cl::NotHidden,
     cl::desc("Set IR Indirect Global Variable Obfuscation Level."));
 
-static cl::alias
-TaokariIndirectGV("taokari-indgv", cl::desc("Alias for -irobf-indgv"),
-                  cl::aliasopt(EnableIndirectGV));
-static cl::alias
-TaokariLevelIndirectGV("taokari-level-indgv",
-                       cl::desc("Alias for -level-indgv"),
-                       cl::aliasopt(LevelIndirectGV));
-
+static cl::alias TaokariIndirectGV("taokari-indgv",
+                                   cl::desc("Alias for -irobf-indgv"),
+                                   cl::aliasopt(EnableIndirectGV));
+static cl::alias TaokariLevelIndirectGV("taokari-level-indgv",
+                                        cl::desc("Alias for -level-indgv"),
+                                        cl::aliasopt(LevelIndirectGV));
 
 static cl::opt<bool> EnableIRFlattening(
     "irobf-fla", cl::init(false), cl::NotHidden,
@@ -90,158 +80,162 @@ static cl::opt<uint32_t> LevelIRFlattening(
     "level-fla", cl::init(0), cl::NotHidden,
     cl::desc("Set IR Control Flow Flattening Obfuscation Level."));
 
-static cl::alias
-TaokariIRFlattening("taokari-fla", cl::desc("Alias for -irobf-fla"),
-                    cl::aliasopt(EnableIRFlattening));
-static cl::alias
-TaokariLevelIRFlattening("taokari-level-fla",
-                         cl::desc("Alias for -level-fla"),
-                         cl::aliasopt(LevelIRFlattening));
-
+static cl::alias TaokariIRFlattening("taokari-fla",
+                                     cl::desc("Alias for -irobf-fla"),
+                                     cl::aliasopt(EnableIRFlattening));
+static cl::alias TaokariLevelIRFlattening("taokari-level-fla",
+                                          cl::desc("Alias for -level-fla"),
+                                          cl::aliasopt(LevelIRFlattening));
 
 static cl::opt<bool>
-EnableIRStringEncryption("irobf-cse", cl::init(false), cl::NotHidden,
-                         cl::desc("Enable IR Constant String Encryption."));
+    EnableIRStringEncryption("irobf-cse", cl::init(false), cl::NotHidden,
+                             cl::desc("Enable IR Constant String Encryption."));
 
 static cl::alias
-TaokariIRStringEncryption("taokari-cse",
-                          cl::desc("Alias for -irobf-cse"),
-                          cl::aliasopt(EnableIRStringEncryption));
+    TaokariIRStringEncryption("taokari-cse", cl::desc("Alias for -irobf-cse"),
+                              cl::aliasopt(EnableIRStringEncryption));
 
-
-static cl::opt<bool>
-EnableIRConstantIntEncryption("irobf-cie", cl::init(false), cl::NotHidden,
-                              cl::desc(
-                                  "Enable IR Constant Integer Encryption."));
+static cl::opt<bool> EnableIRConstantIntEncryption(
+    "irobf-cie", cl::init(false), cl::NotHidden,
+    cl::desc("Enable IR Constant Integer Encryption."));
 static cl::opt<uint32_t> LevelIRConstantIntEncryption(
     "level-cie", cl::init(0), cl::NotHidden,
     cl::desc("Set IR Constant Integer Encryption Level."));
 
 static cl::alias
-TaokariIRConstantIntEncryption("taokari-cie",
-                               cl::desc("Alias for -irobf-cie"),
-                               cl::aliasopt(EnableIRConstantIntEncryption));
-static cl::alias
-TaokariLevelIRConstantIntEncryption("taokari-level-cie",
-                                    cl::desc("Alias for -level-cie"),
-                                    cl::aliasopt(LevelIRConstantIntEncryption));
-
+    TaokariIRConstantIntEncryption("taokari-cie",
+                                   cl::desc("Alias for -irobf-cie"),
+                                   cl::aliasopt(EnableIRConstantIntEncryption));
+static cl::alias TaokariLevelIRConstantIntEncryption(
+    "taokari-level-cie", cl::desc("Alias for -level-cie"),
+    cl::aliasopt(LevelIRConstantIntEncryption));
 
 static cl::opt<bool>
-EnableIRConstantFPEncryption("irobf-cfe", cl::init(false), cl::NotHidden,
-                             cl::desc("Enable IR Constant FP Encryption."));
+    EnableIRConstantFPEncryption("irobf-cfe", cl::init(false), cl::NotHidden,
+                                 cl::desc("Enable IR Constant FP Encryption."));
 
 static cl::opt<uint32_t> LevelIRConstantFPEncryption(
     "level-cfe", cl::init(0), cl::NotHidden,
     cl::desc("Set IR Constant FP Encryption Level."));
 
 static cl::alias
-TaokariIRConstantFPEncryption("taokari-cfe",
-                              cl::desc("Alias for -irobf-cfe"),
-                              cl::aliasopt(EnableIRConstantFPEncryption));
-static cl::alias
-TaokariLevelIRConstantFPEncryption("taokari-level-cfe",
-                                   cl::desc("Alias for -level-cfe"),
-                                   cl::aliasopt(LevelIRConstantFPEncryption));
+    TaokariIRConstantFPEncryption("taokari-cfe",
+                                  cl::desc("Alias for -irobf-cfe"),
+                                  cl::aliasopt(EnableIRConstantFPEncryption));
+static cl::alias TaokariLevelIRConstantFPEncryption(
+    "taokari-level-cfe", cl::desc("Alias for -level-cfe"),
+    cl::aliasopt(LevelIRConstantFPEncryption));
+
+static cl::opt<bool> TaokariConstVolatileSeed(
+    "taokari-const-volatile-seed", cl::init(true), cl::NotHidden,
+    cl::desc("Use volatile runtime seed loads in constant decryptors."));
+static cl::opt<bool> TaokariConstDecryptorMBA(
+    "taokari-const-decryptor-mba", cl::init(false), cl::NotHidden,
+    cl::desc("Use MBA for final constant decryptor add."));
+
+static cl::opt<bool> EnableRttiEraser("irobf-rtti", cl::init(false),
+                                      cl::NotHidden,
+                                      cl::desc("Enable RTTI Eraser."));
+
+static cl::alias TaokariRttiEraser("taokari-rtti",
+                                   cl::desc("Alias for -irobf-rtti"),
+                                   cl::aliasopt(EnableRttiEraser));
 
 static cl::opt<bool>
-TaokariConstVolatileSeed("taokari-const-volatile-seed", cl::init(true),
-                         cl::NotHidden,
-                         cl::desc("Use volatile runtime seed loads in constant decryptors."));
-static cl::opt<bool>
-TaokariConstDecryptorMBA("taokari-const-decryptor-mba", cl::init(false),
-                         cl::NotHidden,
-                         cl::desc("Use MBA for final constant decryptor add."));
-
-
-static cl::opt<bool>
-EnableRttiEraser("irobf-rtti", cl::init(false), cl::NotHidden,
-                 cl::desc("Enable RTTI Eraser."));
-
-static cl::alias
-TaokariRttiEraser("taokari-rtti", cl::desc("Alias for -irobf-rtti"),
-                  cl::aliasopt(EnableRttiEraser));
-
-static cl::opt<bool>
-EnableMetadataHygiene("irobf-meta", cl::init(false), cl::NotHidden,
-                      cl::desc("Enable metadata and symbol hygiene."));
+    EnableMetadataHygiene("irobf-meta", cl::init(false), cl::NotHidden,
+                          cl::desc("Enable metadata and symbol hygiene."));
 static cl::opt<uint32_t>
-LevelMetadataHygiene("level-meta", cl::init(0), cl::NotHidden,
-                     cl::desc("Set metadata hygiene level."));
+    LevelMetadataHygiene("level-meta", cl::init(0), cl::NotHidden,
+                         cl::desc("Set metadata hygiene level."));
 
+static cl::alias TaokariMetadataHygiene("taokari-meta",
+                                        cl::desc("Alias for -irobf-meta"),
+                                        cl::aliasopt(EnableMetadataHygiene));
 static cl::alias
-TaokariMetadataHygiene("taokari-meta", cl::desc("Alias for -irobf-meta"),
-                       cl::aliasopt(EnableMetadataHygiene));
-static cl::alias
-TaokariLevelMetadataHygiene("taokari-level-meta",
-                            cl::desc("Alias for -level-meta"),
-                            cl::aliasopt(LevelMetadataHygiene));
+    TaokariLevelMetadataHygiene("taokari-level-meta",
+                                cl::desc("Alias for -level-meta"),
+                                cl::aliasopt(LevelMetadataHygiene));
 
 static cl::opt<bool>
-EnableBogusControlFlow("irobf-bcf", cl::init(false), cl::NotHidden,
-                       cl::desc("Enable IR Bogus Control Flow."));
+    EnableBogusControlFlow("irobf-bcf", cl::init(false), cl::NotHidden,
+                           cl::desc("Enable IR Bogus Control Flow."));
 static cl::opt<uint32_t>
-LevelBogusControlFlow("level-bcf", cl::init(0), cl::NotHidden,
-                      cl::desc("Set IR Bogus Control Flow Level."));
+    LevelBogusControlFlow("level-bcf", cl::init(0), cl::NotHidden,
+                          cl::desc("Set IR Bogus Control Flow Level."));
 
+static cl::alias TaokariBogusControlFlow("taokari-bcf",
+                                         cl::desc("Alias for -irobf-bcf"),
+                                         cl::aliasopt(EnableBogusControlFlow));
 static cl::alias
-TaokariBogusControlFlow("taokari-bcf", cl::desc("Alias for -irobf-bcf"),
-                        cl::aliasopt(EnableBogusControlFlow));
-static cl::alias
-TaokariLevelBogusControlFlow("taokari-level-bcf",
-                             cl::desc("Alias for -level-bcf"),
-                             cl::aliasopt(LevelBogusControlFlow));
+    TaokariLevelBogusControlFlow("taokari-level-bcf",
+                                 cl::desc("Alias for -level-bcf"),
+                                 cl::aliasopt(LevelBogusControlFlow));
+
+static cl::opt<bool> TaokariBCFBeforeFlattening(
+    "taokari-bcf-before-fla", cl::init(false), cl::NotHidden,
+    cl::desc("Run BCF before control-flow flattening."));
+static cl::opt<bool> TaokariBCFAfterFlattening(
+    "taokari-bcf-after-fla", cl::init(false), cl::NotHidden,
+    cl::desc("Run BCF after control-flow flattening."));
+
+static cl::opt<bool> TaokariMaxNoBCFBefore(
+    "taokari-max-no-bcf-before", cl::init(false), cl::NotHidden,
+    cl::desc("Benchmark helper: disable max BCF before flattening."));
+static cl::opt<bool> TaokariMaxNoBCFAfter(
+    "taokari-max-no-bcf-after", cl::init(false), cl::NotHidden,
+    cl::desc("Benchmark helper: disable max BCF after flattening."));
+static cl::opt<bool> TaokariMaxNoFlattening(
+    "taokari-max-no-fla", cl::init(false), cl::NotHidden,
+    cl::desc("Benchmark helper: disable max flattening."));
+static cl::opt<bool>
+    TaokariMaxNoMBA("taokari-max-no-mba", cl::init(false), cl::NotHidden,
+                    cl::desc("Benchmark helper: disable max MBA."));
+static cl::opt<bool> TaokariMaxNoConst(
+    "taokari-max-no-const", cl::init(false), cl::NotHidden,
+    cl::desc("Benchmark helper: disable max constant encryption."));
+static cl::opt<bool> TaokariMaxNoIndirects(
+    "taokari-max-no-indirects", cl::init(false), cl::NotHidden,
+    cl::desc("Benchmark helper: disable max indirect passes."));
 
 static cl::opt<bool>
-TaokariBCFBeforeFlattening("taokari-bcf-before-fla", cl::init(false),
-                           cl::NotHidden,
-                           cl::desc("Run BCF before control-flow flattening."));
-static cl::opt<bool>
-TaokariBCFAfterFlattening("taokari-bcf-after-fla", cl::init(false),
-                          cl::NotHidden,
-                          cl::desc("Run BCF after control-flow flattening."));
-
-
-static cl::opt<bool>
-EnableMBA("irobf-mba", cl::init(false), cl::NotHidden,
-          cl::desc("Enable IR Mixed Boolean Arithmetic substitution."));
+    EnableMBA("irobf-mba", cl::init(false), cl::NotHidden,
+              cl::desc("Enable IR Mixed Boolean Arithmetic substitution."));
 static cl::opt<uint32_t>
-LevelMBA("level-mba", cl::init(0), cl::NotHidden,
-         cl::desc("Set IR Mixed Boolean Arithmetic Level."));
+    LevelMBA("level-mba", cl::init(0), cl::NotHidden,
+             cl::desc("Set IR Mixed Boolean Arithmetic Level."));
 
-static cl::alias
-TaokariMBA("taokari-mba", cl::desc("Alias for -irobf-mba"),
-           cl::aliasopt(EnableMBA));
-static cl::alias
-TaokariLevelMBA("taokari-level-mba", cl::desc("Alias for -level-mba"),
-                cl::aliasopt(LevelMBA));
+static cl::alias TaokariMBA("taokari-mba", cl::desc("Alias for -irobf-mba"),
+                            cl::aliasopt(EnableMBA));
+static cl::alias TaokariLevelMBA("taokari-level-mba",
+                                 cl::desc("Alias for -level-mba"),
+                                 cl::aliasopt(LevelMBA));
 
 static cl::opt<bool>
-EnableVMP("irobf-vmp", cl::init(false), cl::NotHidden,
-          cl::desc("Enable IR code virtualization prototype."));
+    EnableVMP("irobf-vmp", cl::init(false), cl::NotHidden,
+              cl::desc("Enable IR code virtualization prototype."));
 static cl::opt<uint32_t>
-LevelVMP("level-vmp", cl::init(0), cl::NotHidden,
-         cl::desc("Set IR code virtualization level."));
+    LevelVMP("level-vmp", cl::init(0), cl::NotHidden,
+             cl::desc("Set IR code virtualization level."));
 
-static cl::alias
-TaokariVMP("taokari-vmp", cl::desc("Alias for -irobf-vmp"),
-           cl::aliasopt(EnableVMP));
-static cl::alias
-TaokariLevelVMP("taokari-level-vmp", cl::desc("Alias for -level-vmp"),
-                cl::aliasopt(LevelVMP));
+static cl::alias TaokariVMP("taokari-vmp", cl::desc("Alias for -irobf-vmp"),
+                            cl::aliasopt(EnableVMP));
+static cl::alias TaokariLevelVMP("taokari-level-vmp",
+                                 cl::desc("Alias for -level-vmp"),
+                                 cl::aliasopt(LevelVMP));
+
+static cl::opt<std::string> TaokariConfigPath("taokari-cfg",
+                                              cl::init(std::string{}),
+                                              cl::NotHidden,
+                                              cl::desc("Taokari config path."));
 
 static cl::opt<std::string>
-TaokariConfigPath("taokari-cfg", cl::init(std::string{}), cl::NotHidden,
-                  cl::desc("Taokari config path."));
-
-static cl::opt<std::string>
-ArkariConfigPath("arkari-cfg", cl::init(std::string{}), cl::NotHidden,
-                 cl::desc("Arkari config path compatibility alias."));
+    ArkariConfigPath("arkari-cfg", cl::init(std::string{}), cl::NotHidden,
+                     cl::desc("Arkari config path compatibility alias."));
 
 namespace llvm {
 
 struct ObfuscationPassManager : public ModulePass {
-  static char            ID; // Pass identification
+  static char ID; // Pass identification
   SmallVector<Pass *, 8> Passes;
   std::shared_ptr<ObfuscationOptions> Options;
 
@@ -249,9 +243,7 @@ struct ObfuscationPassManager : public ModulePass {
     initializeObfuscationPassManagerPass(*PassRegistry::getPassRegistry());
   };
 
-  StringRef getPassName() const override {
-    return "Obfuscation Pass Manager";
-  }
+  StringRef getPassName() const override { return "Obfuscation Pass Manager"; }
 
   bool doFinalization(Module &M) override {
     bool Change = false;
@@ -263,9 +255,7 @@ struct ObfuscationPassManager : public ModulePass {
     return Change;
   }
 
-  void add(Pass *P) {
-    Passes.push_back(P);
-  }
+  void add(Pass *P) { Passes.push_back(P); }
 
   bool run(Module &M) {
     bool Change = false;
@@ -357,8 +347,21 @@ struct ObfuscationPassManager : public ModulePass {
       Opt->metaOpt()->setRandomizeSections(true);
       if (Opt->randomSeed().empty())
         Opt->randomSeed().append("taokari-max-default-seed");
-      TaokariBCFBeforeFlattening = true;
-      TaokariBCFAfterFlattening = true;
+      TaokariBCFBeforeFlattening = !TaokariMaxNoBCFBefore;
+      TaokariBCFAfterFlattening = !TaokariMaxNoBCFAfter;
+      if (TaokariMaxNoFlattening)
+        Opt->flaOpt()->setEnable(false);
+      if (TaokariMaxNoMBA)
+        Opt->mbaOpt()->setEnable(false);
+      if (TaokariMaxNoConst) {
+        Opt->cieOpt()->setEnable(false);
+        Opt->cfeOpt()->setEnable(false);
+      }
+      if (TaokariMaxNoIndirects) {
+        Opt->indBrOpt()->setEnable(false);
+        Opt->iCallOpt()->setEnable(false);
+        Opt->indGvOpt()->setEnable(false);
+      }
     }
     return Opt;
   }
@@ -380,7 +383,7 @@ struct ObfuscationPassManager : public ModulePass {
 
     const auto Options(getOptions());
     this->Options = Options;
-    unsigned   pointerSize = M.getDataLayout().getTypeAllocSize(
+    unsigned pointerSize = M.getDataLayout().getTypeAllocSize(
         PointerType::getUnqual(M.getContext()));
 
     // VMP runs before hardening passes so the interpreter IR can be flattened,
@@ -428,4 +431,4 @@ ModulePass *llvm::createObfuscationPassManager() {
 INITIALIZE_PASS_BEGIN(ObfuscationPassManager, "irobf", "Enable IR Obfuscation",
                       false, false)
 INITIALIZE_PASS_END(ObfuscationPassManager, "irobf", "Enable IR Obfuscation",
-                      false, false)
+                    false, false)

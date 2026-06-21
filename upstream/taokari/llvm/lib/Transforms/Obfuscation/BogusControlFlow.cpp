@@ -1,5 +1,4 @@
 #include "llvm/Transforms/Obfuscation/BogusControlFlow.h"
-#include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Constants.h"
@@ -11,6 +10,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/RandomNumberGenerator.h"
+#include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
 #include <algorithm>
@@ -59,7 +59,8 @@ struct BogusControlFlow : public FunctionPass {
     const uint32_t Loops =
         BCFLoopCount.getNumOccurrences()
             ? BCFLoopCount
-            : (Opt.loopCount() ? Opt.loopCount() : std::max(1u, Opt.level() + 1));
+            : (Opt.loopCount() ? Opt.loopCount()
+                               : std::max(1u, Opt.level() + 1));
     if (!Probability)
       return false;
 
@@ -81,14 +82,19 @@ struct BogusControlFlow : public FunctionPass {
 
   static bool eligible(BasicBlock &BB) {
     // no PHI repair yet; widen this when BCF must cover join blocks.
-    if (&BB == &BB.getParent()->getEntryBlock() || BB.empty() ||
-        BB.isEHPad() || isa<PHINode>(BB.begin()))
+    if (isGeneratedBCFBlock(BB) || &BB == &BB.getParent()->getEntryBlock() ||
+        BB.empty() || BB.isEHPad() || isa<PHINode>(BB.begin()))
       return false;
     auto *Pred = BB.getSinglePredecessor();
     if (!Pred || !Pred->getTerminator() || Pred->getTerminator()->isEHPad())
       return false;
     return isa<BranchInst>(Pred->getTerminator()) ||
            isa<SwitchInst>(Pred->getTerminator());
+  }
+
+  static bool isGeneratedBCFBlock(BasicBlock &BB) {
+    StringRef Name = BB.getName();
+    return Name.contains(".bcf.guard") || Name.contains(".bcf.fake");
   }
 
   bool obfuscateBlock(Function &F, BasicBlock &BB, uint32_t Level,
@@ -116,10 +122,11 @@ struct BogusControlFlow : public FunctionPass {
     Pred->getTerminator()->replaceSuccessorWith(&BB, Guard);
 
     IRBuilder<> GuardIR(Guard);
-    auto *Load = GuardIR.CreateAlignedLoad(Int64, Nonce, Align(8), true,
-                                           "bcf.nonce");
-    Value *A = GuardIR.CreateMul(Load, GuardIR.CreateAdd(Load,
-                            ConstantInt::get(Int64, 1)), "bcf.opaque.mul");
+    auto *Load =
+        GuardIR.CreateAlignedLoad(Int64, Nonce, Align(8), true, "bcf.nonce");
+    Value *A = GuardIR.CreateMul(
+        Load, GuardIR.CreateAdd(Load, ConstantInt::get(Int64, 1)),
+        "bcf.opaque.mul");
     Value *Even = GuardIR.CreateICmpEQ(
         GuardIR.CreateAnd(A, ConstantInt::get(Int64, 1), "bcf.opaque.bit"),
         ConstantInt::get(Int64, 0), "bcf.opaque");
@@ -167,10 +174,11 @@ struct BogusControlFlow : public FunctionPass {
       IRBuilder<> IRB(BO);
       Value *L = BO->getOperand(0);
       Value *R = BO->getOperand(1);
-      Value *N = (FuncRNG() % 3 == 0) ? IRB.CreateXor(L, R, BO->getName() + ".mx")
+      Value *N = (FuncRNG() % 3 == 0)
+                     ? IRB.CreateXor(L, R, BO->getName() + ".mx")
                  : (Level > 2 && FuncRNG() % 2)
-                       ? IRB.CreateMul(L, R, BO->getName() + ".mm")
-                       : IRB.CreateAdd(L, R, BO->getName() + ".ma");
+                     ? IRB.CreateMul(L, R, BO->getName() + ".mm")
+                     : IRB.CreateAdd(L, R, BO->getName() + ".ma");
       BO->replaceAllUsesWith(N);
       BO->eraseFromParent();
     }
@@ -181,11 +189,12 @@ struct BogusControlFlow : public FunctionPass {
                std::mt19937_64 &FuncRNG) {
     IRBuilder<> IRB(&Fake);
     auto *Int64 = Type::getInt64Ty(Fake.getContext());
-    Value *V = IRB.CreateAlignedLoad(Int64, &Nonce, Align(8), true,
-                                     "bcf.fake.nonce");
+    Value *V =
+        IRB.CreateAlignedLoad(Int64, &Nonce, Align(8), true, "bcf.fake.nonce");
     for (uint32_t I = 0; I < Loops; ++I) {
       V = IRB.CreateXor(V, ConstantInt::get(Int64, FuncRNG()), "bcf.fake.xor");
-      V = IRB.CreateMul(V, ConstantInt::get(Int64, (FuncRNG() | 1)), "bcf.fake.mul");
+      V = IRB.CreateMul(V, ConstantInt::get(Int64, (FuncRNG() | 1)),
+                        "bcf.fake.mul");
       V = IRB.CreateAdd(V, ConstantInt::get(Int64, FuncRNG()), "bcf.fake.add");
     }
     if (Level >= 2) {
@@ -219,6 +228,7 @@ struct BogusControlFlow : public FunctionPass {
 
 char BogusControlFlow::ID = 0;
 
-FunctionPass *llvm::createBogusControlFlowPass(ObfuscationOptions *ArgsOptions) {
+FunctionPass *
+llvm::createBogusControlFlowPass(ObfuscationOptions *ArgsOptions) {
   return new BogusControlFlow(ArgsOptions);
 }

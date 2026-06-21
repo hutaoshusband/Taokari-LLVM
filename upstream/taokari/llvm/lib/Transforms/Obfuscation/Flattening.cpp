@@ -11,31 +11,50 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Transforms/Obfuscation/Flattening.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
-#include "llvm/Transforms/Obfuscation/Flattening.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/RandomNumberGenerator.h"
 #include "llvm/Transforms/Obfuscation/LegacyLowerSwitch.h"
-#include "llvm/Transforms/Obfuscation/Utils.h"
-#include "llvm/ADT/Statistic.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
-#include "llvm/IR/IRBuilder.h"
+#include "llvm/Transforms/Obfuscation/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
-#include "llvm/Support/RandomNumberGenerator.h"
-#include "llvm/Support/CommandLine.h"
 
+#include "llvm/ADT/DenseSet.h"
+#include <algorithm>
 #include <memory>
 #include <random>
-#include <algorithm>
-#include "llvm/ADT/DenseSet.h"
 
 #define DEBUG_TYPE "flattening"
 
 using namespace std;
 using namespace llvm;
+
+static bool hasGeneratedFlatteningBlocks(Function &F) {
+  bool HasLoop = false;
+  bool HasSwitch = false;
+  bool HasClone = false;
+  for (BasicBlock &BB : F) {
+    StringRef Name = BB.getName();
+    HasLoop |= Name.starts_with("loopEntry") || Name.starts_with("loopEnd");
+    HasSwitch |= Name.starts_with("switchDefault") ||
+                 Name.starts_with("switchFakeCaseGate") ||
+                 Name.starts_with("switchFakeSucc") ||
+                 Name.starts_with("switchTrap") ||
+                 Name.starts_with("switchDispatch") ||
+                 Name.starts_with("switchNestedDispatch") ||
+                 Name.starts_with("switchBucket");
+    HasClone |= Name.contains(".tao.clone");
+  }
+  return HasLoop && (HasSwitch || HasClone);
+}
 
 static constexpr uint32_t DefaultMaxInsts = 5000;
 static constexpr uint32_t DefaultMaxBlocks = 200;
@@ -50,14 +69,14 @@ static cl::opt<bool> FlaIndirectBrDispatch(
 
 namespace {
 struct Flattening : public FunctionPass {
-  unsigned    pointerSize;
+  unsigned pointerSize;
   static char ID; // Pass identification, replacement for typeid
 
   ObfuscationOptions *ArgsOptions;
-  std::mt19937_64     RNG;
+  std::mt19937_64 RNG;
 
-  Flattening(unsigned            pointerSize,
-             ObfuscationOptions *argsOptions) : FunctionPass(ID) {
+  Flattening(unsigned pointerSize, ObfuscationOptions *argsOptions)
+      : FunctionPass(ID) {
     this->pointerSize = pointerSize;
     this->ArgsOptions = argsOptions;
     uint64_t seed = 0;
@@ -73,14 +92,14 @@ struct Flattening : public FunctionPass {
   bool runOnFunction(Function &F) override;
   bool flatten(Function *f);
 };
-}
+} // namespace
 
 bool Flattening::runOnFunction(Function &F) {
   if (F.isIntrinsic()) {
     return false;
   }
   Function *tmp = &F;
-  bool      result = false;
+  bool result = false;
 
   for (const auto &annotation : readAnnotate(&F)) {
     if (annotation.find("tao-noobf-fla") != std::string::npos) {
@@ -136,25 +155,29 @@ bool Flattening::flatten(Function *f) {
   }
   auto *IntTy = cast<IntegerType>(intType);
 
-  auto randWord = [&]() ->uint64_t {
+  auto randWord = [&]() -> uint64_t {
     uint64_t v = RNG();
     if (pointerSize != 8)
       v &= 0xffffffffull;
     return v;
   };
 
-  auto randConst = [&]() ->ConstantInt * {
+  auto randConst = [&]() -> ConstantInt * {
     return ConstantInt::get(IntTy, randWord());
   };
 
   const uint64_t functionStateKey = randWord();
-  auto randStateKey = [&]() ->ConstantInt * {
+  auto randStateKey = [&]() -> ConstantInt * {
     return ConstantInt::get(IntTy, randWord() ^ functionStateKey);
   };
 
   // Lower switch
   auto lower = std::unique_ptr<FunctionPass>(createLegacyLowerSwitchPass());
   lower->runOnFunction(*f);
+
+  if (hasGeneratedFlatteningBlocks(*f)) {
+    return false;
+  }
 
   // Save all original BB
   for (auto i = f->begin(); i != f->end(); ++i) {
@@ -183,7 +206,7 @@ bool Flattening::flatten(Function *f) {
   auto bbEndOfEntry = insertBlock->splitBasicBlock(splitPos, "first");
   origBB.insert(origBB.begin(), bbEndOfEntry);
 
-  DenseSet<uint64_t>                    UsedCases;
+  DenseSet<uint64_t> UsedCases;
   DenseMap<BasicBlock *, ConstantInt *> CaseVal;
 
   for (BasicBlock *BB : origBB) {
@@ -199,18 +222,18 @@ bool Flattening::flatten(Function *f) {
 
   // Create switch variable and set as it
   IRBuilder<> IRB{insertBlock};
-  const auto  switchVar = IRB.CreateAlloca(IntTy, nullptr, "switchVar");
-  const auto  switchXorVar = IRB.CreateAlloca(IntTy, nullptr, "switchXor");
+  const auto switchVar = IRB.CreateAlloca(IntTy, nullptr, "switchVar");
+  const auto switchXorVar = IRB.CreateAlloca(IntTy, nullptr, "switchXor");
   AllocaInst *switchBogusVar = nullptr;
   if (fortressMode) {
     switchBogusVar = IRB.CreateAlloca(IntTy, nullptr, "switchBogus");
   }
 
-  auto buildOpaqueEven = [&](IRBuilder<> &Builder, const Twine &Name) -> Value * {
-    Value *seed = Builder.CreateLoad(IntTy, switchXorVar, true,
-                                     Name + ".seed");
-    Value *pair = Builder.CreateAdd(Builder.CreateMul(seed, seed),
-                                    seed, Name + ".pair");
+  auto buildOpaqueEven = [&](IRBuilder<> &Builder,
+                             const Twine &Name) -> Value * {
+    Value *seed = Builder.CreateLoad(IntTy, switchXorVar, true, Name + ".seed");
+    Value *pair =
+        Builder.CreateAdd(Builder.CreateMul(seed, seed), seed, Name + ".pair");
     return Builder.CreateAnd(pair, ConstantInt::get(IntTy, 1), Name + ".bit");
   };
 
@@ -236,9 +259,9 @@ bool Flattening::flatten(Function *f) {
     }
     case 2: {
       Value *andV = Builder.CreateAnd(LHS, RHS);
-      return Builder.CreateSub(Builder.CreateAdd(LHS, RHS),
-                               Builder.CreateShl(andV, ConstantInt::get(IntTy, 1)),
-                               Name);
+      return Builder.CreateSub(
+          Builder.CreateAdd(LHS, RHS),
+          Builder.CreateShl(andV, ConstantInt::get(IntTy, 1)), Name);
     }
     default:
       return Builder.CreateXor(LHS, RHS, Name);
@@ -247,7 +270,7 @@ bool Flattening::flatten(Function *f) {
 
   // init：Encoded = EntryCase ^ XorKey
   ConstantInt *entryXor = randStateKey();
-  Value *      entryEnc = IRB.CreateXor(EntryCase, entryXor);
+  Value *entryEnc = IRB.CreateXor(EntryCase, entryXor);
   IRB.CreateStore(entryEnc, switchVar, true);
   IRB.CreateStore(entryXor, switchXorVar, true);
 
@@ -265,8 +288,8 @@ bool Flattening::flatten(Function *f) {
   Value *switchCondition = nullptr;
   if (flaLevel > 0) {
     ConstantInt *delta = randStateKey();
-    Value *      enc1 = IRB.CreateXor(enc0, delta, "switchVar.enc1");
-    Value *      xor1 = IRB.CreateXor(xor0, delta, "switchXor.xor1");
+    Value *enc1 = IRB.CreateXor(enc0, delta, "switchVar.enc1");
+    Value *xor1 = IRB.CreateXor(xor0, delta, "switchXor.xor1");
     IRB.CreateStore(enc1, switchVar, true);
     IRB.CreateStore(xor1, switchXorVar, true);
     switchCondition = IRB.CreateXor(enc1, xor1, "switchCond");
@@ -286,21 +309,20 @@ bool Flattening::flatten(Function *f) {
   auto swFakeCaseGate =
       BasicBlock::Create(f->getContext(), "switchFakeCaseGate", f, bbLoopEnd);
   auto swFakeSucc0 =
-      fortressMode ? BasicBlock::Create(f->getContext(), "switchFakeSucc0", f,
-                                        bbLoopEnd)
-                   : nullptr;
+      fortressMode
+          ? BasicBlock::Create(f->getContext(), "switchFakeSucc0", f, bbLoopEnd)
+          : nullptr;
   auto swFakeSucc1 =
-      fortressMode ? BasicBlock::Create(f->getContext(), "switchFakeSucc1", f,
-                                        bbLoopEnd)
-                   : nullptr;
+      fortressMode
+          ? BasicBlock::Create(f->getContext(), "switchFakeSucc1", f, bbLoopEnd)
+          : nullptr;
   auto swFakeSucc2 =
-      fortressMode ? BasicBlock::Create(f->getContext(), "switchFakeSucc2", f,
-                                        bbLoopEnd)
-                   : nullptr;
+      fortressMode
+          ? BasicBlock::Create(f->getContext(), "switchFakeSucc2", f, bbLoopEnd)
+          : nullptr;
   auto swDefaultJunk =
       BasicBlock::Create(f->getContext(), "switchDefaultJunk", f, bbLoopEnd);
-  auto swTrap =
-      BasicBlock::Create(f->getContext(), "switchTrap", f, bbLoopEnd);
+  auto swTrap = BasicBlock::Create(f->getContext(), "switchTrap", f, bbLoopEnd);
   IRB.SetInsertPoint(swDefault);
   Value *junkA = IRB.CreateXor(randConst(), randConst(), "defaultJunkA");
   Value *junkB = IRB.CreateAdd(junkA, randConst(), "defaultJunkB");
@@ -318,35 +340,33 @@ bool Flattening::flatten(Function *f) {
 
   if (fortressMode) {
     IRB.SetInsertPoint(swFakeSucc0);
-    Value *fakeNext = buildXorExpr(IRB,
-                                   IRB.CreateLoad(IntTy, switchBogusVar, true,
-                                                  "fakeSucc0.load"),
-                                   randConst(), "fakeSucc0.next");
+    Value *fakeNext = buildXorExpr(
+        IRB, IRB.CreateLoad(IntTy, switchBogusVar, true, "fakeSucc0.load"),
+        randConst(), "fakeSucc0.next");
     IRB.CreateStore(fakeNext, switchBogusVar, true);
     IRB.CreateCondBr(buildOpaqueTrue(IRB, "fakeSucc0.pred"), swFakeSucc1,
                      swTrap);
 
     IRB.SetInsertPoint(swFakeSucc1);
-    Value *fakeMix = IRB.CreateAdd(IRB.CreateLoad(IntTy, switchBogusVar, true,
-                                                  "fakeSucc1.load"),
-                                   randConst(), "fakeSucc1.mix");
+    Value *fakeMix = IRB.CreateAdd(
+        IRB.CreateLoad(IntTy, switchBogusVar, true, "fakeSucc1.load"),
+        randConst(), "fakeSucc1.mix");
     IRB.CreateStore(fakeMix, switchBogusVar, true);
     IRB.CreateCondBr(buildOpaqueFalse(IRB, "fakeSucc1.pred"), swTrap,
                      swFakeSucc2);
 
     IRB.SetInsertPoint(swFakeSucc2);
-    Value *fakeFinal = buildXorExpr(IRB,
-                                    IRB.CreateLoad(IntTy, switchBogusVar, true,
-                                                   "fakeSucc2.load"),
-                                    randConst(), "fakeSucc2.final");
+    Value *fakeFinal = buildXorExpr(
+        IRB, IRB.CreateLoad(IntTy, switchBogusVar, true, "fakeSucc2.load"),
+        randConst(), "fakeSucc2.final");
     IRB.CreateStore(fakeFinal, switchBogusVar, true);
     IRB.CreateBr(swDefaultJunk);
   }
 
   IRB.SetInsertPoint(swDefaultJunk);
-  Value *junkC = IRB.CreateXor(
-      IRB.CreateLoad(IntTy, switchXorVar, "defaultJunkC"), randConst(),
-      "defaultJunkD");
+  Value *junkC =
+      IRB.CreateXor(IRB.CreateLoad(IntTy, switchXorVar, "defaultJunkC"),
+                    randConst(), "defaultJunkD");
   IRB.CreateStore(junkC, switchXorVar, true);
   IRB.CreateBr(swTrap);
 
@@ -365,22 +385,19 @@ bool Flattening::flatten(Function *f) {
     if (dispatchLayout == 0) {
       BranchInst::Create(switchBlock, bbLoopEntry);
     } else if (dispatchLayout == 1) {
-      auto dispatchGate =
-          BasicBlock::Create(f->getContext(), "switchDispatchGate", f,
-                             bbLoopEnd);
+      auto dispatchGate = BasicBlock::Create(
+          f->getContext(), "switchDispatchGate", f, bbLoopEnd);
       IRB.SetInsertPoint(bbLoopEntry);
-      IRB.CreateCondBr(buildOpaqueTrue(IRB, "dispatchGate.pred"),
-                       dispatchGate, swFakeCaseGate);
+      IRB.CreateCondBr(buildOpaqueTrue(IRB, "dispatchGate.pred"), dispatchGate,
+                       swFakeCaseGate);
       IRB.SetInsertPoint(dispatchGate);
-      Value *gateMix = buildXorExpr(IRB, switchCondition,
-                                    ConstantInt::get(IntTy, 0),
-                                    "dispatchGate.mix");
+      Value *gateMix = buildXorExpr(
+          IRB, switchCondition, ConstantInt::get(IntTy, 0), "dispatchGate.mix");
       switchCondition = gateMix;
       IRB.CreateBr(switchBlock);
     } else {
-      auto nestedOuter =
-          BasicBlock::Create(f->getContext(), "switchNestedDispatch", f,
-                             bbLoopEnd);
+      auto nestedOuter = BasicBlock::Create(
+          f->getContext(), "switchNestedDispatch", f, bbLoopEnd);
       IRB.SetInsertPoint(bbLoopEntry);
       IRB.CreateBr(nestedOuter);
       IRB.SetInsertPoint(nestedOuter);
@@ -398,8 +415,7 @@ bool Flattening::flatten(Function *f) {
     }
     for (Instruction &I : *BB) {
       if (isa<PHINode>(&I) || I.isEHPad() || I.isAtomic() ||
-          I.mayHaveSideEffects() ||
-          I.mayReadOrWriteMemory()) {
+          I.mayHaveSideEffects() || I.mayReadOrWriteMemory()) {
         return false;
       }
       if (auto *LI = dyn_cast<LoadInst>(&I)) {
@@ -439,8 +455,8 @@ bool Flattening::flatten(Function *f) {
       }
       Clone->getTerminator()->eraseFromParent();
       IRBuilder<> CloneIRB(Clone);
-      Value *cloneJunk = buildXorExpr(CloneIRB, randConst(), randConst(),
-                                      "cloneJunk");
+      Value *cloneJunk =
+          buildXorExpr(CloneIRB, randConst(), randConst(), "cloneJunk");
       CloneIRB.CreateStore(cloneJunk, switchBogusVar, true);
       CloneIRB.CreateBr(fakeCaseTarget);
       fakeCaseTarget = Clone;
@@ -469,14 +485,15 @@ bool Flattening::flatten(Function *f) {
            ((bucket ^ dispatchBucketSalt) & (DispatchBucketCount - 1));
   };
 
-  const size_t fakeCaseCount =
-      flaLevel >= 4 ? std::max<size_t>(origBB.size(), 4)
-                    : std::max<size_t>(1, origBB.size() / 2);
+  const size_t fakeCaseCount = flaLevel >= 4
+                                   ? std::max<size_t>(origBB.size(), 4)
+                                   : std::max<size_t>(1, origBB.size() / 2);
   for (size_t i = 0; i < fakeCaseCount; ++i) {
     uint64_t v;
     const uint64_t bucket =
         (CaseVal[origBB[i % origBB.size()]]->getLimitedValue() ^
-         dispatchBucketSalt) & (DispatchBucketCount - 1);
+         dispatchBucketSalt) &
+        (DispatchBucketCount - 1);
     do {
       v = flaLevel >= 4 ? forceDispatchBucket(randWord(), bucket) : randWord();
     } while (v == 0 || UsedCases.count(v));
@@ -485,91 +502,96 @@ bool Flattening::flatten(Function *f) {
   }
 
   auto emitNoJumpTableDispatcher =
-      [&](const SmallVectorImpl<std::pair<ConstantInt *, BasicBlock *>> &Cases) {
-    constexpr size_t BucketCount = DispatchBucketCount;
-    const uint64_t bucketSalt = dispatchBucketSalt;
-    SmallVector<std::pair<ConstantInt *, BasicBlock *>, 16> Buckets[BucketCount];
-    SmallVector<size_t, BucketCount> LiveBuckets;
+      [&](const SmallVectorImpl<std::pair<ConstantInt *, BasicBlock *>>
+              &Cases) {
+        constexpr size_t BucketCount = DispatchBucketCount;
+        const uint64_t bucketSalt = dispatchBucketSalt;
+        SmallVector<std::pair<ConstantInt *, BasicBlock *>, 16>
+            Buckets[BucketCount];
+        SmallVector<size_t, BucketCount> LiveBuckets;
 
-    for (const auto &Case : Cases) {
-      size_t bucket =
-          ((Case.first->getLimitedValue() ^ bucketSalt) & (BucketCount - 1));
-      if (Buckets[bucket].empty()) {
-        LiveBuckets.push_back(bucket);
-      }
-      Buckets[bucket].push_back(Case);
-    }
+        for (const auto &Case : Cases) {
+          size_t bucket = ((Case.first->getLimitedValue() ^ bucketSalt) &
+                           (BucketCount - 1));
+          if (Buckets[bucket].empty()) {
+            LiveBuckets.push_back(bucket);
+          }
+          Buckets[bucket].push_back(Case);
+        }
 
-    IRB.SetInsertPoint(switchBlock);
-    Value *bucketValue = IRB.CreateAnd(
-        IRB.CreateXor(switchCondition, ConstantInt::get(IntTy, bucketSalt),
-                      "switchBucketMix"),
-        ConstantInt::get(IntTy, BucketCount - 1), "switchBucket");
+        IRB.SetInsertPoint(switchBlock);
+        Value *bucketValue = IRB.CreateAnd(
+            IRB.CreateXor(switchCondition, ConstantInt::get(IntTy, bucketSalt),
+                          "switchBucketMix"),
+            ConstantInt::get(IntTy, BucketCount - 1), "switchBucket");
 
-    BasicBlock *bucketProbe = switchBlock;
-    for (size_t i = 0; i < LiveBuckets.size(); ++i) {
-      const size_t bucket = LiveBuckets[i];
-      BasicBlock *bucketBody =
-          BasicBlock::Create(Ctx, "switchBucketBody", f, bbLoopEnd);
-      BasicBlock *nextBucket =
-          i + 1 == LiveBuckets.size()
-              ? swDefault
-              : BasicBlock::Create(Ctx, "switchBucketProbe", f, bbLoopEnd);
+        BasicBlock *bucketProbe = switchBlock;
+        for (size_t i = 0; i < LiveBuckets.size(); ++i) {
+          const size_t bucket = LiveBuckets[i];
+          BasicBlock *bucketBody =
+              BasicBlock::Create(Ctx, "switchBucketBody", f, bbLoopEnd);
+          BasicBlock *nextBucket =
+              i + 1 == LiveBuckets.size()
+                  ? swDefault
+                  : BasicBlock::Create(Ctx, "switchBucketProbe", f, bbLoopEnd);
 
-      IRB.SetInsertPoint(bucketProbe);
-      Value *bucketHit = IRB.CreateICmpEQ(
-          bucketValue, ConstantInt::get(IntTy, bucket), "switchBucketHit");
-      IRB.CreateCondBr(bucketHit, bucketBody, nextBucket);
+          IRB.SetInsertPoint(bucketProbe);
+          Value *bucketHit = IRB.CreateICmpEQ(
+              bucketValue, ConstantInt::get(IntTy, bucket), "switchBucketHit");
+          IRB.CreateCondBr(bucketHit, bucketBody, nextBucket);
 
-      BasicBlock *caseProbe = bucketBody;
-      for (size_t j = 0; j < Buckets[bucket].size(); ++j) {
-        IRB.SetInsertPoint(caseProbe);
-        BasicBlock *nextCase =
-            j + 1 == Buckets[bucket].size()
-                ? swDefault
-                : BasicBlock::Create(Ctx, "switchDispatchProbe", f,
-                                     bbLoopEnd);
-        Value *hit = IRB.CreateICmpEQ(switchCondition,
-                                      Buckets[bucket][j].first, "switchHit");
-        IRB.CreateCondBr(hit, Buckets[bucket][j].second, nextCase);
-        caseProbe = nextCase;
-      }
+          BasicBlock *caseProbe = bucketBody;
+          for (size_t j = 0; j < Buckets[bucket].size(); ++j) {
+            IRB.SetInsertPoint(caseProbe);
+            BasicBlock *nextCase =
+                j + 1 == Buckets[bucket].size()
+                    ? swDefault
+                    : BasicBlock::Create(Ctx, "switchDispatchProbe", f,
+                                         bbLoopEnd);
+            Value *hit = IRB.CreateICmpEQ(
+                switchCondition, Buckets[bucket][j].first, "switchHit");
+            IRB.CreateCondBr(hit, Buckets[bucket][j].second, nextCase);
+            caseProbe = nextCase;
+          }
 
-      bucketProbe = nextBucket;
-    }
-  };
+          bucketProbe = nextBucket;
+        }
+      };
 
   auto emitIndirectBrDispatcher =
-      [&](const SmallVectorImpl<std::pair<ConstantInt *, BasicBlock *>> &Cases) {
-    SmallVector<BasicBlock *, 64> Dests;
-    auto addDest = [&](BasicBlock *BB) {
-      if (std::find(Dests.begin(), Dests.end(), BB) == Dests.end()) {
-        Dests.push_back(BB);
-      }
-    };
+      [&](const SmallVectorImpl<std::pair<ConstantInt *, BasicBlock *>>
+              &Cases) {
+        SmallVector<BasicBlock *, 64> Dests;
+        auto addDest = [&](BasicBlock *BB) {
+          if (std::find(Dests.begin(), Dests.end(), BB) == Dests.end()) {
+            Dests.push_back(BB);
+          }
+        };
 
-    IRB.SetInsertPoint(switchBlock);
-    Value *target = BlockAddress::get(f, swDefault);
-    addDest(swDefault);
-    for (const auto &Case : Cases) {
-      Value *hit = IRB.CreateICmpEQ(switchCondition, Case.first, "switchHit");
-      target = IRB.CreateSelect(hit, BlockAddress::get(Case.second), target,
-                                "switchIndirectTarget");
-      addDest(Case.second);
-    }
+        IRB.SetInsertPoint(switchBlock);
+        Value *target = BlockAddress::get(f, swDefault);
+        addDest(swDefault);
+        for (const auto &Case : Cases) {
+          Value *hit =
+              IRB.CreateICmpEQ(switchCondition, Case.first, "switchHit");
+          target = IRB.CreateSelect(hit, BlockAddress::get(Case.second), target,
+                                    "switchIndirectTarget");
+          addDest(Case.second);
+        }
 
-    auto *IBI = IRB.CreateIndirectBr(target, Dests.size());
-    for (BasicBlock *Dest : Dests) {
-      IBI->addDestination(Dest);
-    }
-  };
+        auto *IBI = IRB.CreateIndirectBr(target, Dests.size());
+        for (BasicBlock *Dest : Dests) {
+          IBI->addDestination(Dest);
+        }
+      };
 
   if (flaLevel >= 4 && FlaIndirectBrDispatch) {
     emitIndirectBrDispatcher(DispatchCases);
   } else if (flaLevel >= 4) {
     emitNoJumpTableDispatcher(DispatchCases);
   } else {
-    auto switchI = SwitchInst::Create(switchCondition, swDefault, 0, switchBlock);
+    auto switchI =
+        SwitchInst::Create(switchCondition, swDefault, 0, switchBlock);
     for (const auto &Case : DispatchCases) {
       switchI->addCase(Case.first, Case.second);
     }
@@ -608,8 +630,8 @@ bool Flattening::flatten(Function *f) {
 
       if (fortressMode) {
         Value *bogusXor = randStateKey();
-        Value *bogusState = buildXorExpr(IRB, randConst(), bogusXor,
-                                         "bogusNextEnc");
+        Value *bogusState =
+            buildXorExpr(IRB, randConst(), bogusXor, "bogusNextEnc");
         IRB.CreateStore(bogusState, switchBogusVar, true);
       }
 
@@ -643,10 +665,8 @@ bool Flattening::flatten(Function *f) {
       auto *succT = br->getSuccessor(0);
       auto *succF = br->getSuccessor(1);
 
-      Value *caseT =
-          CaseVal.count(succT) ? CaseVal[succT] : EntryCase;
-      Value *caseF =
-          CaseVal.count(succF) ? CaseVal[succF] : EntryCase;
+      Value *caseT = CaseVal.count(succT) ? CaseVal[succT] : EntryCase;
+      Value *caseF = CaseVal.count(succF) ? CaseVal[succF] : EntryCase;
 
       Value *selectedCase =
           IRB.CreateSelect(br->getCondition(), caseT, caseF, "nextCase");
@@ -661,11 +681,10 @@ bool Flattening::flatten(Function *f) {
   return true;
 }
 
-
-char                            Flattening::ID = 0;
+char Flattening::ID = 0;
 static RegisterPass<Flattening> X("flattening", "Call graph flattening");
 
-FunctionPass *llvm::createFlatteningPass(unsigned            pointerSize,
+FunctionPass *llvm::createFlatteningPass(unsigned pointerSize,
                                          ObfuscationOptions *argsOptions) {
   return new Flattening(pointerSize, argsOptions);
 }
