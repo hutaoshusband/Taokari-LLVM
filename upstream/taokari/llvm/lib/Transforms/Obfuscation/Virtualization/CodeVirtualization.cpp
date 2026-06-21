@@ -2,6 +2,7 @@
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -14,6 +15,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Alignment.h"
+#include "llvm/Support/Debug.h"
 
 #include <cstdint>
 #include <functional>
@@ -24,7 +26,7 @@ using namespace llvm;
 
 namespace {
 
-// ponytail: Opcode encoding is the stable on-the-wire bytecode value. These
+// Opcode encoding is the stable on-the-wire bytecode value. These
 // integers must NOT change once bytecode is shipped; the interpreter handler
 // table is keyed off them. L2 opcode-mapping/encryption layers will sit on
 // top of these values, not replace them.
@@ -46,7 +48,7 @@ enum Opcode : int64_t {
   OpBrTrue = 15,
   OpRet = 16,
   OpSelect = 17,
-  // ponytail: L1.5.1 widened integer binary ops. Values 18+ are the new ISA;
+  // L1.5.1 widened integer binary ops. Values 18+ are the new ISA;
   // 1..17 stay stable so existing bytecode keeps working.
   OpMul = 18,
   OpAnd = 19,
@@ -58,21 +60,21 @@ enum Opcode : int64_t {
   OpUDiv = 25,
   OpSRem = 26,
   OpURem = 27,
-  // ponytail: L1.5.1 unsigned compares. Operands stay in canonical zext form;
+  // L1.5.1 unsigned compares. Operands stay in canonical zext form;
   // unsigned comparison is width-agnostic, so these carry no VmTy immediate
   // (like EQ/NE).
   OpCmpUgt = 28,
   OpCmpUlt = 29,
   OpCmpUge = 30,
   OpCmpUle = 31,
-  // ponytail: L1.5.1 VM-local memory (middle way). Frame pointers are static
+  // L1.5.1 VM-local memory (middle way). Frame pointers are static
   // i64 indices into a per-interpreter Frame array; alloca/GEP resolve to
   // compile-time PushConst of the frame index. LoadPtr/StorePtr carry a VmTy
   // for width narrowing. External pointer args/globals are NOT supported --
   // they stay rejected and defer to the L2 full-pointer step.
   OpLoadPtr = 32,
   OpStorePtr = 33,
-  // ponytail: L1.5.1 direct calls. OpCall fetches <calleeIdx> <nargs>
+  // L1.5.1 direct calls. OpCall fetches <calleeIdx> <nargs>
   // <resultVmTy>, pops nargs operand-stack values into a call-args buffer,
   // calls callees[calleeIdx] (resolved by the encoder to a direct Function*),
   // and pushes the i64 return narrowed by resultVmTy. Integer args/return
@@ -81,7 +83,7 @@ enum Opcode : int64_t {
   OpCall = 34,
 };
 
-// ponytail: How many operand-stack pops and bytecode immediates a handler
+// How many operand-stack pops and bytecode immediates a handler
 // consumes. The encoder uses these for stack-depth validation; the
 // interpreter construction uses them for diagnostics only (each handler
 // drives its own fetch()/pop() count for now, since some are data-dependent
@@ -92,7 +94,7 @@ struct HandlerStackShape {
   unsigned Immediates = 0;
 };
 
-// ponytail: Per-value width+signedness. The VM stores everything as i64, but
+// Per-value width+signedness. The VM stores everything as i64, but
 // arithmetic must wrap at the operand's native width and signed/unsigned
 // distinctions (compare, shift, div/rem) must be preserved. The encoder
 // records VmTy per value and emits it as immediates alongside the opcodes
@@ -116,7 +118,7 @@ static VmTy vmTyFromType(Type *Ty) {
   return T;
 }
 
-// ponytail: Pack VmTy into a single int64 immediate (bits 0..7 = width,
+// Pack VmTy into a single int64 immediate (bits 0..7 = width,
 // bit 8 = signed). One word instead of two keeps the bytecode compact.
 static int64_t packVmTy(VmTy T) {
   return static_cast<int64_t>(T.Bits) | (T.Signed ? (1LL << 8) : 0);
@@ -138,7 +140,7 @@ struct BytecodeProgram {
   SmallVector<Fixup, 8> Fixups;
 };
 
-// ponytail: Handler descriptor. The interpreter builder iterates the table
+// Handler descriptor. The interpreter builder iterates the table
 // and emits one switch case per entry; opcode values stay the stable enum.
 // This is the L1.5.2 refactor target: previously every opcode was a hand-
 // written case in getOrCreateInterpreter with no arity metadata. Now the
@@ -158,7 +160,7 @@ struct Handler {
 struct CodeVirtualization : public ModulePass {
   static char ID;
   ObfuscationOptions *ArgsOptions;
-  // ponytail: Per-module direct-callee table (L1.5.1). Populated lazily by
+  // Per-module direct-callee table (L1.5.1). Populated lazily by
   // buildBytecode as it encounters direct CallInsts; resolved into a
   // __taokari_vmp_callees global by finalizeCalleeTable() before the
   // interpreter is built. OpCall indexes into it.
@@ -179,10 +181,10 @@ struct CodeVirtualization : public ModulePass {
   }
 
   bool isSkippable(const Instruction &I) const {
-    return isa<DbgInfoIntrinsic>(I);
+    return isa<DbgInfoIntrinsic>(I) || isa<AssumeInst>(I);
   }
 
-  // ponytail: True if a CallInst is virtualizable by the L1.5.1 OpCall path.
+  // True if a CallInst is virtualizable by the L1.5.1 OpCall path.
   // Requirements: direct callee (Function*, not a function pointer), non-
   // variadic, integer args each <=64 bits, integer-or-void return <=64 bits.
   // Indirect/virtual calls, vararg, pointer/float args reject the caller.
@@ -224,7 +226,9 @@ struct CodeVirtualization : public ModulePass {
       for (Instruction &I : BB) {
         if (isSkippable(I))
           continue;
-        // ponytail: Level 1 VM is toy integer IR only. Add call/EH support
+        if (isa<PHINode>(I))
+          continue;
+        // Level 1 VM is toy integer IR only. Add call/EH support
         // after this compile/run path proves useful. PHI is supported
         // (L1.5.1): lowered to slot copies in predecessors. VM-local alloca/
         // load/store/constant-GEP are supported (L1.5.1 middle way): the
@@ -244,7 +248,7 @@ struct CodeVirtualization : public ModulePass {
           case Instruction::Add:
           case Instruction::Sub:
           case Instruction::Xor:
-          // ponytail: L1.5.1 widened integer binary ops.
+          // L1.5.1 widened integer binary ops.
           case Instruction::Mul:
           case Instruction::And:
           case Instruction::Or:
@@ -289,14 +293,27 @@ struct CodeVirtualization : public ModulePass {
             return true;
           continue;
         }
-        // ponytail: VM-local memory (L1.5.1 middle way). Allow AllocaInst,
+        if (auto *Cast = dyn_cast<CastInst>(&I)) {
+          if (!isSupportedInt(Cast->getSrcTy()) ||
+              !isSupportedInt(Cast->getDestTy()))
+            return true;
+          switch (Cast->getOpcode()) {
+          case Instruction::ZExt:
+          case Instruction::Trunc:
+            break;
+          default:
+            return true;
+          }
+          continue;
+        }
+        // VM-local memory (L1.5.1 middle way). Allow AllocaInst,
         // LoadInst, StoreInst, GetElementPtrInst here; buildBytecode rejects
         // the function if any pointer origin is non-VM-local (external arg,
         // global, etc.) -- that check needs whole-function alloca context.
         if (isa<AllocaInst>(I) || isa<LoadInst>(I) || isa<StoreInst>(I) ||
             isa<GetElementPtrInst>(I))
           continue;
-        // ponytail: direct CallInst allowed (L1.5.1); indirect/non-integer
+        // direct CallInst allowed (L1.5.1); indirect/non-integer
         // signature still rejects via buildBytecode's isVMCompatibleCall.
         if (isa<CallInst>(I))
           continue;
@@ -317,7 +334,7 @@ struct CodeVirtualization : public ModulePass {
     return Slot;
   }
 
-  // ponytail: True if Ty can live in the VM-local frame (integer scalars,
+  // True if Ty can live in the VM-local frame (integer scalars,
   // arrays of integers, or simple aggregates of integers -- anything we can
   // bucket into i64 slots). Pointers, floats, and nested pointer/float
   // aggregates are rejected (deferred to the L2 full-pointer step).
@@ -333,7 +350,7 @@ struct CodeVirtualization : public ModulePass {
     return false;
   }
 
-  // ponytail: Emit a value-push that carries the value's VmTy so the
+  // Emit a value-push that carries the value's VmTy so the
   // interpreter can sign/zero-extend into the i64 slot correctly. For a
   // ConstantInt we encode the full sext/zext value directly; for a slot we
   // emit its index. In both cases a packed VmTy immediate follows so the
@@ -373,7 +390,7 @@ struct CodeVirtualization : public ModulePass {
     return true;
   }
 
-  // ponytail: Emit slot copies for every PHI in `Succ` whose incoming value
+  // Emit slot copies for every PHI in `Succ` whose incoming value
   // for predecessor `Pred` must be stored into the PHI's slot before control
   // transfers from Pred to Succ. This is the L1.5.1 PHI lowering: the PHI
   // result is materialized as a locals slot, and each predecessor writes its
@@ -404,7 +421,7 @@ struct CodeVirtualization : public ModulePass {
     return true;
   }
 
-  // ponytail: Resolve a VM-local pointer to a Frame slot index. Returns false
+  // Resolve a VM-local pointer to a Frame slot index. Returns false
   // if the pointer origin is not VM-local (external arg, global, etc.) -- in
   // which case buildBytecode rejects the whole function. V must be an
   // AllocaInst result, or a constant-offset GEP whose base is VM-local. The
@@ -437,7 +454,7 @@ struct CodeVirtualization : public ModulePass {
     return true;
   }
 
-  // ponytail: Build-time operand-stack depth check (L1.5.4). Walks the
+  // Build-time operand-stack depth check (L1.5.4). Walks the
   // bytecode simulating the max operand-stack depth using HandlerStackShape.
   // Fails (returns false) if the depth would exceed the fixed 64-slot Stack
   // alloca at any point -- otherwise the interpreter would silently overflow
@@ -470,7 +487,7 @@ struct CodeVirtualization : public ModulePass {
   bool buildBytecode(Function &F, BytecodeProgram &P) {
     DenseMap<const Value *, unsigned> Slots;
     DenseMap<const BasicBlock *, size_t> BlockStart;
-    // ponytail: VM-local frame allocator. Each AllocaInst reserves
+    // VM-local frame allocator. Each AllocaInst reserves
     // ceil(allocSize / 8) consecutive frame slots (i64 units).
     DenseMap<const AllocaInst *, unsigned> AllocaBase;
     unsigned NextFrameSlot = 0;
@@ -512,7 +529,7 @@ struct CodeVirtualization : public ModulePass {
 
     for (BasicBlock &BB : F) {
       BlockStart[&BB] = P.Words.size();
-      // ponytail: pre-register PHI slots so any use of a PHI (including by
+      // pre-register PHI slots so any use of a PHI (including by
       // another PHI in the same block, or by an instruction before the PHI
       // list ends -- they're all at block top) resolves to the right slot.
       for (Instruction &I : BB) {
@@ -527,7 +544,7 @@ struct CodeVirtualization : public ModulePass {
         if (isSkippable(I))
           continue;
         if (isa<PHINode>(I)) {
-          // ponytail: PHI nodes produce no bytecode inline. Their effect is
+          // PHI nodes produce no bytecode inline. Their effect is
           // the predecessor-side slot copies emitted by emitPhiCopies below.
           continue;
         }
@@ -536,7 +553,7 @@ struct CodeVirtualization : public ModulePass {
               !emitValue(P, Slots, AllocaBase, NextFrameSlot, BO->getOperand(1)))
             return false;
           VmTy ResultTy = vmTyFromType(BO->getType());
-          // ponytail: signedness for the few ops where it matters at encode
+          // signedness for the few ops where it matters at encode
           // time. Mul/And/Or/Xor/Add/Sub/Shl are sign-agnostic; the narrowing
           // uses the type width only. AShr is signed (arithmetic) shift, LShr
           // is unsigned (logical) shift; UDiv/URem unsigned, SDiv/SRem signed.
@@ -587,7 +604,7 @@ struct CodeVirtualization : public ModulePass {
           default:
             return false;
           }
-          // ponytail: operand/result width so the interpreter truncates the
+          // operand/result width so the interpreter truncates the
           // i64 arithmetic back to the native width (fixes i32 wraparound).
           P.Words.push_back(packVmTy(ResultTy));
           P.Words.push_back(OpStoreSlot);
@@ -598,7 +615,7 @@ struct CodeVirtualization : public ModulePass {
           if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, Cmp->getOperand(0)) ||
               !emitValue(P, Slots, AllocaBase, NextFrameSlot, Cmp->getOperand(1)))
             return false;
-          // ponytail: cmp operands are pushed in canonical zext form. Signed
+          // cmp operands are pushed in canonical zext form. Signed
           // compares (SGT/SLT/SGE/SLE) need the operands sign-extended from
           // their true width first, so the encoder emits a trailing VmTy
           // immediate for the signed variants; the handler fetches it and
@@ -629,7 +646,7 @@ struct CodeVirtualization : public ModulePass {
             P.Words.push_back(OpCmpSle);
             P.Words.push_back(packVmTy(OperandTy));
             break;
-          // ponytail: unsigned compares. Operands are already canonical zext;
+          // unsigned compares. Operands are already canonical zext;
           // unsigned comparison needs no width info and no immediate.
           case CmpInst::ICMP_UGT:
             P.Words.push_back(OpCmpUgt);
@@ -660,7 +677,24 @@ struct CodeVirtualization : public ModulePass {
           P.Words.push_back(slotFor(Slots, &I));
           continue;
         }
-        // ponytail: VM-local load (L1.5.1 middle way). Emit the VM-local
+        if (auto *Cast = dyn_cast<CastInst>(&I)) {
+          if (!isSupportedInt(Cast->getType()))
+            return false;
+          switch (Cast->getOpcode()) {
+          case Instruction::ZExt:
+          case Instruction::Trunc:
+            break;
+          default:
+            return false;
+          }
+          if (!emitValue(P, Slots, AllocaBase, NextFrameSlot,
+                         Cast->getOperand(0)))
+            return false;
+          P.Words.push_back(OpStoreSlot);
+          P.Words.push_back(slotFor(Slots, &I));
+          continue;
+        }
+        // VM-local load (L1.5.1 middle way). Emit the VM-local
         // pointer (resolves to a PushConst frame index via emitValue), then
         // OpLoadPtr + VmTy. The handler pops the frame index, loads
         // Frame[idx], narrows, and pushes the result. The load result is
@@ -676,7 +710,7 @@ struct CodeVirtualization : public ModulePass {
           P.Words.push_back(slotFor(Slots, &I));
           continue;
         }
-        // ponytail: VM-local store. Emit the value then the VM-local pointer,
+        // VM-local store. Emit the value then the VM-local pointer,
         // then OpStorePtr + VmTy. The handler pops the pointer, then the
         // value, narrows the value to VmTy, and stores Frame[ptr] = value.
         if (auto *ST = dyn_cast<StoreInst>(&I)) {
@@ -700,13 +734,13 @@ struct CodeVirtualization : public ModulePass {
         // via emitValue to a PushConst frame index (allocated in pre-scan).
         if (isa<AllocaInst>(I))
           continue;
-        // ponytail: direct CallInst (L1.5.1). Indirect/virtual callees and
+        // direct CallInst (L1.5.1). Indirect/virtual callees and
         // non-integer args/return reject the whole function.
         if (auto *CI = dyn_cast<CallInst>(&I)) {
           if (!isVMCompatibleCall(*CI))
             return false;
           auto *Callee = cast<Function>(CI->getCalledOperand());
-          // ponytail: register the callee in the per-module callee table and
+          // register the callee in the per-module callee table and
           // remember its index. The table is finalized before the interpreter
           // is built.
           unsigned Idx;
@@ -741,7 +775,7 @@ struct CodeVirtualization : public ModulePass {
         }
         if (auto *Br = dyn_cast<BranchInst>(&I)) {
           if (Br->isUnconditional()) {
-            // ponytail: store PHI incomings for the single successor, then jump.
+            // store PHI incomings for the single successor, then jump.
             if (!emitPhiCopies(P, Slots, AllocaBase, NextFrameSlot, &BB, Br->getSuccessor(0)))
               return false;
             P.Words.push_back(OpJmp);
@@ -799,7 +833,7 @@ struct CodeVirtualization : public ModulePass {
     return Slots.size() <= 64 && !P.Words.empty() && checkStackDepth(P);
   }
 
-  // ponytail: Per-opcode stack shape. Used by the build-time depth check
+  // Per-opcode stack shape. Used by the build-time depth check
   // (L1.5.4) and as documentation. Data-dependent handlers (OpJmp/OpBrTrue/
   // OpRet) report their shape conservatively.
   HandlerStackShape shapeOf(Opcode Op) const {
@@ -885,7 +919,7 @@ struct CodeVirtualization : public ModulePass {
     return B.CreateLoad(I64, B.CreateGEP(I64, Stack, Idx));
   }
 
-  // ponytail: Bundle of interpreter state. Emit closures in the handler
+  // Bundle of interpreter state. Emit closures in the handler
   // table capture a pointer to this struct by value (one pointer copy),
   // which is always valid because the Ctx outlives both the table build and
   // the synchronous Emit pass in getOrCreateInterpreter. This avoids the
@@ -922,7 +956,7 @@ struct CodeVirtualization : public ModulePass {
     return pop(B, C.I64, C.Stack, C.SP);
   }
 
-  // ponytail: Narrow a full i64 value to its native width, returned as the
+  // Narrow a full i64 value to its native width, returned as the
   // canonical ZERO-EXTENDED bit pattern. The VM stack always holds values in
   // this canonical form: truncate to width, then zext to i64. Signedness is
   // NOT applied here -- it is a property of the consuming operation, not the
@@ -943,7 +977,7 @@ struct CodeVirtualization : public ModulePass {
     return B.CreateAnd(V, Mask);
   }
 
-  // ponytail: Sign-extend a canonical zext stack value from its native width
+  // Sign-extend a canonical zext stack value from its native width
   // back to a signed i64, for use by signed operations (signed compare, SDiv,
   // SRem, AShr). Counterpart to narrowTo: narrowTo produces the canonical
   // zext bit pattern; signExtendFor consumes it when the op is signed.
@@ -964,7 +998,7 @@ struct CodeVirtualization : public ModulePass {
     return B.CreateSub(B.CreateXor(Lo, SignBit), SignBit);
   }
 
-  // ponytail: Build the handler table for the interpreter. Each entry owns
+  // Build the handler table for the interpreter. Each entry owns
   // its case-block emission, including pop()/fetch() and the branch back to
   // Dispatch. OpRet intentionally does NOT branch back (it returns).
   //
@@ -1005,7 +1039,7 @@ struct CodeVirtualization : public ModulePass {
                    B.CreateBr(C.Dispatch);
                  }});
 
-    // ponytail: VM-local memory ops (L1.5.1 middle way). Frame index is on
+    // VM-local memory ops (L1.5.1 middle way). Frame index is on
     // the stack (pushed by emitValue as a PushConst). OpLoadPtr pops the
     // frame index, fetches VmTy, loads Frame[idx], narrows, pushes.
     // OpStorePtr pops the frame index, pops the value, fetches VmTy,
@@ -1031,7 +1065,7 @@ struct CodeVirtualization : public ModulePass {
                    B.CreateBr(C.Dispatch);
                  }});
 
-    // ponytail: direct call (L1.5.1). Only registered when a callee table
+    // direct call (L1.5.1). Only registered when a callee table
     // exists (i.e. at least one direct call was encoded). Modules with no
     // direct calls have CalleeTable == null and the OpCall handler would
     // dereference it during IR emission, so we skip registration entirely
@@ -1084,7 +1118,7 @@ struct CodeVirtualization : public ModulePass {
                    }});
     }
 
-    // ponytail: Binary-op emitter. The opcode-specific IR is produced by an
+    // Binary-op emitter. The opcode-specific IR is produced by an
     // owned std::function (Fn) captured by value into the Emit closure. Fn
     // itself is a by-value parameter of addBinary, so the closure must own a
     // copy; capturing `Fn` by value (init-capture-free, named explicitly)
@@ -1138,7 +1172,7 @@ struct CodeVirtualization : public ModulePass {
               [](IRBuilder<> &B, Value *L, Value *R) {
                 return B.CreateXor(L, R);
               });
-    // ponytail: L1.5.1 widened integer binary ops. All carry a VmTy immediate
+    // L1.5.1 widened integer binary ops. All carry a VmTy immediate
     // and narrow the result. Signedness is encoded in the opcode choice and
     // the SignedOperands flag: AShr/SDiv/SRem sign-extend operands first;
     // the rest operate on the canonical zext bit pattern.
@@ -1220,7 +1254,7 @@ struct CodeVirtualization : public ModulePass {
     addCmp(OpCmpSlt, "cmpslt", CmpInst::ICMP_SLT, /*Signed=*/true);
     addCmp(OpCmpSge, "cmpsge", CmpInst::ICMP_SGE, /*Signed=*/true);
     addCmp(OpCmpSle, "cmpsle", CmpInst::ICMP_SLE, /*Signed=*/true);
-    // ponytail: unsigned compares. Operands stay canonical zext; unsigned
+    // unsigned compares. Operands stay canonical zext; unsigned
     // ICmp is width-agnostic, no immediate, no sign-extend.
     addCmp(OpCmpUgt, "cmpugt", CmpInst::ICMP_UGT, /*Signed=*/false);
     addCmp(OpCmpUlt, "cmpult", CmpInst::ICMP_ULT, /*Signed=*/false);
@@ -1271,7 +1305,7 @@ struct CodeVirtualization : public ModulePass {
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
     Type *Ptr = PointerType::getUnqual(Ctx);
-    // ponytail: signature is i64(i64* bc, i64 bcLen, i64* args). bcLen is the
+    // signature is i64(i64* bc, i64 bcLen, i64* args). bcLen is the
     // bytecode word count; the dispatch loop checks PC < bcLen before each
     // fetch so a corrupted PC (relevant once L2 encrypts the bytecode) faults
     // to the Bad block instead of reading out of bounds.
@@ -1294,11 +1328,11 @@ struct CodeVirtualization : public ModulePass {
     IRBuilder<> B(Entry);
     auto *Stack = B.CreateAlloca(I64, ConstantInt::get(I64, 64), "stack");
     auto *Locals = B.CreateAlloca(I64, ConstantInt::get(I64, 64), "locals");
-    // ponytail: VM-local frame (L1.5.1 middle way). AllocaInst reserves runs
+    // VM-local frame (L1.5.1 middle way). AllocaInst reserves runs
     // of consecutive slots here; LoadPtr/StorePtr index into it via the
     // frame-pointer values pushed by emitValue.
     auto *Frame = B.CreateAlloca(I64, ConstantInt::get(I64, 64), "frame");
-    // ponytail: OpCall argument marshaling buffer (L1.5.1). Up to 8 integer
+    // OpCall argument marshaling buffer (L1.5.1). Up to 8 integer
     // args per call (isVMCompatibleCall gates on arg_size() <= 8).
     auto *CallArgs = B.CreateAlloca(I64, ConstantInt::get(I64, 8), "callargs");
     auto *PC = B.CreateAlloca(I64, nullptr, "pc");
@@ -1309,7 +1343,7 @@ struct CodeVirtualization : public ModulePass {
 
     B.SetInsertPoint(Dispatch);
     Value *OpPC = B.CreateLoad(I64, PC);
-    // ponytail: PC bounds check (L1.5.4). If PC has run past the bytecode,
+    // PC bounds check (L1.5.4). If PC has run past the bytecode,
     // fault to Bad rather than reading out of bounds. Matters once L2
     // encrypts the bytecode and a corrupted PC could otherwise escape.
     Value *InBounds = B.CreateICmpSLT(OpPC, BCLen);
@@ -1320,7 +1354,7 @@ struct CodeVirtualization : public ModulePass {
     Value *Op = B.CreateLoad(I64, B.CreateGEP(I64, BC, OpPC));
     B.CreateStore(B.CreateAdd(OpPC, ConstantInt::get(I64, 1)), PC);
 
-    // ponytail: Build handler table, then emit one switch case per entry.
+    // Build handler table, then emit one switch case per entry.
     // The table is the source of truth; the switch is generated from it.
     InterpCtx IC{I64, F,     &Ctx, BC,     PC,     SP,
                 Stack, Locals, Frame, CallArgs, CalleeTable, Args, Dispatch};
@@ -1371,7 +1405,7 @@ struct CodeVirtualization : public ModulePass {
       B.CreateStore(B.CreateSExtOrTrunc(&A, I64), ArgPtr);
     }
     Value *ArgsPtr = B.CreateGEP(ArgsArrayTy, Args, {Zero, Zero});
-    // ponytail: pass the bytecode word count as the bcLen argument so the
+    // pass the bytecode word count as the bcLen argument so the
     // interpreter can bound-check PC (L1.5.4).
     Value *BCLen = ConstantInt::get(I64, Words.size());
     Value *Result = B.CreateCall(Interp, {BCPtr, BCLen, ArgsPtr});
@@ -1379,7 +1413,7 @@ struct CodeVirtualization : public ModulePass {
     return true;
   }
 
-  // ponytail: Materialize the per-module direct-callee table as a global
+  // Materialize the per-module direct-callee table as a global
   // i64 array of call-thunk function pointers (ptrtoint). Each direct
   // callee gets a thunk i64(i64* %args) that loads typed args, calls the
   // real callee, and returns the i64 result (0 for void). This abstracts
@@ -1457,7 +1491,7 @@ struct CodeVirtualization : public ModulePass {
   }
 
   bool runOnModule(Module &M) override {
-    // ponytail: reset per-module state -- ModulePass instances can be reused
+    // reset per-module state -- ModulePass instances can be reused
     // across modules by the legacy pass manager.
     CalleeIndex.clear();
     CalleeOrder.clear();
@@ -1473,15 +1507,33 @@ struct CodeVirtualization : public ModulePass {
       Targets.push_back(&F);
     }
 
+    // L2 selection diagnostics: emit one remark per +vmp target so users can
+    // see which functions virtualized and why skipped functions were rejected.
+    unsigned Virtualized = 0;
+    unsigned Skipped = 0;
+
     // Phase 1: encode every target. This populates CalleeOrder with the
     // direct callees referenced across all virtualized functions.
     SmallVector<std::pair<Function *, BytecodeProgram>, 8> Encoded;
     for (Function *F : Targets) {
-      if (hasUnsupportedIR(*F))
+      OptimizationRemarkEmitter ORE(F);
+      if (hasUnsupportedIR(*F)) {
+        OptimizationRemarkMissed R(DEBUG_TYPE, "UnsupportedIR", F);
+        R << "skipped: unsupported IR (PHI/call/EH/memory pattern outside "
+             "the L1.5 ISA)";
+        ORE.emit(R);
+        ++Skipped;
         continue;
+      }
       BytecodeProgram P;
-      if (!buildBytecode(*F, P))
+      if (!buildBytecode(*F, P)) {
+        OptimizationRemarkMissed R(DEBUG_TYPE, "EncodeFailed", F);
+        R << "skipped: bytecode encoding failed (frame overflow, stack "
+             "depth, or unsupported operand pattern)";
+        ORE.emit(R);
+        ++Skipped;
         continue;
+      }
       Encoded.emplace_back(F, std::move(P));
     }
 
@@ -1490,8 +1542,19 @@ struct CodeVirtualization : public ModulePass {
 
     // Phase 3: build the interpreter (uses CalleeTable) and replace bodies.
     bool Changed = false;
-    for (auto &[F, P] : Encoded)
+    for (auto &[F, P] : Encoded) {
       Changed |= replaceWithVM(*F, P);
+      OptimizationRemarkEmitter ORE(F);
+      OptimizationRemark R(DEBUG_TYPE, "Virtualized", F);
+      R << "virtualized ("
+        << ore::NV("Words", (unsigned)P.Words.size())
+        << " bytecode words)";
+      ORE.emit(R);
+      ++Virtualized;
+    }
+
+    LLVM_DEBUG(dbgs() << "taokari-vmp: " << Virtualized << " virtualized, "
+                      << Skipped << " skipped\n");
     return Changed;
   }
 };

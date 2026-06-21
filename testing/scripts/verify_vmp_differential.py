@@ -54,6 +54,14 @@ INPUTS: list[tuple[int, int]] = [
     (-2147483648, 1),   # INT_MIN + 1
     (22, 19),
     (2, 4),
+    # Shift / div / rem exercise cases: b as shift amount (masked to 0..7)
+    # and as divisor. (100, 7) hits non-power-of-two div/rem; (-100, 7)
+    # hits signed div/rem sign behavior.
+    (256, 3),
+    (-256, 4),
+    (100, 7),
+    (-100, 7),
+    (1073741824, 2),    # 2^30 << 2 overflows i32 intermediate -> wrap
 ]
 
 
