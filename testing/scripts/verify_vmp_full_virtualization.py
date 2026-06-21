@@ -6,11 +6,13 @@ import re
 import subprocess
 import sys
 import tempfile
+import struct
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
+STRIP = ROOT / "build" / "taokari-local" / "bin" / "llvm-strip.exe"
 OUT = ROOT / "build" / "vmp-validation"
 VSDEVCMD = Path(
     r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
@@ -105,6 +107,63 @@ def run(cmd: list[str], use_vs_env: bool = False) -> subprocess.CompletedProcess
     return subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True)
 
 
+def pe_offsets(data: bytearray) -> tuple[int, int, list[tuple[int, int, int]]]:
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    if data[pe:pe + 4] != b"PE\0\0":
+        raise SystemExit("not a PE image")
+    sections = struct.unpack_from("<H", data, pe + 6)[0]
+    opt_size = struct.unpack_from("<H", data, pe + 20)[0]
+    opt = pe + 24
+    magic = struct.unpack_from("<H", data, opt)[0]
+    data_dirs = opt + (112 if magic == 0x20B else 96)
+    sh = opt + opt_size
+    ranges: list[tuple[int, int, int]] = []
+    for i in range(sections):
+        base = sh + i * 40
+        virtual_size, rva, raw_size, raw_ptr = struct.unpack_from("<IIII", data, base + 8)
+        ranges.append((rva, max(virtual_size, raw_size), raw_ptr))
+    return data_dirs + 6 * 8, data_dirs, ranges
+
+
+def rva_to_offset(rva: int, ranges: list[tuple[int, int, int]]) -> int | None:
+    for start, size, raw in ranges:
+        if start <= rva < start + size:
+            return raw + (rva - start)
+    return None
+
+
+def strip_pe_debug_directory(path: Path) -> None:
+    data = bytearray(path.read_bytes())
+    debug_dir, _, ranges = pe_offsets(data)
+    debug_rva, debug_size = struct.unpack_from("<II", data, debug_dir)
+    if debug_rva and debug_size:
+        off = rva_to_offset(debug_rva, ranges)
+        if off is not None:
+            for entry in range(off, off + debug_size, 28):
+                if entry + 28 > len(data):
+                    break
+                size = struct.unpack_from("<I", data, entry + 16)[0]
+                ptr = struct.unpack_from("<I", data, entry + 24)[0]
+                if ptr and size:
+                    for pos in range(ptr, min(ptr + size, len(data))):
+                        data[pos] = 0
+            for pos in range(off, min(off + debug_size, len(data))):
+                data[pos] = 0
+        struct.pack_into("<II", data, debug_dir, 0, 0)
+        path.write_bytes(data)
+
+
+def require_no_pe_debug_directory(path: Path) -> None:
+    data = bytearray(path.read_bytes())
+    debug_dir, _, _ = pe_offsets(data)
+    debug_rva, debug_size = struct.unpack_from("<II", data, debug_dir)
+    if debug_rva or debug_size:
+        raise SystemExit(
+            f"PE debug directory still present in {path}: "
+            f"rva=0x{debug_rva:x} size=0x{debug_size:x}"
+        )
+
+
 def compile_output(
     src: Path, out: Path, max_protection: bool, *, obj: bool = False
 ) -> subprocess.CompletedProcess[str]:
@@ -178,12 +237,18 @@ def main() -> int:
     if max_build.returncode:
         sys.stderr.write(max_build.stdout + max_build.stderr)
         return 1
+    strip_run = run([str(STRIP), "--strip-all", str(protected)])
+    if strip_run.returncode:
+        sys.stderr.write(strip_run.stdout + strip_run.stderr)
+        return 1
+    strip_pe_debug_directory(protected)
     obj_build = compile_output(src, protected_obj, max_protection=True, obj=True)
     if obj_build.returncode:
         sys.stderr.write(obj_build.stdout + obj_build.stderr)
         return 1
     require_max_bytes(protected)
     require_max_bytes(protected_obj)
+    require_no_pe_debug_directory(protected)
     require_metadata_clean(protected)
 
     native_run = run([str(native)])
