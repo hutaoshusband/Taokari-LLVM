@@ -73,8 +73,7 @@ enum Opcode : int64_t {
   // L1.5.1 VM-local memory (middle way). Frame pointers are static
   // i64 indices into a per-interpreter Frame array; alloca/GEP resolve to
   // compile-time PushConst of the frame index. LoadPtr/StorePtr carry a VmTy
-  // for width narrowing. External pointer args/globals are NOT supported --
-  // they stay rejected and defer to the L2 full-pointer step.
+  // for width narrowing.
   OpLoadPtr = 32,
   OpStorePtr = 33,
   // L1.5.1 direct calls. OpCall fetches <calleeIdx> <nargs>
@@ -84,6 +83,10 @@ enum Opcode : int64_t {
   // only; pointer/float/vararg callees reject the whole function. Indirect/
   // virtual calls stay rejected.
   OpCall = 34,
+  // External pointer argument load/store. Pointers are carried as i64
+  // addresses; memory is accessed bytewise at the encoded integer width.
+  OpLoadMem = 35,
+  OpStoreMem = 36,
 };
 
 // How many operand-stack pops and bytecode immediates a handler
@@ -188,6 +191,10 @@ struct CodeVirtualization : public ModulePass {
     return Ty->isIntegerTy() && Ty->getIntegerBitWidth() <= 64;
   }
 
+  bool isSupportedArg(Type *Ty) const {
+    return isSupportedInt(Ty) || Ty->isPointerTy();
+  }
+
   bool isSkippable(const Instruction &I) const {
     return isa<DbgInfoIntrinsic>(I) || isa<AssumeInst>(I);
   }
@@ -224,7 +231,7 @@ struct CodeVirtualization : public ModulePass {
     if (F.arg_size() > 8)
       return true;
     for (Argument &A : F.args())
-      if (!isSupportedInt(A.getType()))
+      if (!isSupportedArg(A.getType()))
         return true;
     return false;
   }
@@ -364,19 +371,24 @@ struct CodeVirtualization : public ModulePass {
   // emit its index. In both cases a packed VmTy immediate follows so the
   // interpreter narrows/promotes the right way before any consumer sees it.
   // VM-local pointers (alloca-derived) resolve to a PushConst of the frame
-  // slot index via resolveFramePtr; non-VM-local pointers fail here, which
-  // buildBytecode turns into a skip-virtualization.
+  // slot index via resolveFramePtr. Pointer args use their locals slot as a
+  // raw host address for OpLoadMem/OpStoreMem.
   bool emitValue(BytecodeProgram &P, DenseMap<const Value *, unsigned> &Slots,
                  DenseMap<const AllocaInst *, unsigned> &AllocaBase,
                  unsigned &NextFrameSlot, Value *V) {
     // VM-local pointer: alloca or constant-offset GEP of an alloca.
     if (V->getType()->isPointerTy()) {
       int64_t FrameIdx = 0;
-      if (!resolveFramePtr(V, AllocaBase, NextFrameSlot, FrameIdx))
-        return false;
-      P.Words.push_back(OpPushConst);
-      P.Words.push_back(FrameIdx);
-      // Frame pointers are width-agnostic unsigned indices.
+      if (resolveFramePtr(V, AllocaBase, NextFrameSlot, FrameIdx)) {
+        P.Words.push_back(OpPushConst);
+        P.Words.push_back(FrameIdx);
+      } else {
+        auto It = Slots.find(V);
+        if (It == Slots.end())
+          return false;
+        P.Words.push_back(OpLoadSlot);
+        P.Words.push_back(It->second);
+      }
       P.Words.push_back(packVmTy(VmTy{64, false}));
       return true;
     }
@@ -710,9 +722,13 @@ struct CodeVirtualization : public ModulePass {
         if (auto *LD = dyn_cast<LoadInst>(&I)) {
           if (!isSupportedInt(LD->getType()))
             return false;
+          int64_t FrameIdx = 0;
+          bool IsFramePtr =
+              resolveFramePtr(LD->getPointerOperand(), AllocaBase,
+                              NextFrameSlot, FrameIdx);
           if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, LD->getPointerOperand()))
             return false;
-          P.Words.push_back(OpLoadPtr);
+          P.Words.push_back(IsFramePtr ? OpLoadPtr : OpLoadMem);
           P.Words.push_back(packVmTy(vmTyFromType(LD->getType())));
           P.Words.push_back(OpStoreSlot);
           P.Words.push_back(slotFor(Slots, &I));
@@ -724,11 +740,15 @@ struct CodeVirtualization : public ModulePass {
         if (auto *ST = dyn_cast<StoreInst>(&I)) {
           if (!isSupportedInt(ST->getValueOperand()->getType()))
             return false;
+          int64_t FrameIdx = 0;
+          bool IsFramePtr =
+              resolveFramePtr(ST->getPointerOperand(), AllocaBase,
+                              NextFrameSlot, FrameIdx);
           if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, ST->getValueOperand()))
             return false;
           if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, ST->getPointerOperand()))
             return false;
-          P.Words.push_back(OpStorePtr);
+          P.Words.push_back(IsFramePtr ? OpStorePtr : OpStoreMem);
           P.Words.push_back(packVmTy(vmTyFromType(ST->getValueOperand()->getType())));
           continue;
         }
@@ -884,9 +904,11 @@ struct CodeVirtualization : public ModulePass {
     case OpSelect:
       return {3, 1, 0};
     case OpLoadPtr:
+    case OpLoadMem:
       // pops frame idx, fetches VmTy, pushes value
       return {1, 1, 1};
     case OpStorePtr:
+    case OpStoreMem:
       // pops frame idx, pops value, fetches VmTy
       return {2, 0, 1};
     case OpCall:
@@ -935,6 +957,8 @@ struct CodeVirtualization : public ModulePass {
     case OpURem:
     case OpLoadPtr:
     case OpStorePtr:
+    case OpLoadMem:
+    case OpStoreMem:
       Count = 1;
       return true;
     case OpCmpEq:
@@ -1045,6 +1069,7 @@ struct CodeVirtualization : public ModulePass {
     Value *OpcodeMask;
     BasicBlock *Dispatch;
     BasicBlock *Bad;
+    bool LittleEndian;
   };
 
   void branchIfFalse(IRBuilder<> &B, InterpCtx &C, Value *Ok) {
@@ -1137,6 +1162,71 @@ struct CodeVirtualization : public ModulePass {
     return B.CreateSub(B.CreateXor(Lo, SignBit), SignBit);
   }
 
+  Value *byteCountFor(IRBuilder<> &B, InterpCtx &C, Value *PackedTyImm) {
+    Value *Width = checkedWidth(B, C, PackedTyImm);
+    return B.CreateUDiv(B.CreateAdd(Width, ConstantInt::get(C.I64, 7)),
+                        ConstantInt::get(C.I64, 8));
+  }
+
+  Value *loadHostInt(IRBuilder<> &B, InterpCtx &C, Value *AddrInt,
+                     Value *PackedTyImm) {
+    Type *I8 = Type::getInt8Ty(*C.Ctx);
+    Value *Bytes = byteCountFor(B, C, PackedTyImm);
+    AllocaInst *Acc = B.CreateAlloca(C.I64, nullptr, "mem.acc");
+    AllocaInst *Idx = B.CreateAlloca(C.I64, nullptr, "mem.i");
+    B.CreateStore(ConstantInt::get(C.I64, 0), Acc);
+    B.CreateStore(ConstantInt::get(C.I64, 0), Idx);
+    Value *Base = B.CreateIntToPtr(AddrInt, PointerType::getUnqual(*C.Ctx));
+    BasicBlock *Hdr = BasicBlock::Create(*C.Ctx, "memload.hdr", C.F);
+    BasicBlock *Body = BasicBlock::Create(*C.Ctx, "memload.body", C.F);
+    BasicBlock *Done = BasicBlock::Create(*C.Ctx, "memload.done", C.F);
+    B.CreateBr(Hdr);
+    B.SetInsertPoint(Hdr);
+    Value *Cur = B.CreateLoad(C.I64, Idx);
+    B.CreateCondBr(B.CreateICmpULT(Cur, Bytes), Body, Done);
+    B.SetInsertPoint(Body);
+    Value *Byte = B.CreateZExt(B.CreateLoad(I8, B.CreateGEP(I8, Base, Cur)), C.I64);
+    Value *ByteNo = C.LittleEndian
+                        ? Cur
+                        : B.CreateSub(B.CreateSub(Bytes, ConstantInt::get(C.I64, 1)), Cur);
+    Value *Shift = B.CreateMul(ByteNo, ConstantInt::get(C.I64, 8));
+    B.CreateStore(B.CreateOr(B.CreateLoad(C.I64, Acc), B.CreateShl(Byte, Shift)),
+                  Acc);
+    B.CreateStore(B.CreateAdd(Cur, ConstantInt::get(C.I64, 1)), Idx);
+    B.CreateBr(Hdr);
+    B.SetInsertPoint(Done);
+    return narrowTo(B, C, B.CreateLoad(C.I64, Acc), PackedTyImm);
+  }
+
+  void storeHostInt(IRBuilder<> &B, InterpCtx &C, Value *AddrInt, Value *V,
+                    Value *PackedTyImm) {
+    Type *I8 = Type::getInt8Ty(*C.Ctx);
+    Value *Bytes = byteCountFor(B, C, PackedTyImm);
+    Value *Narrowed = narrowTo(B, C, V, PackedTyImm);
+    AllocaInst *Idx = B.CreateAlloca(C.I64, nullptr, "mem.i");
+    B.CreateStore(ConstantInt::get(C.I64, 0), Idx);
+    Value *Base = B.CreateIntToPtr(AddrInt, PointerType::getUnqual(*C.Ctx));
+    BasicBlock *Hdr = BasicBlock::Create(*C.Ctx, "memstore.hdr", C.F);
+    BasicBlock *Body = BasicBlock::Create(*C.Ctx, "memstore.body", C.F);
+    BasicBlock *Done = BasicBlock::Create(*C.Ctx, "memstore.done", C.F);
+    B.CreateBr(Hdr);
+    B.SetInsertPoint(Hdr);
+    Value *Cur = B.CreateLoad(C.I64, Idx);
+    B.CreateCondBr(B.CreateICmpULT(Cur, Bytes), Body, Done);
+    B.SetInsertPoint(Body);
+    Value *ByteNo = C.LittleEndian
+                        ? Cur
+                        : B.CreateSub(B.CreateSub(Bytes, ConstantInt::get(C.I64, 1)), Cur);
+    Value *Shift = B.CreateMul(ByteNo, ConstantInt::get(C.I64, 8));
+    Value *Byte =
+        B.CreateTrunc(B.CreateAnd(B.CreateLShr(Narrowed, Shift),
+                                  ConstantInt::get(C.I64, 0xFF)), I8);
+    B.CreateStore(Byte, B.CreateGEP(I8, Base, Cur));
+    B.CreateStore(B.CreateAdd(Cur, ConstantInt::get(C.I64, 1)), Idx);
+    B.CreateBr(Hdr);
+    B.SetInsertPoint(Done);
+  }
+
   // Build the handler table for the interpreter. Each entry owns
   // its case-block emission, including pop()/fetch() and the branch back to
   // Dispatch. OpRet intentionally does NOT branch back (it returns).
@@ -1218,6 +1308,21 @@ struct CodeVirtualization : public ModulePass {
                    Value *Narrowed = narrowTo(B, C, V, Ty);
                    B.CreateStore(Narrowed,
                                  B.CreateGEP(C.I64, C.Frame, FrameIdx));
+                   B.CreateBr(C.Dispatch);
+                 }});
+    H.push_back({OpLoadMem, "loadmem", shapeOf(OpLoadMem),
+                 [this, &C](IRBuilder<> &B) {
+                   Value *Addr = popStk(B, C);
+                   Value *Ty = fetchWord(B, C);
+                   pushStk(B, C, loadHostInt(B, C, Addr, Ty));
+                   B.CreateBr(C.Dispatch);
+                 }});
+    H.push_back({OpStoreMem, "storemem", shapeOf(OpStoreMem),
+                 [this, &C](IRBuilder<> &B) {
+                   Value *Addr = popStk(B, C);
+                   Value *V = popStk(B, C);
+                   Value *Ty = fetchWord(B, C);
+                   storeHostInt(B, C, Addr, V, Ty);
                    B.CreateBr(C.Dispatch);
                  }});
 
@@ -1592,7 +1697,7 @@ struct CodeVirtualization : public ModulePass {
                  SP,    Stack,   Locals, Frame,  CallArgs,
                  CalleeTable, static_cast<unsigned>(CalleeOrder.size()),
                  Args,  ArgLen,  TamperFlag, ExpectedTag, BytecodeKey, OpcodeMask,
-                 Dispatch, Bad};
+                 Dispatch, Bad, M.getDataLayout().isLittleEndian()};
     Value *MappedOp = fetchWord(B, IC);
     Value *Op = B.CreateXor(MappedOp, OpcodeMask);
     SmallVector<Handler, 24> Handlers = buildHandlerTable(IC);
@@ -1670,7 +1775,10 @@ struct CodeVirtualization : public ModulePass {
     for (Argument &A : F.args()) {
       Value *ArgPtr = B.CreateGEP(ArgsArrayTy, Args,
                                   {Zero, ConstantInt::get(I64, I++)});
-      B.CreateStore(B.CreateSExtOrTrunc(&A, I64), ArgPtr);
+      Value *ArgVal = A.getType()->isPointerTy()
+                          ? B.CreatePtrToInt(&A, I64)
+                          : B.CreateSExtOrTrunc(&A, I64);
+      B.CreateStore(ArgVal, ArgPtr);
     }
     Value *ArgsPtr = B.CreateGEP(ArgsArrayTy, Args, {Zero, Zero});
     auto *TamperFlag = B.CreateAlloca(I64, nullptr, "vmp.tamper");
