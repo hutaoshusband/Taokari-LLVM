@@ -58,19 +58,21 @@ def run(command: list[str], *, cwd: Path = ROOT, input: str | None = None) -> su
     return subprocess.run(command, cwd=cwd, text=True, capture_output=True, input=input)
 
 
-def compile_source(src: Path, out: Path, extra: list[str]) -> subprocess.CompletedProcess[str]:
+def compile_source(src: Path, out: Path, extra: list[str],
+                   *, level: int = 1) -> subprocess.CompletedProcess[str]:
     return run([
         str(CLANG), str(src), "-O2", "-fno-discard-value-names",
         "-mllvm", "-taokari",
         "-mllvm", "-taokari-mba",
-        "-mllvm", "-taokari-level-mba=1",
+        "-mllvm", f"-taokari-level-mba={level}",
         "-mllvm", "-taokari-mba-prob=100",
         *extra,
         "-o", str(out),
     ])
 
 
-def compile_ir_markers(src: Path, out: Path, extra: list[str]) -> subprocess.CompletedProcess[str]:
+def compile_ir_markers(src: Path, out: Path, extra: list[str],
+                       *, level: int = 1) -> subprocess.CompletedProcess[str]:
     # Inspect the raw MBA output at -O0. At -O2 InstCombine legitimately
     # simplifies some identities back (e.g. ~(~a|~b) -> a&b); that fold-back is
     # the Level-2 optimizer-resistance problem, not a Level-1 correctness bug.
@@ -78,7 +80,7 @@ def compile_ir_markers(src: Path, out: Path, extra: list[str]) -> subprocess.Com
         str(CLANG), str(src), "-O0", "-fno-discard-value-names",
         "-mllvm", "-taokari",
         "-mllvm", "-taokari-mba",
-        "-mllvm", "-taokari-level-mba=1",
+        "-mllvm", f"-taokari-level-mba={level}",
         "-mllvm", "-taokari-mba-prob=100",
         *extra,
         "-S", "-emit-llvm",
@@ -119,6 +121,24 @@ def main() -> int:
         missing = [needle for needle in required if needle not in text]
         if missing:
             print(f"missing MBA IR markers: {', '.join(missing)}", file=sys.stderr)
+            return 1
+
+        l2_ir = tmp / "mba_l2.ll"
+        compiled_l2_ir = compile_ir_markers(src, l2_ir, [], level=2)
+        if compiled_l2_ir.returncode:
+            print(compiled_l2_ir.stdout, end="")
+            print(compiled_l2_ir.stderr, end="", file=sys.stderr)
+            return compiled_l2_ir.returncode
+        l2_text = l2_ir.read_text(encoding="utf-8", errors="ignore")
+        l2_required = [
+            ".mba.noise",
+            ".mba.mix.",
+            ".vload",
+        ]
+        l2_missing = [needle for needle in l2_required if needle not in l2_text]
+        if l2_missing:
+            print(f"missing MBA L2 markers: {', '.join(l2_missing)}",
+                  file=sys.stderr)
             return 1
 
         # Annotation override path: per project README, annotate() overrides the
@@ -175,6 +195,19 @@ def main() -> int:
         if ran.returncode or ran.stdout != "mba:139862\n":
             print(f"bad run: rc={ran.returncode} stdout={ran.stdout!r}", file=sys.stderr)
             print(ran.stderr, end="", file=sys.stderr)
+            return 1
+
+        l2_exe = tmp / "mba_l2.exe"
+        compiled_l2_exe = compile_source(src, l2_exe, [], level=2)
+        if compiled_l2_exe.returncode:
+            print(compiled_l2_exe.stdout, end="")
+            print(compiled_l2_exe.stderr, end="", file=sys.stderr)
+            return compiled_l2_exe.returncode
+        l2_ran = run([str(l2_exe)])
+        if l2_ran.returncode or l2_ran.stdout != "mba:139862\n":
+            print(f"bad L2 run: rc={l2_ran.returncode} "
+                  f"stdout={l2_ran.stdout!r}", file=sys.stderr)
+            print(l2_ran.stderr, end="", file=sys.stderr)
             return 1
 
     print("mixed boolean arithmetic: ok")

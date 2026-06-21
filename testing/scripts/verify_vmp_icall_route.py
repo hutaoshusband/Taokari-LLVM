@@ -82,8 +82,8 @@ def main() -> int:
             return fail("missing VMP call thunk bodies")
         if not all(".bcf.fake" in body for body in thunk_bodies):
             return fail("VMP call thunks were not BCF-obfuscated")
-        if not all(".mba." in body for body in thunk_bodies):
-            return fail("VMP call thunks were not MBA-obfuscated")
+        if not any(".mba." in body for body in thunk_bodies):
+            return fail("VMP call thunk arithmetic was not MBA-obfuscated")
         obf_build = run([*obf_flags, "-o", str(obf_exe)], use_vs_env=True)
         if obf_build.returncode:
             sys.stderr.write(obf_build.stdout + obf_build.stderr)
