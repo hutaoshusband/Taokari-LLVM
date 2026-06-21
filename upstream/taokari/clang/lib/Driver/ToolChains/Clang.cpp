@@ -245,6 +245,13 @@ static bool hasTaokariCodeVirtualization(const ArgList &Args) {
   return false;
 }
 
+static bool hasMllvmOptionPrefix(const ArgList &Args, StringRef Prefix) {
+  for (const Arg *A : Args.filtered(options::OPT_mllvm))
+    if (StringRef(A->getValue(0)).starts_with(Prefix))
+      return true;
+  return false;
+}
+
 /// Add a CC1 option to specify the debug compilation directory.
 static const char *addDebugCompDirArg(const ArgList &Args,
                                       ArgStringList &CmdArgs,
@@ -7540,6 +7547,12 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (!TaokariCodeVirtualization ||
       Args.hasArg(options::OPT_fslp_vectorize, options::OPT_fno_slp_vectorize))
     handleVectorizeSLPArgs(Args, CmdArgs);
+  if (hasTaokariMaxProtection(Args) &&
+      !hasMllvmOptionPrefix(Args, "-taokari-vmp-padding=") &&
+      !hasMllvmOptionPrefix(Args, "--taokari-vmp-padding=")) {
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back("-taokari-vmp-padding=15");
+  }
 
   StringRef VecWidth = parseMPreferVectorWidthOption(D.getDiags(), Args);
   if (!VecWidth.empty())

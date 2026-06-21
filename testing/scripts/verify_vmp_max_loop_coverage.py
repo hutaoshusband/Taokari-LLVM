@@ -14,6 +14,10 @@ CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
 VSDEVCMD = Path(
     r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
 )
+HIST_RE = re.compile(
+    r"padding histogram \((\d+) opcodes, (\d+) top hits, "
+    r"(\d+) bp, (\d+) pad hits\)"
+)
 
 SOURCE = r"""
 #include <stdio.h>
@@ -70,6 +74,8 @@ def compile_exe(src: Path, out: Path, *, report: Path | None) -> subprocess.Comp
             "-mllvm", "-taokari-max",
             "-mllvm", "-taokari-vmp",
             "-mllvm", f"-taokari-vmp-compat-report={report}",
+            "-Rpass=taokari-vmp",
+            "-Rpass-missed=taokari-vmp",
         ])
     return run(cmd, use_vs_env=True)
 
@@ -80,6 +86,10 @@ def attr_text(ir: str, function: str) -> str:
         return ""
     attrs = dict(re.findall(r"attributes #(\d+) = \{([^}]*)\}", ir))
     return attrs.get(match.group(1), "")
+
+
+def padding_hits(remarks: str) -> int:
+    return sum(int(pads) for _ops, _top, _bp, pads in HIST_RE.findall(remarks))
 
 
 def main() -> int:
@@ -106,8 +116,22 @@ def main() -> int:
             print("vmp max loop coverage: FAIL (missing no-unroll cc1 arg)",
                   file=sys.stderr)
             return 1
+        if "-taokari-vmp-padding=15" not in probe_text:
+            print("vmp max loop coverage: FAIL (missing max padding cc1 arg)",
+                  file=sys.stderr)
+            return 1
         if "-vectorize-loops" in probe_text or "-vectorize-slp" in probe_text:
             print("vmp max loop coverage: FAIL (vectorizer still enabled)",
+                  file=sys.stderr)
+            return 1
+        override = run([
+            str(CLANG), "-###", "-O2", "-c", str(src), "-o", str(obj),
+            "-mllvm", "-taokari-max", "-mllvm", "-taokari-vmp",
+            "-mllvm", "-taokari-vmp-padding=0",
+        ], use_vs_env=True)
+        override_text = override.stdout + override.stderr
+        if override.returncode or "-taokari-vmp-padding=15" in override_text:
+            print("vmp max loop coverage: FAIL (padding override ignored)",
                   file=sys.stderr)
             return 1
 
@@ -116,6 +140,10 @@ def main() -> int:
         if native_build.returncode or protected_build.returncode:
             sys.stderr.write(native_build.stdout + native_build.stderr)
             sys.stderr.write(protected_build.stdout + protected_build.stderr)
+            return 1
+        if not padding_hits(protected_build.stdout + protected_build.stderr):
+            print("vmp max loop coverage: FAIL (max emitted no pad opcodes)",
+                  file=sys.stderr)
             return 1
 
         ir_build = run([
