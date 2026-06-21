@@ -5,6 +5,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -41,6 +42,11 @@ static cl::opt<uint32_t> VMPPaddingPercent(
     "taokari-vmp-padding", cl::init(0), cl::NotHidden,
     cl::desc("Percent of VMP instructions followed by a semantic no-op "
              "padding opcode, 0..100."));
+
+static cl::opt<uint32_t> VMPMaxBackEdges(
+    "taokari-vmp-max-back-edges", cl::init(UINT32_MAX), cl::NotHidden,
+    cl::desc("Maximum CFG back edges allowed before VMP refuses a function; "
+             "UINT32_MAX disables the limit."));
 
 // Opcode encoding is the stable on-the-wire bytecode value. These
 // integers must NOT change once bytecode is shipped; the interpreter handler
@@ -1248,6 +1254,24 @@ struct CodeVirtualization : public ModulePass {
     return checkStackDepth(P);
   }
 
+  unsigned countBackEdges(Function &F) const {
+    DenseMap<const BasicBlock *, unsigned> Order;
+    unsigned Index = 0;
+    for (BasicBlock &BB : F)
+      Order[&BB] = Index++;
+
+    unsigned BackEdges = 0;
+    for (BasicBlock &BB : F) {
+      unsigned From = Order[&BB];
+      for (BasicBlock *Succ : successors(&BB)) {
+        auto It = Order.find(Succ);
+        if (It != Order.end() && It->second <= From)
+          ++BackEdges;
+      }
+    }
+    return BackEdges;
+  }
+
   uint64_t bytecodeDomain(bool IsOpcodeWord) const {
     return IsOpcodeWord ? 0xA5A5A5A5D3C3B2A1ULL : 0x3C6EF372FE94F82AULL;
   }
@@ -2418,6 +2442,16 @@ struct CodeVirtualization : public ModulePass {
     SmallVector<std::pair<Function *, BytecodeProgram>, 8> Encoded;
     for (Function *F : Targets) {
       OptimizationRemarkEmitter ORE(F);
+      unsigned BackEdges = countBackEdges(*F);
+      if (BackEdges > VMPMaxBackEdges) {
+        OptimizationRemarkMissed R(DEBUG_TYPE, "HotLoopBudgetExceeded", F);
+        R << "skipped: hot-loop budget exceeded ("
+          << ore::NV("BackEdges", BackEdges) << " > "
+          << ore::NV("Limit", VMPMaxBackEdges.getValue()) << ")";
+        ORE.emit(R);
+        ++Skipped;
+        continue;
+      }
       if (hasUnsupportedIR(*F)) {
         OptimizationRemarkMissed R(DEBUG_TYPE, "UnsupportedIR", F);
         R << "skipped: unsupported IR (PHI/call/EH/memory pattern outside "

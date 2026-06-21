@@ -31,6 +31,31 @@ int main(void) {
 """
 
 
+def hot_loop_source() -> str:
+    return """
+#include <stdio.h>
+
+#define VMP __attribute__((noinline, annotate("+vmp")))
+
+volatile int loop_seed = 1;
+
+VMP int straight_case(int x) {
+  return (x * 3) + 1;
+}
+
+VMP int hot_loop_case(int x) {
+  int s = 0;
+  for (int i = 0; i < x; ++i) s += i ^ loop_seed;
+  return s;
+}
+
+int main(void) {
+  printf("hot:%d:%d\\n", straight_case(4), hot_loop_case(6));
+  return 0;
+}
+"""
+
+
 def main() -> int:
     if not CLANG.exists():
         print(f"missing clang: {CLANG}", file=sys.stderr)
@@ -84,6 +109,49 @@ def main() -> int:
             return 1
         if not result.stdout.startswith("guard:"):
             print(f"vmp guardrails: FAIL (bad stdout {result.stdout!r})",
+                  file=sys.stderr)
+            return 1
+
+        hot_src = tmpdir / "hot.c"
+        hot_ll = tmpdir / "hot.ll"
+        hot_exe = tmpdir / "hot.exe"
+        hot_src.write_text(hot_loop_source(), encoding="utf-8")
+        hot_flags = [
+            str(CLANG), str(hot_src), "-O2",
+            "-mllvm", "-taokari", "-mllvm", "-taokari-vmp",
+            "-mllvm", "-taokari-vmp-max-bytecode-words=0",
+            "-mllvm", "-taokari-vmp-max-back-edges=0",
+            "-Rpass=taokari-vmp", "-Rpass-missed=taokari-vmp",
+        ]
+        hot_ir = run([*hot_flags, "-S", "-emit-llvm", "-o", str(hot_ll)],
+                     use_vs_env=True)
+        if hot_ir.returncode:
+            sys.stderr.write(hot_ir.stdout + hot_ir.stderr)
+            return 1
+        hot_remarks = hot_ir.stdout + hot_ir.stderr
+        if "hot-loop budget exceeded" not in hot_remarks:
+            print("vmp guardrails: FAIL (hot loop not refused)",
+                  file=sys.stderr)
+            return 1
+        hot_text = hot_ll.read_text(encoding="utf-8", errors="ignore")
+        if "@__taokari_vmp_bc_straight_case" not in hot_text:
+            print("vmp guardrails: FAIL (straight bytecode missing)",
+                  file=sys.stderr)
+            return 1
+        if re.search(r"@__taokari_vmp_bc_hot_loop_case\\b", hot_text):
+            print("vmp guardrails: FAIL (hot loop bytecode emitted)",
+                  file=sys.stderr)
+            return 1
+        hot_build = run([*hot_flags, "-o", str(hot_exe)], use_vs_env=True)
+        if hot_build.returncode:
+            sys.stderr.write(hot_build.stdout + hot_build.stderr)
+            return 1
+        hot_result = run([str(hot_exe)])
+        if hot_result.returncode:
+            sys.stderr.write(hot_result.stdout + hot_result.stderr)
+            return 1
+        if not hot_result.stdout.startswith("hot:"):
+            print(f"vmp guardrails: FAIL (bad hot stdout {hot_result.stdout!r})",
                   file=sys.stderr)
             return 1
 
