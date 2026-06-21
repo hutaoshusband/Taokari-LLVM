@@ -693,7 +693,7 @@ Compatibility roadmap:
 
 * [x] Add `void` protected-function support
 * [x] Add raw `switch` lowering
-* [ ] Add `memcpy` / `memset` / `memmove` intrinsic support
+* [x] Add `memcpy` / `memset` / `memmove` intrinsic support
 * [ ] Add multi-index and struct-field GEP support
 * [ ] Add pointer args and pointer returns in VM direct calls
 * [ ] Add indirect/function-pointer call support or split-around fallback

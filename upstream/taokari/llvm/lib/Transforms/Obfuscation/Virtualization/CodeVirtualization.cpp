@@ -117,6 +117,9 @@ enum Opcode : int64_t {
   OpPad = 39,
   OpPad2 = 40,
   OpPad3 = 41,
+  OpMemCpy = 42,
+  OpMemSet = 43,
+  OpMemMove = 44,
   // Dead anti-analysis handlers. They are emitted into the interpreter
   // dispatcher but never encoded into valid opcode maps.
   OpFakeArith = 48,
@@ -554,6 +557,15 @@ struct CodeVirtualization : public ModulePass {
     return true;
   }
 
+  bool isHostPointer(Value *V,
+                     DenseMap<const AllocaInst *, unsigned> &AllocaBase,
+                     unsigned &NextFrameSlot, const DataLayout &DL) const {
+    int64_t FrameIdx = 0;
+    return V->getType()->isPointerTy() &&
+           !resolveFramePtr(V, AllocaBase, NextFrameSlot, FrameIdx) &&
+           isSupportedPointer(V->getType(), DL);
+  }
+
   // Build-time operand-stack depth check (L1.5.4). Walks the
   // bytecode simulating the max operand-stack depth using HandlerStackShape.
   // Fails (returns false) if the depth would exceed the fixed 64-slot Stack
@@ -891,6 +903,39 @@ struct CodeVirtualization : public ModulePass {
         // direct CallInst (L1.5.1). Indirect/virtual callees and
         // non-integer args/return reject the whole function.
         if (auto *CI = dyn_cast<CallInst>(&I)) {
+          if (auto *MS = dyn_cast<MemSetInst>(CI)) {
+            if (MS->isVolatile())
+              return false;
+            auto *Len = dyn_cast<ConstantInt>(MS->getLength());
+            if (!Len)
+              return false;
+            const DataLayout &DL = F.getParent()->getDataLayout();
+            if (!isHostPointer(MS->getDest(), AllocaBase, NextFrameSlot, DL))
+              return false;
+            if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, MS->getDest()) ||
+                !emitValue(P, Slots, AllocaBase, NextFrameSlot, MS->getValue()))
+              return false;
+            P.Words.push_back(OpMemSet);
+            P.Words.push_back(static_cast<int64_t>(Len->getZExtValue()));
+            continue;
+          }
+          if (auto *MT = dyn_cast<MemTransferInst>(CI)) {
+            if (MT->isVolatile())
+              return false;
+            auto *Len = dyn_cast<ConstantInt>(MT->getLength());
+            if (!Len)
+              return false;
+            const DataLayout &DL = F.getParent()->getDataLayout();
+            if (!isHostPointer(MT->getDest(), AllocaBase, NextFrameSlot, DL) ||
+                !isHostPointer(MT->getSource(), AllocaBase, NextFrameSlot, DL))
+              return false;
+            if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, MT->getDest()) ||
+                !emitValue(P, Slots, AllocaBase, NextFrameSlot, MT->getSource()))
+              return false;
+            P.Words.push_back(isa<MemMoveInst>(MT) ? OpMemMove : OpMemCpy);
+            P.Words.push_back(static_cast<int64_t>(Len->getZExtValue()));
+            continue;
+          }
           if (!isVMCompatibleCall(*CI))
             return false;
           auto *Callee = cast<Function>(CI->getCalledOperand());
@@ -1086,6 +1131,11 @@ struct CodeVirtualization : public ModulePass {
     case OpPad2:
     case OpPad3:
       return {0, 0, 1};
+    case OpMemCpy:
+    case OpMemMove:
+      return {2, 0, 1};
+    case OpMemSet:
+      return {2, 0, 1};
     case OpCall:
       // pops NArgs values (runtime), fetches calleeIdx + nargs + VmTy, pushes
       // 1 result. Pops/Pushes are conservative (actual pop count is data).
@@ -1143,6 +1193,9 @@ struct CodeVirtualization : public ModulePass {
     case OpPad:
     case OpPad2:
     case OpPad3:
+    case OpMemCpy:
+    case OpMemSet:
+    case OpMemMove:
       Count = 1;
       return true;
     case OpCmpEq:
@@ -2155,6 +2208,38 @@ struct CodeVirtualization : public ModulePass {
     addFakeHandler(OpFakeArith, "fakearith", 0x9E3779B97F4A7C15ULL);
     addFakeHandler(OpFakeMem, "fakemem", 0xD1342543DE82EF95ULL);
     addFakeHandler(OpFakeCall, "fakecall", 0xA0761D6478BD642FULL);
+
+    H.push_back({OpMemCpy, "memcpy", shapeOf(OpMemCpy),
+                 [this, &C](IRBuilder<> &B) {
+                   Value *Len = fetchWord(B, C);
+                   Value *Src = B.CreateIntToPtr(popStk(B, C),
+                                                 PointerType::getUnqual(*C.Ctx));
+                   Value *Dst = B.CreateIntToPtr(popStk(B, C),
+                                                 PointerType::getUnqual(*C.Ctx));
+                   B.CreateMemCpy(Dst, MaybeAlign(1), Src, MaybeAlign(1),
+                                  Len);
+                   B.CreateBr(C.Dispatch);
+                 }});
+    H.push_back({OpMemSet, "memset", shapeOf(OpMemSet),
+                 [this, &C](IRBuilder<> &B) {
+                   Value *Len = fetchWord(B, C);
+                   Type *I8 = Type::getInt8Ty(*C.Ctx);
+                   Value *Val = B.CreateTrunc(popStk(B, C), I8);
+                   Value *Dst = B.CreateIntToPtr(popStk(B, C),
+                                                 PointerType::getUnqual(*C.Ctx));
+                   B.CreateMemSet(Dst, Val, Len, MaybeAlign(1));
+                   B.CreateBr(C.Dispatch);
+                 }});
+    H.push_back({OpMemMove, "memmove", shapeOf(OpMemMove),
+                 [this, &C](IRBuilder<> &B) {
+                   Value *Len = fetchWord(B, C);
+                   Value *Src = B.CreateIntToPtr(popStk(B, C),
+                                                 PointerType::getUnqual(*C.Ctx));
+                   Value *Dst = B.CreateIntToPtr(popStk(B, C),
+                                                 PointerType::getUnqual(*C.Ctx));
+                   B.CreateMemMove(Dst, MaybeAlign(1), Src, MaybeAlign(1), Len);
+                   B.CreateBr(C.Dispatch);
+                 }});
 
     if (H.size() > 1) {
       std::shuffle(H.begin(), H.end(), RNG);
