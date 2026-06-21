@@ -214,14 +214,16 @@ struct CodeVirtualization : public ModulePass {
   static char ID;
   ObfuscationOptions *ArgsOptions;
   std::mt19937_64 RNG;
-  // Per-module direct-callee table (L1.5.1). Populated lazily by
-  // buildBytecode as it encounters direct CallInsts; resolved into a
-  // __taokari_vmp_callees global by finalizeCalleeTable() before the
+  // Per-module call-target table (L1.5.1). Populated lazily by
+  // buildBytecode as it encounters direct callees or indirect-call stubs;
+  // resolved into a __taokari_vmp_callees global by finalizeCalleeTable()
+  // before the
   // interpreter is built. OpCall indexes into it.
   DenseMap<Function *, unsigned> CalleeIndex;
   SmallVector<Function *, 8> CalleeOrder;
   GlobalVariable *CalleeTable = nullptr;
   uint64_t CalleeTableKey = 0;
+  unsigned IndirectCallStubCounter = 0;
 
   CodeVirtualization(ObfuscationOptions *ArgsOptions) : ModulePass(ID) {
     this->ArgsOptions = ArgsOptions;
@@ -254,28 +256,42 @@ struct CodeVirtualization : public ModulePass {
     return isa<DbgInfoIntrinsic>(I) || isa<AssumeInst>(I);
   }
 
-  // True if a CallInst is virtualizable by the L1.5.1 OpCall path.
-  // Requirements: direct callee (Function*, not a function pointer), non-
-  // variadic, int/pointer args, and int/pointer/void return.
-  // Indirect/virtual calls, vararg, float/vector/aggregate args reject the
-  // caller.
-  bool isVMCompatibleCall(const CallInst &CI) const {
-    const Function *Callee = dyn_cast<Function>(CI.getCalledOperand());
-    if (!Callee)
-      return false; // indirect call (function pointer)
-    if (Callee->isVarArg())
+  bool isVMCompatibleCallSignature(const CallInst &CI,
+                                   unsigned ExtraArgs) const {
+    FunctionType *FT = CI.getFunctionType();
+    if (FT->isVarArg())
       return false;
     const DataLayout &DL = CI.getFunction()->getParent()->getDataLayout();
-    if (!Callee->getReturnType()->isVoidTy() &&
-        !isSupportedArg(Callee->getReturnType(), DL))
+    if (!FT->getReturnType()->isVoidTy() &&
+        !isSupportedArg(FT->getReturnType(), DL))
       return false;
     for (const Use &Arg : CI.args()) {
       if (!isSupportedArg(Arg->getType(), DL))
         return false;
     }
-    if (CI.arg_size() > 8)
+    if (CI.arg_size() + ExtraArgs > 8)
       return false;
     return true;
+  }
+
+  // True if a direct CallInst is virtualizable by the L1.5.1 OpCall path.
+  // Requirements: direct callee (Function*, not a function pointer), non-
+  // variadic, int/pointer args, and int/pointer/void return.
+  // Float/vector/aggregate args reject the caller.
+  bool isVMCompatibleCall(const CallInst &CI) const {
+    const Function *Callee = dyn_cast<Function>(CI.getCalledOperand());
+    if (!Callee)
+      return false;
+    return isVMCompatibleCallSignature(CI, 0);
+  }
+
+  bool isVMCompatibleIndirectCall(const CallInst &CI) const {
+    if (isa<Function>(CI.getCalledOperand()))
+      return false;
+    if (!CI.getCalledOperand()->getType()->isPointerTy())
+      return false;
+    // The generated stub receives the runtime callee pointer as arg 0.
+    return isVMCompatibleCallSignature(CI, 1);
   }
 
   bool shouldSkip(Function &F) const {
@@ -301,14 +317,14 @@ struct CodeVirtualization : public ModulePass {
           continue;
         if (isa<PHINode>(I))
           continue;
-        // Level 1 VM is toy integer IR only. Add call/EH support
-        // after this compile/run path proves useful. PHI is supported
+        // Level 1 VM is toy integer IR only. Add EH support after this
+        // compile/run path proves useful. PHI is supported
         // (L1.5.1): lowered to slot copies in predecessors. VM-local alloca/
         // load/store/constant-GEP are supported (L1.5.1 middle way): the
         // pointer-origin check happens in buildBytecode (needs whole-function
         // alloca context, which this const scan lacks). Direct CallInst with
-        // integer-only signature is supported (L1.5.1): buildBytecode rejects
-        // if the callee is indirect or has non-integer args/return.
+        // int/pointer signature is supported (L1.5.1): buildBytecode rejects
+        // incompatible direct or indirect callees.
         if (isa<InvokeInst>(I) || isa<ResumeInst>(I) ||
             isa<LandingPadInst>(I) ||
             isa<AtomicRMWInst>(I) || isa<AtomicCmpXchgInst>(I) ||
@@ -406,8 +422,8 @@ struct CodeVirtualization : public ModulePass {
               return true;
           continue;
         }
-        // direct CallInst allowed (L1.5.1); indirect/non-integer
-        // signature still rejects via buildBytecode's isVMCompatibleCall.
+        // CallInst allowed (L1.5.1); incompatible signatures still reject via
+        // buildBytecode's call gates.
         if (isa<CallInst>(I))
           continue;
         if (isa<BranchInst>(I) || isa<ReturnInst>(I))
@@ -919,8 +935,8 @@ struct CodeVirtualization : public ModulePass {
         // via emitValue to a PushConst frame index (allocated in pre-scan).
         if (isa<AllocaInst>(I))
           continue;
-        // direct CallInst (L1.5.1). Indirect/virtual callees and
-        // non-integer args/return reject the whole function.
+        // CallInst (L1.5.1). Direct callees use the callee table; compatible
+        // indirect calls route through generated typed stubs.
         if (auto *CI = dyn_cast<CallInst>(&I)) {
           if (auto *MS = dyn_cast<MemSetInst>(CI)) {
             if (MS->isVolatile())
@@ -955,9 +971,15 @@ struct CodeVirtualization : public ModulePass {
             P.Words.push_back(static_cast<int64_t>(Len->getZExtValue()));
             continue;
           }
-          if (!isVMCompatibleCall(*CI))
+          Function *Callee = dyn_cast<Function>(CI->getCalledOperand());
+          bool Indirect = !Callee;
+          if (Indirect) {
+            if (!isVMCompatibleIndirectCall(*CI))
+              return false;
+            Callee = getOrCreateIndirectCallStub(*F.getParent(), *CI);
+          } else if (!isVMCompatibleCall(*CI)) {
             return false;
-          auto *Callee = cast<Function>(CI->getCalledOperand());
+          }
           // register the callee in the per-module callee table and
           // remember its index. The table is finalized before the interpreter
           // is built.
@@ -972,20 +994,24 @@ struct CodeVirtualization : public ModulePass {
           }
           // Push each argument onto the operand stack (reverse order so the
           // handler pops them in declaration order into the call-args buffer).
-          unsigned NArgs = CI->arg_size();
-          for (unsigned AI = NArgs; AI > 0; --AI) {
+          unsigned NArgs = CI->arg_size() + (Indirect ? 1 : 0);
+          for (unsigned AI = CI->arg_size(); AI > 0; --AI) {
             if (!emitValue(P, Slots, AllocaBase, NextFrameSlot,
                            CI->getArgOperand(AI - 1)))
               return false;
           }
+          if (Indirect &&
+              !emitValue(P, Slots, AllocaBase, NextFrameSlot,
+                         CI->getCalledOperand()))
+            return false;
           P.Words.push_back(OpCall);
           P.Words.push_back(static_cast<int64_t>(Idx));
-          P.Words.push_back(static_cast<int64_t>(CI->arg_size()));
+          P.Words.push_back(static_cast<int64_t>(NArgs));
           VmTy RetTy{64, true};
-          if (!Callee->getReturnType()->isVoidTy())
-            RetTy = vmTyFromStackType(Callee->getReturnType());
+          if (!CI->getType()->isVoidTy())
+            RetTy = vmTyFromStackType(CI->getType());
           P.Words.push_back(packVmTy(RetTy));
-          if (!Callee->getReturnType()->isVoidTy()) {
+          if (!CI->getType()->isVoidTy()) {
             P.Words.push_back(OpStoreSlot);
             P.Words.push_back(slotFor(Slots, &I));
           }
@@ -1917,7 +1943,7 @@ struct CodeVirtualization : public ModulePass {
     addPad(OpPad2, "pad2");
     addPad(OpPad3, "pad3");
 
-    // direct call (L1.5.1). Only registered when a callee table
+    // calls (L1.5.1). Only registered when a callee table
     // exists (i.e. at least one direct call was encoded). Modules with no
     // direct calls have CalleeTable == null and the OpCall handler would
     // dereference it during IR emission, so we skip registration entirely
@@ -2598,10 +2624,41 @@ struct CodeVirtualization : public ModulePass {
                        "thunk.ret.unxor");
   }
 
-  // Materialize the per-module direct-callee table as masked tokens.
-  // Each direct
-  // callee gets a thunk i64(i64* %args) that loads typed args, calls the
-  // real callee, and returns the i64 result (0 for void). This abstracts
+  Function *getOrCreateIndirectCallStub(Module &M, const CallInst &CI) {
+    LLVMContext &Ctx = M.getContext();
+    SmallVector<Type *, 8> Params;
+    Params.push_back(CI.getCalledOperand()->getType());
+    for (const Use &Arg : CI.args())
+      Params.push_back(Arg->getType());
+
+    auto *StubTy = FunctionType::get(CI.getType(), Params, false);
+    std::string StubName = "__taokari_vmp_indcall_stub_" +
+                           std::to_string(IndirectCallStubCounter++);
+    auto *Stub = Function::Create(StubTy, GlobalValue::InternalLinkage,
+                                  StubName, M);
+    Stub->addFnAttr(Attribute::NoUnwind);
+    Stub->addFnAttr(Attribute::NoInline);
+
+    BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Stub);
+    IRBuilder<> B(Entry);
+    auto ArgIt = Stub->arg_begin();
+    Value *Callee = &*ArgIt++;
+    SmallVector<Value *, 8> CallArgs;
+    for (; ArgIt != Stub->arg_end(); ++ArgIt)
+      CallArgs.push_back(&*ArgIt);
+
+    Value *Result = B.CreateCall(CI.getFunctionType(), Callee, CallArgs);
+    if (CI.getType()->isVoidTy())
+      B.CreateRetVoid();
+    else
+      B.CreateRet(Result);
+    return Stub;
+  }
+
+  // Materialize the per-module call-target table as masked tokens.
+  // Each callee or indirect-call stub gets a thunk i64(i64* %args) that
+  // loads typed args, calls the real callee, and returns the i64 result
+  // (0 for void). This abstracts
   // per-callee signatures away from the generic interpreter, which calls
   // every thunk uniformly as i64(i64*). The later IndirectCall pass can then
   // route these uniform thunk calls through its page table when enabled.
@@ -2693,6 +2750,7 @@ struct CodeVirtualization : public ModulePass {
     CalleeIndex.clear();
     CalleeOrder.clear();
     CalleeTable = nullptr;
+    IndirectCallStubCounter = 0;
 
     SmallVector<Function *, 8> Targets;
     for (Function &F : M) {
@@ -2710,7 +2768,7 @@ struct CodeVirtualization : public ModulePass {
     unsigned Skipped = 0;
 
     // Phase 1: encode every target. This populates CalleeOrder with the
-    // direct callees referenced across all virtualized functions.
+    // call targets referenced across all virtualized functions.
     SmallVector<std::pair<Function *, BytecodeProgram>, 8> Encoded;
     for (Function *F : Targets) {
       OptimizationRemarkEmitter ORE(F);
