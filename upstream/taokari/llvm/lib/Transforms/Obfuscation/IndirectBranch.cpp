@@ -1,5 +1,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Obfuscation/IndirectBranch.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
@@ -18,6 +20,100 @@
 using namespace llvm;
 
 namespace {
+bool hasFlatteningDispatcher(Function &F) {
+  bool HasLoop = false;
+  bool HasSwitch = false;
+  bool HasClone = false;
+  for (BasicBlock &BB : F) {
+    StringRef Name = BB.getName();
+    HasLoop |= Name.starts_with("loopEntry") || Name.starts_with("loopEnd");
+    HasSwitch |= Name.starts_with("switchDefault") ||
+                 Name.starts_with("switchFakeCaseGate") ||
+                 Name.starts_with("switchFakeSucc") ||
+                 Name.starts_with("switchTrap") ||
+                 Name.starts_with("switchDispatch") ||
+                 Name.starts_with("switchNestedDispatch") ||
+                 Name.starts_with("switchBucket");
+    HasClone |= Name.contains(".tao.clone");
+  }
+  return HasLoop && (HasSwitch || HasClone);
+}
+
+bool hasTrapLikeTerminator(Function &F) {
+  for (BasicBlock &BB : F) {
+    if (isa<UnreachableInst>(BB.getTerminator()))
+      return true;
+    for (Instruction &I : BB) {
+      auto *II = dyn_cast<IntrinsicInst>(&I);
+      if (!II)
+        continue;
+      switch (II->getIntrinsicID()) {
+      case Intrinsic::trap:
+      case Intrinsic::debugtrap:
+      case Intrinsic::ubsantrap:
+        return true;
+      default:
+        break;
+      }
+    }
+  }
+  return false;
+}
+
+bool isAssertLikeCall(const CallBase &CB) {
+  if (CB.isInlineAsm())
+    return true;
+  const Function *Callee = CB.getCalledFunction();
+  if (!Callee)
+    return false;
+  StringRef Name = Callee->getName();
+  return Name == "_wassert" || Name == "__assert" ||
+         Name == "__assert_fail" || Name == "_CrtDbgReport" ||
+         Name == "_CrtDbgReportW" || Name.contains("assert") ||
+         Name.contains("Assert");
+}
+
+bool isTrapLikeBlock(const BasicBlock *BB) {
+  if (isa<UnreachableInst>(BB->getTerminator()))
+    return true;
+  for (const Instruction &I : *BB) {
+    auto *II = dyn_cast<IntrinsicInst>(&I);
+    if (II) {
+      switch (II->getIntrinsicID()) {
+      case Intrinsic::trap:
+      case Intrinsic::debugtrap:
+      case Intrinsic::ubsantrap:
+        return true;
+      default:
+        break;
+      }
+    }
+    auto *CB = dyn_cast<CallBase>(&I);
+    if (CB && isAssertLikeCall(*CB))
+      return true;
+  }
+  return false;
+}
+
+bool hasAssertLikeCall(Function &F) {
+  for (BasicBlock &BB : F)
+    for (Instruction &I : BB)
+      if (auto *CB = dyn_cast<CallBase>(&I))
+        if (isAssertLikeCall(*CB))
+          return true;
+  return false;
+}
+
+bool hasNoObfMetadata(Function &F) {
+  if (F.getMetadata("noobf"))
+    return true;
+  for (BasicBlock &BB : F)
+    for (Instruction &I : BB)
+      if (I.hasMetadata("noobf"))
+        return true;
+  return false;
+}
+
 struct IndirectBranch : public FunctionPass {
   static char         ID;
   ObfuscationOptions *ArgsOptions;
@@ -61,6 +157,18 @@ struct IndirectBranch : public FunctionPass {
       if (!opt.isEnabled()) {
         continue;
       }
+      if (hasFlatteningDispatcher(F)) {
+        continue;
+      }
+      if (hasTrapLikeTerminator(F)) {
+        continue;
+      }
+      if (hasAssertLikeCall(F)) {
+        continue;
+      }
+      if (hasNoObfMetadata(F)) {
+        continue;
+      }
       SplitAllCriticalEdges(F, CriticalEdgeSplittingOptions(nullptr, nullptr));
 
       const uint64_t BBKey = RNG();
@@ -68,6 +176,10 @@ struct IndirectBranch : public FunctionPass {
       for (auto &BB : F) {
         if (auto *BI = dyn_cast<BranchInst>(BB.getTerminator())) {
           if (BI->isConditional()) {
+            if (isTrapLikeBlock(BI->getSuccessor(0)) ||
+                isTrapLikeBlock(BI->getSuccessor(1))) {
+              continue;
+            }
             FunctionBrs[&F].insert(BI);
             unsigned N = BI->getNumSuccessors();
             for (unsigned I = 0; I < N; I++) {
@@ -121,6 +233,18 @@ struct IndirectBranch : public FunctionPass {
     if (!opt.isEnabled()) {
       return false;
     }
+    if (hasFlatteningDispatcher(Fn)) {
+      return false;
+    }
+    if (hasTrapLikeTerminator(Fn)) {
+      return false;
+    }
+    if (hasAssertLikeCall(Fn)) {
+      return false;
+    }
+    if (hasNoObfMetadata(Fn)) {
+      return false;
+    }
 
     LLVMContext &Ctx = Fn.getContext();
     auto &       M = *Fn.getParent();
@@ -158,6 +282,7 @@ struct IndirectBranch : public FunctionPass {
       createPageTableArgs.IndexMap = &BBIndex;
       createPageTableArgs.ObjectKeys = &FuncKeys;
       createPageTableArgs.OutPageTable = &FuncBBPageTable;
+      createPageTableArgs.PtrEncKey = PtrEncKey;
 
       enhancedPageTable(createPageTableArgs, &FuncBBIndex);
     }
@@ -165,6 +290,10 @@ struct IndirectBranch : public FunctionPass {
     auto *IntTy = getPageTableIntTy(M);
     for (auto BI : FuncBrs) {
       if (BI && BI->isConditional()) {
+        if (isTrapLikeBlock(BI->getSuccessor(0)) ||
+            isTrapLikeBlock(BI->getSuccessor(1))) {
+          continue;
+        }
         IRBuilder<> IRB(BI);
 
         auto Cond = BI->getCondition();

@@ -194,6 +194,7 @@ struct IndirectCall : public FunctionPass {
       createPageTableArgs.IndexMap = &CalleeIndex;
       createPageTableArgs.ObjectKeys = &FuncKeys;
       createPageTableArgs.OutPageTable = &FuncCalleePageTable;
+      createPageTableArgs.PtrEncKey = PtrEncKey;
       if (opt.level() > 1)
         createPageTableArgs.FakeEntries =
             std::max<unsigned>(1, FuncCallees.size() / 2);

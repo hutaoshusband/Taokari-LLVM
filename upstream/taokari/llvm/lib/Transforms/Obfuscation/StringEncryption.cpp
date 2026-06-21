@@ -737,6 +737,7 @@ Function *StringEncryption::buildSharedDecryptFunction(
   Twine FName = IsUTF16 ? "goron_decrypt_string_i16" : "goron_decrypt_string_i8";
   Function *DecFunc =
       Function::Create(FuncTy, GlobalValue::PrivateLinkage, FName, M);
+  DecFunc->addMetadata("noobf", *MDNode::get(Ctx, {}));
   DecFunc->addFnAttr(Attribute::NoInline);
   DecFunc->addFnAttr(Attribute::OptimizeForSize);
 
@@ -1355,6 +1356,8 @@ bool StringEncryption::processConstantStringUse(Function *F) {
       }
     }
   }
+  if (Changed)
+    F->addMetadata("noobf", *MDNode::get(F->getContext(), {}));
   return Changed;
 }
 
