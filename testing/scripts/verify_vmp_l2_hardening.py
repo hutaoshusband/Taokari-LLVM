@@ -147,8 +147,8 @@ def check_ir(text: str) -> int:
     if len(rotated) < 2:
         return fail("per-basic-block bytecode rotation is not observable")
 
-    if text.count("indirectbr") < len(calls):
-        return fail("VM handler dispatch is not indirectbr-backed")
+    if text.count("indirectbr") < len(calls) * 2:
+        return fail("VM handler dispatch is not flattened through two indirectbr layers")
     if text.count("blockaddress(") < len(calls):
         return fail("VM handler dispatch does not use blockaddress targets")
     indirect_dests = [

@@ -2004,8 +2004,10 @@ struct CodeVirtualization : public ModulePass {
     auto *CallArgs = B.CreateAlloca(I64, ConstantInt::get(I64, 8), "callargs");
     auto *PC = B.CreateAlloca(I64, nullptr, "pc");
     auto *SP = B.CreateAlloca(I64, nullptr, "sp");
+    auto *HandlerState = B.CreateAlloca(I64, nullptr, "handler.state");
     B.CreateStore(ConstantInt::get(I64, 0), PC);
     B.CreateStore(ConstantInt::get(I64, 0), SP);
+    B.CreateStore(ConstantInt::get(I64, 0), HandlerState);
     auto *Tag = B.CreateAlloca(I64, nullptr, "tag");
     auto *TagI = B.CreateAlloca(I64, nullptr, "tag.i");
     B.CreateStore(ConstantInt::get(I64, 0xCBF29CE484222325ULL), Tag);
@@ -2071,22 +2073,50 @@ struct CodeVirtualization : public ModulePass {
     Value *Target = BlockAddress::get(F, Bad);
     SmallVector<BasicBlock *, 24> Dests;
     Dests.push_back(Bad);
-    SmallVector<std::pair<Handler *, BasicBlock *>, 24> HandlerBlocks;
+    BasicBlock *HandlerRoute = BasicBlock::Create(Ctx, "handler.route", F);
+    SmallVector<std::tuple<Handler *, BasicBlock *, BasicBlock *, uint64_t>, 24>
+        HandlerBlocks;
     for (Handler &H : Handlers) {
-      BasicBlock *CaseBB = BasicBlock::Create(Ctx, H.Name, F);
+      BasicBlock *CaseBB = BasicBlock::Create(Ctx, H.Name + ".entry", F);
+      BasicBlock *BodyBB = BasicBlock::Create(Ctx, H.Name + ".body", F);
       uint64_t EncOp = static_cast<uint64_t>(H.Op) ^ DispatchKey;
       Value *Hit = B.CreateICmpEQ(DispatchToken, ConstantInt::get(I64, EncOp));
       Target = B.CreateSelect(Hit, BlockAddress::get(F, CaseBB), Target,
                               "handler.target");
       Dests.push_back(CaseBB);
-      HandlerBlocks.push_back({&H, CaseBB});
+      uint64_t RouteToken =
+          (static_cast<uint64_t>(H.Op) * 0x9E3779B97F4A7C15ULL) ^
+          DispatchKey ^ 0xD1B54A32D192ED03ULL;
+      HandlerBlocks.push_back({&H, CaseBB, BodyBB, RouteToken});
     }
     auto *IBI = B.CreateIndirectBr(Target, Dests.size());
     for (BasicBlock *Dest : Dests)
       IBI->addDestination(Dest);
 
-    for (auto [H, CaseBB] : HandlerBlocks) {
+    for (auto [H, CaseBB, BodyBB, RouteToken] : HandlerBlocks) {
       B.SetInsertPoint(CaseBB);
+      B.CreateStore(ConstantInt::get(I64, RouteToken), HandlerState);
+      B.CreateBr(HandlerRoute);
+    }
+
+    B.SetInsertPoint(HandlerRoute);
+    Value *RouteState = B.CreateLoad(I64, HandlerState);
+    Value *BodyTarget = BlockAddress::get(F, Bad);
+    SmallVector<BasicBlock *, 24> BodyDests;
+    BodyDests.push_back(Bad);
+    for (auto [H, CaseBB, BodyBB, RouteToken] : HandlerBlocks) {
+      Value *Hit =
+          B.CreateICmpEQ(RouteState, ConstantInt::get(I64, RouteToken));
+      BodyTarget = B.CreateSelect(Hit, BlockAddress::get(F, BodyBB),
+                                  BodyTarget, "handler.body.target");
+      BodyDests.push_back(BodyBB);
+    }
+    auto *HandlerIBI = B.CreateIndirectBr(BodyTarget, BodyDests.size());
+    for (BasicBlock *Dest : BodyDests)
+      HandlerIBI->addDestination(Dest);
+
+    for (auto [H, CaseBB, BodyBB, RouteToken] : HandlerBlocks) {
+      B.SetInsertPoint(BodyBB);
       H->Emit(B);
     }
 
