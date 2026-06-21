@@ -864,21 +864,21 @@ The L1.5 cipher is XOR with a `key + PC * golden_ratio` keystream, and
 the key is a *plaintext literal* at the call site. Hex-Rays shows
 `BytecodeKey` directly. This phase kills that leakage.
 
-* [ ] Derive `BytecodeKey` at runtime from a seed + opaque computation
+* [x] Derive `BytecodeKey` at runtime from a seed + opaque computation
       (no plaintext key literal in IR; mix with a runtime nonce like the
       Constant Encryption L2 pass already does)
-* [ ] Replace XOR+golden-ratio stream cipher with a real PRF / split-key
+* [x] Replace XOR+golden-ratio stream cipher with a real PRF / split-key
       schedule (the golden-ratio LCG is a known, reversible pattern)
-* [ ] Encrypt immediates with a separate layer (today only opcode *words*
+* [x] Encrypt immediates with a separate layer (today only opcode *words*
       are masked via `OpcodeMask`; immediates ride the XOR stream and
       leak structure once the keystream is recovered)
-* [ ] Upgrade opcode mapping from single XOR mask to a per-opcode
+* [x] Upgrade opcode mapping from single XOR mask to a per-opcode
       permutation table (`OpcodeMask` is one mask for all opcodes; a
       per-opcode bijection defeats "find the mask, decrypt all" attacks)
-* [ ] Add per-basic-block key rotation (one key per function is one
+* [x] Add per-basic-block key rotation (one key per function is one
       breakpoint for the analyst; per-BB rotation forces re-derivation
       per block)
-* [ ] Add bytecode integrity tag (HMAC/CRC computed at build, checked at
+* [x] Add bytecode integrity tag (HMAC/CRC computed at build, checked at
       VM entry — patched bytecode is detected before it runs, feeds the
       Phase A tamper flag)
 
@@ -890,12 +890,12 @@ handler table, opcode layout and shuffle for *every* +vmp function in
 the module. This is the single biggest force-multiplier for an analyst
 and must close before L3 polymorphism is meaningful.
 
-* [ ] Add per-function interpreter clone (each +vmp fn gets its own
+* [x] Add per-function interpreter clone (each +vmp fn gets its own
       `__taokari_vmp_interp_<fn>` with its own handler table + shuffle)
-* [ ] Add indirect handler dispatch (replace the recognizable `switch`
+* [x] Add indirect handler dispatch (replace the recognizable `switch`
       with an encrypted function-pointer table indexed by the decrypted
       opcode — kills the clean switch Hex-Rays lifts for free)
-* [ ] Add handler flattening (flatten each handler's internal CFG so a
+* [x] Add handler flattening (flatten each handler's internal CFG so a
       single handler is not a one-block read)
 
 ### Phase E — Callee-table hardening
@@ -904,11 +904,11 @@ and must close before L3 polymorphism is meaningful.
 memory dump resolves every VM callee instantly, and the thunks call the
 real callee directly so the static call graph still resolves.
 
-* [ ] Encrypt callee-table entries (plaintext pointer dump currently
+* [x] Encrypt callee-table entries (plaintext pointer dump currently
       hands the analyst every VM callee)
-* [ ] Route thunks through the existing IndirectCall page table (reuse
+* [x] Route thunks through the existing IndirectCall page table (reuse
       Section 7 instead of inventing a parallel indirection)
-* [ ] Obfuscate thunks themselves (BCF + MBA on argument marshaling so
+* [x] Obfuscate thunks themselves (BCF + MBA on argument marshaling so
       the i64→typed-arg load pattern is not a fingerprint)
 
 ### Phase F — Anti-analysis basics
