@@ -641,7 +641,7 @@ Checks should be distributed, indirect, guarded and hard to remove cleanly.
 
 # 13. Code Virtualization
 
-Current status: missing.
+Current status: L1.5 complete; Level 2 started.
 This should be treated as advanced / expensive protection.
 
 ## Level 1 — Research Prototype
@@ -686,36 +686,36 @@ behavior change; harness covers the widened IR; benchmark closes the tier.
 
 ### 1.5.1 — Widen IR Coverage (unblocks "Virtualize selected functions")
 
-* [ ] Add integer binary: `Mul`, `And`, `Or`, `Shl`, `LShr`, `AShr`
-* [ ] Add integer div/rem: `SDiv`, `UDiv`, `SRem`, `URem`
-* [ ] Add unsigned compares: `UGT`, `ULT`, `UGE`, `ULE`
-* [ ] Handle `PHINode` (lower to slot copies in predecessors → unlocks loops)
-* [ ] Handle `AllocaInst` + `LoadInst`/`StoreInst` to **VM-local** stack
+* [x] Add integer binary: `Mul`, `And`, `Or`, `Shl`, `LShr`, `AShr`
+* [x] Add integer div/rem: `SDiv`, `UDiv`, `SRem`, `URem`
+* [x] Add unsigned compares: `UGT`, `ULT`, `UGE`, `ULE`
+* [x] Handle `PHINode` (lower to slot copies in predecessors → unlocks loops)
+* [x] Handle `AllocaInst` + `LoadInst`/`StoreInst` to **VM-local** stack
       (middle way — local arrays/scalars; no external pointer args yet)
-* [ ] Allow all **direct** `CallBase`: internal VMP'd calls + declared/external
+* [x] Allow all **direct** `CallBase`: internal VMP'd calls + declared/external
       callees trampoline out of the VM
-* [ ] Track per-operand width/signedness instead of blind i64 promotion
-* [ ] Audit `SExtOrTrunc` arg path for sign/width correctness under new ops
+* [x] Track per-operand width/signedness instead of blind i64 promotion
+* [x] Audit `SExtOrTrunc` arg path for sign/width correctness under new ops
 
 ### 1.5.2 — Refactor Handler Table (unblocks shuffling / opcode mapping / fake handlers)
 
-* [ ] Replace inline `switch` with handler descriptor table (name, arity, builder)
-* [ ] Make opcodes table indices, not magic numbers `1..17`
-* [ ] Add per-handler arity/validation
+* [x] Replace inline `switch` with handler descriptor table (name, arity, builder)
+* [x] Make opcodes table indices, not magic numbers `1..17`
+* [x] Add per-handler arity/validation
 
 ### 1.5.3 — Differential Correctness Harness (must precede any dispatch/encryption change)
 
-* [ ] Build case function per opcode (binary, cmp, select, shift, div/rem)
-* [ ] Add loop + nested branch + multi-return case functions
-* [ ] Run each case compiled native vs VMP over input grid, compare outputs
-* [ ] This is what catches the i64-promotion class of bug before L2
+* [x] Build case function per opcode (binary, cmp, select, shift, div/rem)
+* [x] Add loop + nested branch + multi-return case functions
+* [x] Run each case compiled native vs VMP over input grid, compare outputs
+* [x] This is what catches the i64-promotion class of bug before L2
 
 ### 1.5.4 — Baseline Benchmark + Safety Bounds
 
-* [ ] Measure interpreter overhead vs native (baseline for L2 benchmark)
-* [ ] Add build-time stack-depth check (current 64-slot stack silently overflows)
-* [ ] Add PC bounds check in interpreter (matters once L2 encrypts bytecode)
-* [ ] Add locals-slot count check (current 64 silent cap)
+* [x] Measure interpreter overhead vs native (baseline for L2 benchmark)
+* [x] Add build-time stack-depth check (current 64-slot stack silently overflows)
+* [x] Add PC bounds check in interpreter (matters once L2 encrypts bytecode)
+* [x] Add locals-slot count check (current 64 silent cap)
 
 **Definition of done for L1.5:**
 Each new opcode is differentially tested native vs VM. The dispatcher is
@@ -726,7 +726,7 @@ measurable.
 
 ## Level 2 — Practical VM
 
-* [ ] Virtualize selected functions
+* [x] Virtualize selected functions
 * [ ] **Add full real pointer support** (`LoadInst`/`StoreInst` on external
       pointer args + globals, aliasing, alignment) — promoted from 1.5
       middle-way; unblocks virtualizing real C/C++ pointer-heavy functions
