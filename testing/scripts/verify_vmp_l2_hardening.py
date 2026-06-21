@@ -21,7 +21,7 @@ OPMAP_RE = re.compile(
     r"@__taokari_vmp_opmap_(\w+) = .*?\[(\d+) x i64\] \[(.*?)\]",
 )
 PCMAP_RE = re.compile(
-    r"@__taokari_vmp_pcmap_(\w+) = .*?constant \[(\d+) x i8\] c\"(.*?)\"",
+    r"@__taokari_vmp_pcmap_(\w+) = .*?constant \[(\d+) x i8\] c\"((?:\\.|[^\"])*)\"",
     re.S,
 )
 CALLEE_TABLE_RE = re.compile(
@@ -54,6 +54,9 @@ def parse_ir_c_bytes(body: str) -> list[int]:
                 out.append(int(h, 16))
                 i += 3
                 continue
+            out.append(ord(body[i + 1]) & 0xFF)
+            i += 2
+            continue
         out.append(ord(body[i]) & 0xFF)
         i += 1
     return out

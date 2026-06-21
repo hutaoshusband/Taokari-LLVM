@@ -16,6 +16,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Alignment.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/RandomNumberGenerator.h"
 
@@ -30,6 +31,11 @@
 using namespace llvm;
 
 namespace {
+
+static cl::opt<uint32_t> VMPMaxBytecodeWords(
+    "taokari-vmp-max-bytecode-words", cl::init(4096), cl::NotHidden,
+    cl::desc("Maximum bytecode words per VMP function before virtualization "
+             "is refused; 0 disables the limit."));
 
 // Opcode encoding is the stable on-the-wire bytecode value. These
 // integers must NOT change once bytecode is shipped; the interpreter handler
@@ -2335,6 +2341,16 @@ struct CodeVirtualization : public ModulePass {
         OptimizationRemarkMissed R(DEBUG_TYPE, "EncodeFailed", F);
         R << "skipped: bytecode encoding failed (frame overflow, stack "
              "depth, or unsupported operand pattern)";
+        ORE.emit(R);
+        ++Skipped;
+        continue;
+      }
+      if (VMPMaxBytecodeWords &&
+          P.Words.size() > static_cast<size_t>(VMPMaxBytecodeWords)) {
+        OptimizationRemarkMissed R(DEBUG_TYPE, "BytecodeBudgetExceeded", F);
+        R << "skipped: bytecode size budget exceeded ("
+          << ore::NV("Words", (unsigned)P.Words.size()) << " > "
+          << ore::NV("Limit", VMPMaxBytecodeWords.getValue()) << ")";
         ORE.emit(R);
         ++Skipped;
         continue;
