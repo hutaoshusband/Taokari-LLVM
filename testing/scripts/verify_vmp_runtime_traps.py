@@ -95,7 +95,19 @@ CALL_RE = re.compile(
     r"ptr [^,]*@__taokari_vmp_bc_(\w+), i64 \d+, "
     r"ptr [^,]*@__taokari_vmp_pcmap_\w+, ptr [^,]+, i64 \d+, "
     r"ptr [^,]+, i64 \d+, "
-    r"ptr [^,]+, i64 (-?\d+), i64 (-?\d+), i64 (-?\d+)\)"
+    r"ptr [^,]+, i64 (-?\d+), i64 ([^,]+), i64 (-?\d+)\)"
+)
+KEY_SEED_RE = re.compile(r"@__taokari_vmp_key_seed_(\w+) = .*?global i64 (-?\d+)")
+KEY_DERIV_RE = re.compile(
+    r"(%\d+) = load volatile i64, ptr @__taokari_vmp_key_seed_(\w+), align 8\s+"
+    r"(%\d+) = xor i64 \1, (-?\d+)\s+"
+    r"(%\d+) = mul i64 \3, (-?\d+)\s+"
+    r"(%\d+) = add i64 \5, (-?\d+)\s+"
+    r"(%\d+) = shl i64 \7, (\d+)\s+"
+    r"(%\d+) = lshr i64 \7, (\d+)\s+"
+    r"(%\d+) = or i64 \9, \11\s+"
+    r"(%\d+) = xor i64 \13, (-?\d+)",
+    re.S,
 )
 I64_RE = re.compile(r"i64 (-?\d+)")
 
@@ -124,6 +136,30 @@ def to_u64(v: int) -> int:
 def to_i64(v: int) -> int:
     v &= MASK64
     return v - (1 << 64) if v & (1 << 63) else v
+
+
+def rotl64(v: int, rot: int) -> int:
+    rot &= 63
+    v &= MASK64
+    return to_u64((v << rot) | (v >> (64 - rot))) if rot else v
+
+
+def derived_keys(text: str) -> dict[str, int]:
+    seeds = {name: to_u64(int(value)) for name, value in KEY_SEED_RE.findall(text)}
+    keys: dict[str, int] = {}
+    for match in KEY_DERIV_RE.finditer(text):
+        name = match.group(2)
+        if name not in seeds:
+            continue
+        key_value = match.group(14)
+        xor_in = to_u64(int(match.group(4)))
+        mul = to_u64(int(match.group(6)))
+        add_in = to_u64(int(match.group(8)))
+        rot = int(match.group(10))
+        xor_out = to_u64(int(match.group(15)))
+        mixed = rotl64(to_u64(((seeds[name] ^ xor_in) * mul) + add_in), rot)
+        keys[key_value] = to_i64(mixed ^ xor_out)
+    return keys
 
 
 def encode(words: list[int], starts: list[int], key: int,
@@ -262,7 +298,13 @@ def main() -> int:
         if not calls:
             return fail("missing interpreter call")
         name, _tag_s, key_s, mask_s = calls[0]
-        key = int(key_s)
+        if re.fullmatch(r"-?\d+", key_s.strip()):
+            key = int(key_s)
+        else:
+            keys = derived_keys(text)
+            if key_s.strip() not in keys:
+                return fail("missing runtime bytecode key derivation")
+            key = keys[key_s.strip()]
         opmask = int(mask_s)
         globals_by_name = {m.group(1): int(m.group(2)) for m in BC_RE.finditer(text)}
         count = globals_by_name.get(name, 0)

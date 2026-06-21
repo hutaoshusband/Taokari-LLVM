@@ -1105,6 +1105,53 @@ struct CodeVirtualization : public ModulePass {
     return static_cast<int64_t>(static_cast<uint64_t>(Word) ^ Schedule);
   }
 
+  uint64_t rotl64(uint64_t V, unsigned Rot) const {
+    Rot &= 63;
+    return Rot ? ((V << Rot) | (V >> (64 - Rot))) : V;
+  }
+
+  struct KeyDerivation {
+    uint64_t Seed;
+    uint64_t XorIn;
+    uint64_t AddIn;
+    uint64_t XorOut;
+    unsigned Rot;
+  };
+
+  KeyDerivation makeKeyDerivation(uint64_t Key) {
+    constexpr uint64_t Mul = 0xD6E8FEB86659FD93ULL;
+    for (;;) {
+      KeyDerivation D{RNG(), RNG(), RNG(), 0,
+                      static_cast<unsigned>((RNG() % 63) + 1)};
+      uint64_t Mixed = rotl64(((D.Seed ^ D.XorIn) * Mul) + D.AddIn, D.Rot);
+      D.XorOut = Mixed ^ Key;
+      if (D.Seed != Key && D.XorIn != Key && D.AddIn != Key &&
+          D.XorOut != Key)
+        return D;
+    }
+  }
+
+  Value *buildRuntimeBytecodeKey(IRBuilder<> &B, Module &M, Function &F,
+                                 Type *I64, uint64_t Key) {
+    constexpr uint64_t Mul = 0xD6E8FEB86659FD93ULL;
+    KeyDerivation D = makeKeyDerivation(Key);
+    auto *SeedGlobal = new GlobalVariable(
+        M, I64, false, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64, D.Seed), "__taokari_vmp_key_seed_" + F.getName());
+    SeedGlobal->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+    SeedGlobal->setAlignment(Align(8));
+
+    auto *Seed = B.CreateLoad(I64, SeedGlobal, "vmp.key.seed");
+    Seed->setVolatile(true);
+    Value *Mixed = B.CreateXor(Seed, ConstantInt::get(I64, D.XorIn));
+    Mixed = B.CreateMul(Mixed, ConstantInt::get(I64, Mul));
+    Mixed = B.CreateAdd(Mixed, ConstantInt::get(I64, D.AddIn));
+    Value *RotL = B.CreateShl(Mixed, ConstantInt::get(I64, D.Rot));
+    Value *RotR = B.CreateLShr(Mixed, ConstantInt::get(I64, 64 - D.Rot));
+    return B.CreateXor(B.CreateOr(RotL, RotR),
+                       ConstantInt::get(I64, D.XorOut), "vmp.bytecode.key");
+  }
+
   uint64_t mixBytecodeTag(uint64_t Tag, uint64_t Word, uint64_t Index) const {
     Tag ^= Word + (Index * 0x9E3779B97F4A7C15ULL);
     return Tag * 0x100000001B3ULL;
@@ -1917,11 +1964,12 @@ struct CodeVirtualization : public ModulePass {
     // pass the bytecode word count as the bcLen argument so the
     // interpreter can bound-check PC (L1.5.4).
     Value *BCLen = ConstantInt::get(I64, Words.size());
+    Value *RuntimeKey = buildRuntimeBytecodeKey(B, M, F, I64, BytecodeKey);
     Value *Result = B.CreateCall(
         Interp, {BCPtr, BCLen, PCMapPtr, PtrTablePtr, PtrCount, ArgsPtr,
                  ConstantInt::get(I64, F.arg_size()), TamperFlag,
                  ConstantInt::get(I64, BytecodeTag),
-                 ConstantInt::get(I64, BytecodeKey),
+                 RuntimeKey,
                  ConstantInt::get(I64, OpcodeMask)});
     Value *Tampered = B.CreateLoad(I64, TamperFlag);
     B.CreateCondBr(B.CreateICmpNE(Tampered, Zero), Trap, Ok);
