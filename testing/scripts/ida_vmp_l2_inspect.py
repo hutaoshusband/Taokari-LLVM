@@ -25,6 +25,10 @@ def main() -> int:
     ida_auto.auto_wait()
 
     names = {name: ea for ea, name in idautils.Names()}
+    extra_symbols = os.environ.get("TAOKARI_IDA_SYMBOLS_JSON")
+    if extra_symbols:
+        for name, ea in json.loads(extra_symbols).items():
+            names[name] = int(ea)
     interp_ea = next(
         (ea for name, ea in names.items()
          if name.startswith("__taokari_vmp_interp_i64")),
