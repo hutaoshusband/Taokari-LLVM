@@ -2248,13 +2248,13 @@ struct CodeVirtualization : public ModulePass {
     return true;
   }
 
-  // Materialize the per-module direct-callee table as a global
-  // i64 array of call-thunk function pointers (ptrtoint). Each direct
+  // Materialize the per-module direct-callee table as masked tokens.
+  // Each direct
   // callee gets a thunk i64(i64* %args) that loads typed args, calls the
   // real callee, and returns the i64 result (0 for void). This abstracts
   // per-callee signatures away from the generic interpreter, which calls
-  // every thunk uniformly as i64(i64*). Built after all targets have been
-  // encoded and before the interpreter is constructed.
+  // every thunk uniformly as i64(i64*). The later IndirectCall pass can then
+  // route these uniform thunk calls through its page table when enabled.
   Function *getOrCreateCallThunk(Module &M, Function *Callee) {
     // One thunk per distinct callee. Name encodes the callee so the get-or-
     // create lookup works.
@@ -2270,6 +2270,7 @@ struct CodeVirtualization : public ModulePass {
     auto *Thunk = Function::Create(ThunkTy, GlobalValue::InternalLinkage,
                                    ThunkName, M);
     Thunk->addFnAttr(Attribute::NoUnwind);
+    Thunk->addFnAttr(Attribute::NoInline);
 
     BasicBlock *BB = BasicBlock::Create(Ctx, "entry", Thunk);
     IRBuilder<> B(BB);
