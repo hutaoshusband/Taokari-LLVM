@@ -697,7 +697,7 @@ Compatibility roadmap:
 * [x] Add multi-index and struct-field GEP support
 * [x] Add pointer args and pointer returns in VM direct calls
 * [x] Add indirect/function-pointer call support or split-around fallback
-* [ ] Add function splitting: VM-supported regions become bytecode,
+* [x] Add function splitting: VM-supported regions become bytecode,
       unsupported islands stay native
 * [ ] Add compatibility report: per function `virtualized`, `partially
       virtualized`, or `skipped`, with exact reason

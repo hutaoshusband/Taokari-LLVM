@@ -2,6 +2,7 @@
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
@@ -21,6 +22,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/RandomNumberGenerator.h"
+#include "llvm/Transforms/Utils/CodeExtractor.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -292,6 +294,119 @@ struct CodeVirtualization : public ModulePass {
       return false;
     // The generated stub receives the runtime callee pointer as arg 0.
     return isVMCompatibleCallSignature(CI, 1);
+  }
+
+  bool isSplitCandidateInstruction(Instruction &I) const {
+    if (isSkippable(I) || isa<PHINode>(I) || I.isTerminator())
+      return true;
+    if (auto *BO = dyn_cast<BinaryOperator>(&I)) {
+      if (!isSupportedInt(BO->getType()))
+        return false;
+      switch (BO->getOpcode()) {
+      case Instruction::Add:
+      case Instruction::Sub:
+      case Instruction::Xor:
+      case Instruction::Mul:
+      case Instruction::And:
+      case Instruction::Or:
+      case Instruction::Shl:
+      case Instruction::LShr:
+      case Instruction::AShr:
+      case Instruction::SDiv:
+      case Instruction::UDiv:
+      case Instruction::SRem:
+      case Instruction::URem:
+        return true;
+      default:
+        return false;
+      }
+    }
+    if (auto *Cmp = dyn_cast<ICmpInst>(&I)) {
+      if (!isSupportedInt(Cmp->getOperand(0)->getType()) ||
+          !isSupportedInt(Cmp->getOperand(1)->getType()))
+        return false;
+      switch (Cmp->getPredicate()) {
+      case CmpInst::ICMP_EQ:
+      case CmpInst::ICMP_NE:
+      case CmpInst::ICMP_SGT:
+      case CmpInst::ICMP_SLT:
+      case CmpInst::ICMP_SGE:
+      case CmpInst::ICMP_SLE:
+      case CmpInst::ICMP_UGT:
+      case CmpInst::ICMP_ULT:
+      case CmpInst::ICMP_UGE:
+      case CmpInst::ICMP_ULE:
+        return true;
+      default:
+        return false;
+      }
+    }
+    if (auto *Sel = dyn_cast<SelectInst>(&I))
+      return Sel->getCondition()->getType()->isIntegerTy(1) &&
+             isSupportedInt(Sel->getTrueValue()->getType()) &&
+             isSupportedInt(Sel->getFalseValue()->getType());
+    if (auto *Cast = dyn_cast<CastInst>(&I)) {
+      switch (Cast->getOpcode()) {
+      case Instruction::SExt:
+      case Instruction::ZExt:
+      case Instruction::Trunc:
+        return isSupportedInt(Cast->getSrcTy()) &&
+               isSupportedInt(Cast->getDestTy());
+      default:
+        return false;
+      }
+    }
+    if (auto *LD = dyn_cast<LoadInst>(&I))
+      return isSupportedInt(LD->getType());
+    if (auto *ST = dyn_cast<StoreInst>(&I))
+      return isSupportedInt(ST->getValueOperand()->getType());
+    if (isa<GetElementPtrInst>(I))
+      return true;
+    return false;
+  }
+
+  bool tryExtractVMSplitRegion(Function &F,
+                               SmallVectorImpl<Function *> &SplitTargets) {
+    for (BasicBlock &BB : F) {
+      if (&BB == &F.getEntryBlock() || BB.isEHPad())
+        continue;
+      auto *Br = dyn_cast<BranchInst>(BB.getTerminator());
+      if (!Br || !Br->isUnconditional())
+        continue;
+
+      bool HasWork = false;
+      bool Supported = true;
+      for (Instruction &I : BB) {
+        if (!isSplitCandidateInstruction(I)) {
+          Supported = false;
+          break;
+        }
+        if (!isSkippable(I) && !isa<PHINode>(I) && !I.isTerminator())
+          HasWork = true;
+      }
+      if (!Supported || !HasWork)
+        continue;
+
+      SmallVector<BasicBlock *, 1> Blocks{&BB};
+      CodeExtractor Extractor(Blocks, nullptr, false, nullptr, nullptr,
+                              nullptr, false, false, nullptr, "vmp.split");
+      if (!Extractor.isEligible())
+        continue;
+
+      SetVector<Value *> Inputs, Outputs, Allocas;
+      Extractor.findInputsOutputs(Inputs, Outputs, Allocas);
+      if (Outputs.size() > 1)
+        continue;
+
+      CodeExtractorAnalysisCache CEAC(F);
+      Function *Split = Extractor.extractCodeRegion(CEAC);
+      if (!Split)
+        continue;
+      Split->addFnAttr(Attribute::NoInline);
+      SplitTargets.push_back(Split);
+      return true;
+    }
+    return false;
   }
 
   bool shouldSkip(Function &F) const {
@@ -2770,7 +2885,8 @@ struct CodeVirtualization : public ModulePass {
     // Phase 1: encode every target. This populates CalleeOrder with the
     // call targets referenced across all virtualized functions.
     SmallVector<std::pair<Function *, BytecodeProgram>, 8> Encoded;
-    for (Function *F : Targets) {
+    for (size_t TargetIdx = 0; TargetIdx < Targets.size(); ++TargetIdx) {
+      Function *F = Targets[TargetIdx];
       OptimizationRemarkEmitter ORE(F);
       unsigned BackEdges = countBackEdges(*F);
       if (BackEdges > VMPMaxBackEdges) {
@@ -2783,6 +2899,17 @@ struct CodeVirtualization : public ModulePass {
         continue;
       }
       if (hasUnsupportedIR(*F)) {
+        SmallVector<Function *, 2> SplitTargets;
+        if (tryExtractVMSplitRegion(*F, SplitTargets)) {
+          for (Function *Split : SplitTargets)
+            Targets.push_back(Split);
+          OptimizationRemark R(DEBUG_TYPE, "PartialVirtualized", F);
+          R << "partially virtualized ("
+            << ore::NV("SplitRegions", (unsigned)SplitTargets.size())
+            << " split region(s))";
+          ORE.emit(R);
+          continue;
+        }
         OptimizationRemarkMissed R(DEBUG_TYPE, "UnsupportedIR", F);
         R << "skipped: unsupported IR (PHI/call/EH/memory pattern outside "
              "the L1.5 ISA)";
