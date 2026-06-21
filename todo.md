@@ -666,7 +666,7 @@ Protection target:
       section protections, and entrypoint invocation are handled by the loader
 * [x] Native code can call VM-protected code
 * [x] VM-protected code can call native code
-* [ ] Sensitive functions become bytecode + VM state transitions
+* [x] Sensitive functions become bytecode + VM state transitions
 * [ ] Reversing protected logic requires recovering the bytecode format,
       opcode mapping, handler semantics, key schedule, call-thunk routing,
       local/frame model, and pointer/memory model
