@@ -404,16 +404,16 @@ Main weakness: edge cases and externally visible symbols.
 
 ## Level 3 — Fortress Indirect Calls
 
-* [ ] Add per-object pointer-auth discriminator
-* [ ] Add module-seed PAC discriminator
-* [ ] Add callout integration
-* [ ] Add function shard calls
-* [ ] Add fake call edges
-* [ ] Add multiple call reconstruction formulas
-* [ ] Add indirect call decryptor variants
-* [ ] Add cross-module safety tests
-* [ ] Add AArch64 test case
-* [ ] Add Windows x64 test case
+* [x] Add per-object pointer-auth discriminator
+* [x] Add module-seed PAC discriminator
+* [x] Add callout integration
+* [x] Add function shard calls
+* [x] Add fake call edges
+* [x] Add multiple call reconstruction formulas
+* [x] Add indirect call decryptor variants
+* [x] Add cross-module safety tests
+* [x] Add AArch64 test case
+* [x] Add Windows x64 test case
 
 **Definition of done for L3:**
 The static call graph should be unreliable, incomplete and expensive to reconstruct.

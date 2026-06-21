@@ -26,6 +26,11 @@ Function *getDirectCallee(CallBase &CB) {
   return dyn_cast<Function>(CB.getCalledOperand()->stripPointerCasts());
 }
 
+bool isGeneratedIcallFunction(Function &F) {
+  return F.getName().starts_with("__taokari_icall_shard_") ||
+         F.getName().starts_with("__taokari_icall_fake_");
+}
+
 bool isSafeCallee(CallBase &CB, Function *Callee) {
   if (!Callee || Callee->isIntrinsic())
     return false;
@@ -54,10 +59,12 @@ struct IndirectCall : public FunctionPass {
   // 63 - 32====31 - 0
   //  Mask=======Key
   DenseMap<Constant *, uint64_t>   CalleeKeys;
+  DenseMap<Function *, Function *> CalleeShards;
   SmallVector<GlobalVariable *, 8> CalleePageTable;
   GlobalVariable *                 CalleeObjectShareTable = nullptr;
   std::mt19937_64                  RNG;
   uint64_t                         PtrEncKey = 0;
+  uint64_t                         ModulePacSeed = 0;
 
   bool RunOnFuncChanged = false;
 
@@ -77,9 +84,115 @@ struct IndirectCall : public FunctionPass {
     return {"IndirectCall"};
   }
 
+  Value *zeroFor(Type *Ty) {
+    if (Ty->isVoidTy())
+      return nullptr;
+    if (Ty->isPointerTy())
+      return ConstantPointerNull::get(cast<PointerType>(Ty));
+    if (Ty->isIntegerTy() || Ty->isFloatingPointTy() || Ty->isVectorTy())
+      return Constant::getNullValue(Ty);
+    return PoisonValue::get(Ty);
+  }
+
+  Function *getOrCreateCallShard(Module &M, Function *Callee) {
+    auto It = CalleeShards.find(Callee);
+    if (It != CalleeShards.end())
+      return It->second;
+
+    std::string Name = "__taokari_icall_shard_" + std::string(Callee->getName());
+    if (auto *Existing = M.getFunction(Name)) {
+      CalleeShards[Callee] = Existing;
+      return Existing;
+    }
+
+    auto *Shard = Function::Create(Callee->getFunctionType(),
+                                   GlobalValue::InternalLinkage, Name, M);
+    Shard->addFnAttr(Attribute::NoInline);
+    Shard->addFnAttr(Attribute::NoUnwind);
+    Shard->setCallingConv(Callee->getCallingConv());
+
+    auto *FakeTarget = Function::Create(
+        Callee->getFunctionType(), GlobalValue::InternalLinkage,
+        "__taokari_icall_fake_" + std::string(Callee->getName()), M);
+    FakeTarget->addFnAttr(Attribute::NoInline);
+    FakeTarget->addFnAttr(Attribute::NoUnwind);
+    FakeTarget->setCallingConv(Callee->getCallingConv());
+    appendToCompilerUsed(M, {Callee});
+
+    auto &Ctx = M.getContext();
+    auto *I64 = Type::getInt64Ty(Ctx);
+    uint64_t Seed = RNG();
+    if (!Seed)
+      Seed = 0xC3A5C85C97CB3127ULL;
+    auto *SeedGV = new GlobalVariable(
+        M, I64, false, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64, Seed),
+        "__taokari_icall_shard_seed_" + Callee->getName());
+    SeedGV->setAlignment(Align(8));
+
+    BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Shard);
+    BasicBlock *Real = BasicBlock::Create(Ctx, "real", Shard);
+    BasicBlock *Fake = BasicBlock::Create(Ctx, "fake", Shard);
+    BasicBlock *FakeEntry = BasicBlock::Create(Ctx, "entry", FakeTarget);
+    IRBuilder<> FB(FakeEntry);
+    if (Value *FakeResult = zeroFor(Callee->getReturnType()))
+      FB.CreateRet(FakeResult);
+    else
+      FB.CreateRetVoid();
+
+    IRBuilder<> B(Entry);
+    auto *A = B.CreateAlignedLoad(I64, SeedGV, Align(8), true);
+    auto *Bv = B.CreateAdd(B.CreateAlignedLoad(I64, SeedGV, Align(8), true),
+                           ConstantInt::get(I64, 1));
+    B.CreateCondBr(B.CreateICmpEQ(A, Bv), Fake, Real);
+
+    SmallVector<Value *, 8> Args;
+    for (Argument &Arg : Shard->args())
+      Args.push_back(&Arg);
+
+    B.SetInsertPoint(Fake);
+    if (Callee->getReturnType()->isVoidTy()) {
+      auto *FakeCall = B.CreateCall(FakeTarget, Args);
+      FakeCall->setCallingConv(Callee->getCallingConv());
+      B.CreateRetVoid();
+    } else {
+      auto *FakeCall = B.CreateCall(FakeTarget, Args);
+      FakeCall->setCallingConv(Callee->getCallingConv());
+      Value *FakeResult = FakeCall;
+      B.CreateRet(FakeResult);
+    }
+
+    B.SetInsertPoint(Real);
+    if (Callee->getReturnType()->isVoidTy()) {
+      auto *RealCall = B.CreateCall(Callee, Args);
+      RealCall->setCallingConv(Callee->getCallingConv());
+      B.CreateRetVoid();
+    } else {
+      auto *RealCall = B.CreateCall(Callee, Args);
+      RealCall->setCallingConv(Callee->getCallingConv());
+      B.CreateRet(RealCall);
+    }
+
+    CalleeShards[Callee] = Shard;
+    return Shard;
+  }
+
+  Function *fortressCallee(Module &M, Function *Callee) {
+    return ArgsOptions->iCallOpt()->level() > 2 ? getOrCreateCallShard(M, Callee)
+                                                : Callee;
+  }
+
+  uint64_t pacDiscriminator(Function *Fn, Function *Callee) const {
+    uint64_t H = ModulePacSeed ^ CalleeKeys.lookup(Callee);
+    H ^= static_cast<uint64_t>(hash_value(Fn->getName())) << 1;
+    H ^= static_cast<uint64_t>(hash_value(Callee->getName())) << 33;
+    H ^= 0x9E3779B97F4A7C15ULL;
+    return H ? H : 0xD1B54A32D192ED03ULL;
+  }
+
   void NumberCallees(Module &M) {
     for (auto &F : M) {
-      if (F.isIntrinsic()) {
+      if (F.isIntrinsic() || isGeneratedIcallFunction(F)) {
         continue;
       }
 
@@ -94,9 +207,10 @@ struct IndirectCall : public FunctionPass {
 
             FunctionCallSites[&F].insert(CI);
 
-            if (CalleeKeys.count(Callee) == 0) {
-              Callees.push_back(Callee);
-              CalleeKeys[Callee] = RNG();
+            Function *TableCallee = fortressCallee(M, Callee);
+            if (CalleeKeys.count(TableCallee) == 0) {
+              Callees.push_back(TableCallee);
+              CalleeKeys[TableCallee] = RNG();
             }
           }
         }
@@ -111,6 +225,10 @@ struct IndirectCall : public FunctionPass {
     CalleePageTable.clear();
     CalleeObjectShareTable = nullptr;
     CalleeKeys.clear();
+    CalleeShards.clear();
+    ModulePacSeed = RNG();
+    if (!ModulePacSeed)
+      ModulePacSeed = 0xA0761D6478BD642FULL;
 
     NumberCallees(M);
     if (!Callees.size()) {
@@ -141,6 +259,9 @@ struct IndirectCall : public FunctionPass {
   }
 
   bool runOnFunction(Function &Fn) override {
+    if (isGeneratedIcallFunction(Fn))
+      return false;
+
     const auto opt = ArgsOptions->toObfuscate(ArgsOptions->iCallOpt(), &Fn);
     if (!opt.isEnabled()) {
       return false;
@@ -176,8 +297,9 @@ struct IndirectCall : public FunctionPass {
     std::vector<Constant *>        FuncCallees;
     DenseMap<Constant *, uint64_t> FuncKeys;
     for (auto callee : SelectedCallees) {
-      FuncCallees.push_back(callee);
-      FuncKeys[callee] = RNG();
+      Function *TableCallee = fortressCallee(M, callee);
+      FuncCallees.push_back(TableCallee);
+      FuncKeys[TableCallee] = RNG();
     }
 
     SmallVector<GlobalVariable *, 8> FuncCalleePageTable;
@@ -236,26 +358,27 @@ struct IndirectCall : public FunctionPass {
       Triple T(M.getTargetTriple());
       for (auto &KV : CalleeDedupCache) {
         Function *       Callee = KV.first;
+        Function *       TableCallee = fortressCallee(M, Callee);
         BuildDecryptArgs buildDecrypt;
         buildDecrypt.FuncLoopCount = opt.level();
         buildDecrypt.NextIndex = opt.level()
-                                   ? FuncCalleeIndex[Callee]
-                                   : CalleeIndex[Callee];
+                                   ? FuncCalleeIndex[TableCallee]
+                                   : CalleeIndex[TableCallee];
         buildDecrypt.NextIndexValue = nullptr;
         buildDecrypt.Fn = &Fn;
         buildDecrypt.InsertBefore = DecryptPt;
         buildDecrypt.LoadTy = Callee->getType();
         buildDecrypt.ModulePageTable = &CalleePageTable;
         buildDecrypt.FuncPageTable = &FuncCalleePageTable;
-        buildDecrypt.ModuleKey = CalleeKeys[Callee];
-        buildDecrypt.FuncKey = FuncKeys[Callee];
+        buildDecrypt.ModuleKey = CalleeKeys[TableCallee];
+        buildDecrypt.FuncKey = FuncKeys[TableCallee];
         buildDecrypt.PtrEncKey = PtrEncKey;
         buildDecrypt.ObjectShareTable = CalleeObjectShareTable;
         buildDecrypt.RuntimeSeed = opt.level() > 1 ? RNG() : 0;
         buildDecrypt.UseMBA = opt.level() > 1;
         buildDecrypt.IntegrityCheck = opt.level() > 1;
         buildDecrypt.PtrAuthKey = T.isAArch64() ? 0 : -1;
-        buildDecrypt.PtrAuthDisc = 0;
+        buildDecrypt.PtrAuthDisc = pacDiscriminator(&Fn, TableCallee);
         auto        DecPtr = buildPageTableDecryptIR(buildDecrypt);
         IRBuilder<> SIB(DecryptPt);
         SIB.CreateAlignedStore(DecPtr, KV.second, Align{1}, true);
@@ -278,19 +401,20 @@ struct IndirectCall : public FunctionPass {
         FnPtr->setName("Call_" + Callee->getName());
         CB->setCalledOperand(FnPtr);
       } else {
+        Function *TableCallee = fortressCallee(M, Callee);
         BuildDecryptArgs buildDecrypt;
         buildDecrypt.FuncLoopCount = opt.level();
         buildDecrypt.NextIndex = opt.level()
-                                   ? FuncCalleeIndex[Callee]
-                                   : CalleeIndex[Callee];
+                                   ? FuncCalleeIndex[TableCallee]
+                                   : CalleeIndex[TableCallee];
         buildDecrypt.NextIndexValue = nullptr;
         buildDecrypt.Fn = &Fn;
         buildDecrypt.InsertBefore = CB;
         buildDecrypt.LoadTy = Callee->getType();
         buildDecrypt.ModulePageTable = &CalleePageTable;
         buildDecrypt.FuncPageTable = &FuncCalleePageTable;
-        buildDecrypt.ModuleKey = CalleeKeys[Callee];
-        buildDecrypt.FuncKey = FuncKeys[Callee];
+        buildDecrypt.ModuleKey = CalleeKeys[TableCallee];
+        buildDecrypt.FuncKey = FuncKeys[TableCallee];
         buildDecrypt.PtrEncKey = PtrEncKey;
         buildDecrypt.ObjectShareTable = CalleeObjectShareTable;
         buildDecrypt.RuntimeSeed = opt.level() > 1 ? RNG() : 0;
@@ -298,7 +422,7 @@ struct IndirectCall : public FunctionPass {
         buildDecrypt.IntegrityCheck = opt.level() > 1;
         Triple T(M.getTargetTriple());
         buildDecrypt.PtrAuthKey = T.isAArch64() ? 0 : -1;
-        buildDecrypt.PtrAuthDisc = 0;
+        buildDecrypt.PtrAuthDisc = pacDiscriminator(&Fn, TableCallee);
         auto FnPtr = buildPageTableDecryptIR(buildDecrypt);
         FnPtr->setName("Call_" + Callee->getName());
         CB->setCalledOperand(FnPtr);

@@ -91,6 +91,7 @@ def case_path(name: str) -> Path:
 
 
 RELEASE_GATES = [
+    ReleaseGate("indirect_call_level3", TESTING / "scripts" / "verify_indirect_call_level3.py"),
     ReleaseGate("vmp_exe_full_virtualization", TESTING / "scripts" / "verify_vmp_full_virtualization.py"),
     ReleaseGate("vmp_dll_load_and_manual_map", TESTING / "scripts" / "verify_vmp_dll_load.py"),
 ]
