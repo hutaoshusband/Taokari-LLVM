@@ -21,7 +21,7 @@ OPMAP_RE = re.compile(
     r"@__taokari_vmp_opmap_(\w+) = .*?\[(\d+) x i64\] \[(.*?)\]",
 )
 CALL_RE = re.compile(
-    r"call i64 @__taokari_vmp_interp_i64\((.*?)\)"
+    r"call i64 @(__taokari_vmp_interp_i64_[^(]+)\((.*?)\)"
 )
 BC_ARG_RE = re.compile(r"ptr nonnull @__taokari_vmp_bc_(\w+)")
 CALL_TAIL_RE = re.compile(
@@ -58,7 +58,9 @@ def check_ir(text: str) -> int:
             opmaps[name] = values
 
     calls: list[tuple[str, str]] = []
-    for args in CALL_RE.findall(text):
+    interp_names: list[str] = []
+    for interp_name, args in CALL_RE.findall(text):
+        interp_names.append(interp_name)
         bc_match = BC_ARG_RE.search(args)
         tail_match = CALL_TAIL_RE.search(args)
         if not bc_match or not tail_match:
@@ -69,6 +71,8 @@ def check_ir(text: str) -> int:
         calls.append((bc_match.group(1), key_arg.strip()))
     if len(calls) < 6:
         return fail("missing hardened interpreter calls")
+    if len(set(interp_names)) != len(calls):
+        return fail("interpreter symbols are still shared")
 
     seed_globals = dict(KEY_SEED_RE.findall(text))
     if len(seed_globals) < len(calls):
@@ -96,12 +100,17 @@ def check_ir(text: str) -> int:
         if 0 <= words[0] < 64:
             return fail(f"{name} bytecode first word is plaintext")
 
-    switch_match = re.search(r"switch i64 .*?\[(.*?)\]", text, re.S)
-    if not switch_match:
+    switch_bodies = re.findall(r"switch i64 .*?\[(.*?)\]", text, re.S)
+    if not switch_bodies:
         return fail("missing interpreter switch")
-    case_values = [int(v) for v in re.findall(r"i64 (\d+), label", switch_match.group(1))]
-    if case_values == sorted(case_values):
+    case_orders = [
+        tuple(int(v) for v in re.findall(r"i64 (\d+), label", body))
+        for body in switch_bodies
+    ]
+    if any(order == tuple(sorted(order)) for order in case_orders):
         return fail("handler cases are still canonical order")
+    if len(set(case_orders)) < 2:
+        return fail("handler switch order is still shared")
     return 0
 
 

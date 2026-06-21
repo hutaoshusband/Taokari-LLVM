@@ -25,7 +25,11 @@ def main() -> int:
     ida_auto.auto_wait()
 
     names = {name: ea for ea, name in idautils.Names()}
-    interp_ea = names.get("__taokari_vmp_interp_i64")
+    interp_ea = next(
+        (ea for name, ea in names.items()
+         if name.startswith("__taokari_vmp_interp_i64")),
+        None,
+    )
     bytecode = {
         name: ea for name, ea in names.items()
         if name.startswith("__taokari_vmp_bc_")

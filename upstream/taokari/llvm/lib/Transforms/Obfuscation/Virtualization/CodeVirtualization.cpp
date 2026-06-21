@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <functional>
 #include <random>
+#include <string>
 
 #define DEBUG_TYPE "taokari-vmp"
 
@@ -154,7 +155,7 @@ struct BytecodeProgram {
 // Handler descriptor. The interpreter builder iterates the table
 // and emits one switch case per entry; opcode values stay the stable enum.
 // This is the L1.5.2 refactor target: previously every opcode was a hand-
-// written case in getOrCreateInterpreter with no arity metadata. Now the
+// written case in createInterpreter with no arity metadata. Now the
 // table is the source of truth for stack shape, and the Emit closure is the
 // only opcode-specific code.
 //
@@ -1225,7 +1226,7 @@ struct CodeVirtualization : public ModulePass {
   // Bundle of interpreter state. Emit closures in the handler
   // table capture a pointer to this struct by value (one pointer copy),
   // which is always valid because the Ctx outlives both the table build and
-  // the synchronous Emit pass in getOrCreateInterpreter. This avoids the
+  // the synchronous Emit pass in createInterpreter. This avoids the
   // lifetime hazard of capturing local helper lambdas (fetch/pop/push) by
   // reference into deferred std::function closures.
   struct InterpCtx {
@@ -1813,10 +1814,7 @@ struct CodeVirtualization : public ModulePass {
     return H;
   }
 
-  Function *getOrCreateInterpreter(Module &M) {
-    if (auto *F = M.getFunction("__taokari_vmp_interp_i64"))
-      return F;
-
+  Function *createInterpreter(Module &M, Function &Source) {
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
     Type *I8 = Type::getInt8Ty(Ctx);
@@ -1831,8 +1829,11 @@ struct CodeVirtualization : public ModulePass {
         FunctionType::get(
             I64, {Ptr, I64, Ptr, Ptr, I64, Ptr, I64, Ptr, I64, Ptr, I64},
             false);
-    auto *F = Function::Create(FTy, GlobalValue::InternalLinkage,
-                               "__taokari_vmp_interp_i64", M);
+    std::string InterpName =
+        ("__taokari_vmp_interp_i64_" + Source.getName()).str();
+    InterpName += "_";
+    InterpName += std::to_string(RNG());
+    auto *F = Function::Create(FTy, GlobalValue::InternalLinkage, InterpName, M);
     F->addFnAttr(Attribute::NoUnwind);
 
     auto ArgIt = F->arg_begin();
@@ -2005,7 +2006,7 @@ struct CodeVirtualization : public ModulePass {
     OpcodeMap->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
     OpcodeMap->setAlignment(Align(8));
 
-    Function *Interp = getOrCreateInterpreter(M);
+    Function *Interp = createInterpreter(M, F);
     F.deleteBody();
     BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", &F);
     BasicBlock *Ok = BasicBlock::Create(Ctx, "vmp.ok", &F);

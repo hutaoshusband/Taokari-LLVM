@@ -96,7 +96,7 @@ OPMAP_RE = re.compile(
     re.S,
 )
 CALL_RE = re.compile(
-    r"call i64 @__taokari_vmp_interp_i64\("
+    r"call i64 @__taokari_vmp_interp_i64_[^(]+\("
     r"ptr [^,]*@__taokari_vmp_bc_(\w+), i64 \d+, "
     r"ptr [^,]*@__taokari_vmp_pcmap_\w+, ptr [^,]+, i64 \d+, "
     r"ptr [^,]+, i64 \d+, "
