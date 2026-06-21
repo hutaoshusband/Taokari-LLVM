@@ -16,9 +16,12 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/RandomNumberGenerator.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <random>
 
 #define DEBUG_TYPE "taokari-vmp"
 
@@ -160,6 +163,7 @@ struct Handler {
 struct CodeVirtualization : public ModulePass {
   static char ID;
   ObfuscationOptions *ArgsOptions;
+  std::mt19937_64 RNG;
   // Per-module direct-callee table (L1.5.1). Populated lazily by
   // buildBytecode as it encounters direct CallInsts; resolved into a
   // __taokari_vmp_callees global by finalizeCalleeTable() before the
@@ -170,6 +174,10 @@ struct CodeVirtualization : public ModulePass {
 
   CodeVirtualization(ObfuscationOptions *ArgsOptions) : ModulePass(ID) {
     this->ArgsOptions = ArgsOptions;
+    uint64_t Seed = 0;
+    if (auto EC = llvm::getRandomBytes(&Seed, sizeof(Seed)))
+      report_fatal_error("failed to initialize VMP RNG");
+    RNG = std::mt19937_64(Seed);
   }
 
   StringRef getPassName() const override {
@@ -853,14 +861,15 @@ struct CodeVirtualization : public ModulePass {
     case OpXor:
     case OpCmpEq:
     case OpCmpNe:
-    case OpCmpSgt:
-    case OpCmpSlt:
-    case OpCmpSge:
-    case OpCmpSle:
     case OpCmpUgt:
     case OpCmpUlt:
     case OpCmpUge:
     case OpCmpUle:
+      return {2, 1, 0};
+    case OpCmpSgt:
+    case OpCmpSlt:
+    case OpCmpSge:
+    case OpCmpSle:
     case OpMul:
     case OpAnd:
     case OpOr:
@@ -871,10 +880,6 @@ struct CodeVirtualization : public ModulePass {
     case OpUDiv:
     case OpSRem:
     case OpURem:
-      // binary ops now carry a VmTy immediate (result width) for narrowing.
-      // Cmp ops in this list carry no immediate (NarrowResult=false), but the
-      // shape is reported conservatively uniform here; the actual fetch count
-      // is driven by NarrowResult in the handler, not by this metadata.
       return {2, 1, 1};
     case OpSelect:
       return {3, 1, 0};
@@ -896,6 +901,77 @@ struct CodeVirtualization : public ModulePass {
       return {1, 0, 0};
     }
     return {0, 0, 0};
+  }
+
+  bool opcodeImmediateCount(int64_t RawOp, unsigned &Count) const {
+    if (RawOp <= 0)
+      return false;
+    auto Op = static_cast<Opcode>(RawOp);
+    switch (Op) {
+    case OpInitArg:
+    case OpPushConst:
+    case OpLoadSlot:
+      Count = 2;
+      return true;
+    case OpStoreSlot:
+    case OpAdd:
+    case OpSub:
+    case OpXor:
+    case OpCmpSgt:
+    case OpCmpSlt:
+    case OpCmpSge:
+    case OpCmpSle:
+    case OpJmp:
+    case OpBrTrue:
+    case OpMul:
+    case OpAnd:
+    case OpOr:
+    case OpShl:
+    case OpLShr:
+    case OpAShr:
+    case OpSDiv:
+    case OpUDiv:
+    case OpSRem:
+    case OpURem:
+    case OpLoadPtr:
+    case OpStorePtr:
+      Count = 1;
+      return true;
+    case OpCmpEq:
+    case OpCmpNe:
+    case OpRet:
+    case OpSelect:
+    case OpCmpUgt:
+    case OpCmpUlt:
+    case OpCmpUge:
+    case OpCmpUle:
+      Count = 0;
+      return true;
+    case OpCall:
+      Count = 3;
+      return true;
+    }
+    return false;
+  }
+
+  bool mapOpcodeWords(SmallVectorImpl<int64_t> &Words,
+                      int64_t OpcodeMask) const {
+    size_t I = 0;
+    while (I < Words.size()) {
+      unsigned Immediates = 0;
+      if (!opcodeImmediateCount(Words[I], Immediates))
+        return false;
+      Words[I] ^= OpcodeMask;
+      I += 1 + Immediates;
+    }
+    return I == Words.size();
+  }
+
+  int64_t encryptBytecodeWord(int64_t Word, size_t Index,
+                              uint64_t BytecodeKey) const {
+    uint64_t Schedule =
+        BytecodeKey + (static_cast<uint64_t>(Index) * 0x9E3779B97F4A7C15ULL);
+    return static_cast<int64_t>(static_cast<uint64_t>(Word) ^ Schedule);
   }
 
   Value *loadWord(IRBuilder<> &B, Type *I64, Value *BC, Value *PC,
@@ -938,14 +1014,18 @@ struct CodeVirtualization : public ModulePass {
     Value *CallArgs;
     GlobalVariable *CalleeTable;
     Value *Args;
+    Value *BytecodeKey;
+    Value *OpcodeMask;
     BasicBlock *Dispatch;
   };
 
   Value *fetchWord(IRBuilder<> &B, InterpCtx &C) {
     Value *Cur = B.CreateLoad(C.I64, C.PC);
-    Value *Word = B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.BC, Cur));
+    Value *Enc = B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.BC, Cur));
     B.CreateStore(B.CreateAdd(Cur, ConstantInt::get(C.I64, 1)), C.PC);
-    return Word;
+    Value *Mix = B.CreateMul(Cur, ConstantInt::get(C.I64, 0x9E3779B97F4A7C15ULL));
+    Value *Key = B.CreateAdd(C.BytecodeKey, Mix);
+    return B.CreateXor(Enc, Key);
   }
 
   void pushStk(IRBuilder<> &B, InterpCtx &C, Value *V) {
@@ -1295,6 +1375,11 @@ struct CodeVirtualization : public ModulePass {
     H.push_back({OpRet, "ret", shapeOf(OpRet),
                  [this, &C](IRBuilder<> &B) { B.CreateRet(popStk(B, C)); }});
 
+    if (H.size() > 1) {
+      std::shuffle(H.begin(), H.end(), RNG);
+      if (H.front().Op == OpInitArg)
+        std::rotate(H.begin(), H.begin() + 1, H.end());
+    }
     return H;
   }
 
@@ -1305,11 +1390,11 @@ struct CodeVirtualization : public ModulePass {
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
     Type *Ptr = PointerType::getUnqual(Ctx);
-    // signature is i64(i64* bc, i64 bcLen, i64* args). bcLen is the
+    // signature is i64(i64* bc, i64 bcLen, i64* args, i64 key, i64 opmask). bcLen is the
     // bytecode word count; the dispatch loop checks PC < bcLen before each
     // fetch so a corrupted PC (relevant once L2 encrypts the bytecode) faults
     // to the Bad block instead of reading out of bounds.
-    auto *FTy = FunctionType::get(I64, {Ptr, I64, Ptr}, false);
+    auto *FTy = FunctionType::get(I64, {Ptr, I64, Ptr, I64, I64}, false);
     auto *F = Function::Create(FTy, GlobalValue::InternalLinkage,
                                "__taokari_vmp_interp_i64", M);
     F->addFnAttr(Attribute::NoUnwind);
@@ -1319,8 +1404,12 @@ struct CodeVirtualization : public ModulePass {
     BC->setName("bc");
     Value *BCLen = &*ArgIt++;
     BCLen->setName("bclen");
-    Value *Args = &*ArgIt;
+    Value *Args = &*ArgIt++;
     Args->setName("args");
+    Value *BytecodeKey = &*ArgIt++;
+    BytecodeKey->setName("bytecode.key");
+    Value *OpcodeMask = &*ArgIt;
+    OpcodeMask->setName("opcode.mask");
 
     BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", F);
     BasicBlock *Dispatch = BasicBlock::Create(Ctx, "dispatch", F);
@@ -1351,13 +1440,13 @@ struct CodeVirtualization : public ModulePass {
         BasicBlock::Create(Ctx, "fetch", F);
     B.CreateCondBr(InBounds, Fetch, Bad);
     B.SetInsertPoint(Fetch);
-    Value *Op = B.CreateLoad(I64, B.CreateGEP(I64, BC, OpPC));
-    B.CreateStore(B.CreateAdd(OpPC, ConstantInt::get(I64, 1)), PC);
-
     // Build handler table, then emit one switch case per entry.
     // The table is the source of truth; the switch is generated from it.
-    InterpCtx IC{I64, F,     &Ctx, BC,     PC,     SP,
-                Stack, Locals, Frame, CallArgs, CalleeTable, Args, Dispatch};
+    InterpCtx IC{I64, F,     &Ctx, BC,     PC,     SP, Stack,
+                 Locals, Frame, CallArgs, CalleeTable, Args,
+                 BytecodeKey, OpcodeMask, Dispatch};
+    Value *MappedOp = fetchWord(B, IC);
+    Value *Op = B.CreateXor(MappedOp, OpcodeMask);
     SmallVector<Handler, 24> Handlers = buildHandlerTable(IC);
     auto *Sw = B.CreateSwitch(Op, Bad, Handlers.size());
 
@@ -1378,9 +1467,19 @@ struct CodeVirtualization : public ModulePass {
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
 
+    uint64_t BytecodeKey = RNG();
+    if (!BytecodeKey)
+      BytecodeKey = 0xD1B54A32D192ED03ULL;
+    int64_t OpcodeMask = static_cast<int64_t>((RNG() & 0x7FFF) | 0x40);
+    SmallVector<int64_t, 64> EncodedWords(P.Words.begin(), P.Words.end());
+    if (!mapOpcodeWords(EncodedWords, OpcodeMask))
+      return false;
+
     SmallVector<Constant *, 64> Words;
-    for (int64_t Word : P.Words)
+    for (size_t I = 0; I < EncodedWords.size(); ++I) {
+      int64_t Word = encryptBytecodeWord(EncodedWords[I], I, BytecodeKey);
       Words.push_back(ConstantInt::get(I64, static_cast<uint64_t>(Word), true));
+    }
     auto *ArrayTy = ArrayType::get(I64, Words.size());
     auto *Bytecode = new GlobalVariable(
         M, ArrayTy, true, GlobalValue::PrivateLinkage,
@@ -1408,7 +1507,10 @@ struct CodeVirtualization : public ModulePass {
     // pass the bytecode word count as the bcLen argument so the
     // interpreter can bound-check PC (L1.5.4).
     Value *BCLen = ConstantInt::get(I64, Words.size());
-    Value *Result = B.CreateCall(Interp, {BCPtr, BCLen, ArgsPtr});
+    Value *Result = B.CreateCall(
+        Interp, {BCPtr, BCLen, ArgsPtr,
+                 ConstantInt::get(I64, BytecodeKey),
+                 ConstantInt::get(I64, OpcodeMask)});
     B.CreateRet(B.CreateTruncOrBitCast(Result, F.getReturnType()));
     return true;
   }

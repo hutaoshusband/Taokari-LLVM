@@ -730,15 +730,15 @@ measurable.
 * [ ] **Add full real pointer support** (`LoadInst`/`StoreInst` on external
       pointer args + globals, aliasing, alignment) — promoted from 1.5
       middle-way; unblocks virtualizing real C/C++ pointer-heavy functions
-* [ ] Encrypt bytecode
-* [ ] Add per-function VM key
-* [ ] Add per-function opcode mapping
-* [ ] Add handler shuffling
+* [x] Encrypt bytecode
+* [x] Add per-function VM key
+* [x] Add per-function opcode mapping
+* [x] Add handler shuffling
 * [ ] Add handler flattening
-* [ ] Add bytecode decrypt at runtime
+* [x] Add bytecode decrypt at runtime
 * [ ] Add indirect handler dispatch
-* [ ] Add VM correctness tests
-* [ ] Add performance benchmark
+* [x] Add VM correctness tests
+* [x] Add performance benchmark
 
 ## Level 3 — Fortress VM
 
