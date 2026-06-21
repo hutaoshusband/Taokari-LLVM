@@ -196,8 +196,15 @@ struct CodeVirtualization : public ModulePass {
     return Ty->isIntegerTy() && Ty->getIntegerBitWidth() <= 64;
   }
 
-  bool isSupportedArg(Type *Ty) const {
-    return isSupportedInt(Ty) || Ty->isPointerTy();
+  bool isSupportedPointer(Type *Ty, const DataLayout &DL) const {
+    if (!Ty->isPointerTy())
+      return false;
+    auto *PT = cast<PointerType>(Ty);
+    return DL.getPointerSizeInBits(PT->getAddressSpace()) <= 64;
+  }
+
+  bool isSupportedArg(Type *Ty, const DataLayout &DL) const {
+    return isSupportedInt(Ty) || isSupportedPointer(Ty, DL);
   }
 
   bool isSkippable(const Instruction &I) const {
@@ -235,8 +242,9 @@ struct CodeVirtualization : public ModulePass {
       return true;
     if (F.arg_size() > 8)
       return true;
+    const DataLayout &DL = F.getParent()->getDataLayout();
     for (Argument &A : F.args())
-      if (!isSupportedArg(A.getType()))
+      if (!isSupportedArg(A.getType(), DL))
         return true;
     return false;
   }
@@ -314,6 +322,7 @@ struct CodeVirtualization : public ModulePass {
           continue;
         }
         if (auto *Cast = dyn_cast<CastInst>(&I)) {
+          const DataLayout &DL = F.getParent()->getDataLayout();
           switch (Cast->getOpcode()) {
           case Instruction::ZExt:
           case Instruction::Trunc:
@@ -322,13 +331,13 @@ struct CodeVirtualization : public ModulePass {
               return true;
             break;
           case Instruction::PtrToInt:
-            if (!Cast->getSrcTy()->isPointerTy() ||
+            if (!isSupportedPointer(Cast->getSrcTy(), DL) ||
                 !isSupportedInt(Cast->getDestTy()))
               return true;
             break;
           case Instruction::IntToPtr:
             if (!isSupportedInt(Cast->getSrcTy()) ||
-                !Cast->getDestTy()->isPointerTy())
+                !isSupportedPointer(Cast->getDestTy(), DL))
               return true;
             break;
           default:
@@ -728,6 +737,7 @@ struct CodeVirtualization : public ModulePass {
           continue;
         }
         if (auto *Cast = dyn_cast<CastInst>(&I)) {
+          const DataLayout &DL = F.getParent()->getDataLayout();
           switch (Cast->getOpcode()) {
           case Instruction::ZExt:
           case Instruction::Trunc:
@@ -736,13 +746,13 @@ struct CodeVirtualization : public ModulePass {
               return false;
             break;
           case Instruction::PtrToInt:
-            if (!Cast->getSrcTy()->isPointerTy() ||
+            if (!isSupportedPointer(Cast->getSrcTy(), DL) ||
                 !isSupportedInt(Cast->getDestTy()))
               return false;
             break;
           case Instruction::IntToPtr:
             if (!isSupportedInt(Cast->getSrcTy()) ||
-                !Cast->getDestTy()->isPointerTy())
+                !isSupportedPointer(Cast->getDestTy(), DL))
               return false;
             break;
           default:
@@ -767,6 +777,10 @@ struct CodeVirtualization : public ModulePass {
           bool IsFramePtr =
               resolveFramePtr(LD->getPointerOperand(), AllocaBase,
                               NextFrameSlot, FrameIdx);
+          if (!IsFramePtr &&
+              !isSupportedPointer(LD->getPointerOperand()->getType(),
+                                  F.getParent()->getDataLayout()))
+            return false;
           if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, LD->getPointerOperand()))
             return false;
           P.Words.push_back(IsFramePtr ? OpLoadPtr : OpLoadMem);
@@ -785,6 +799,10 @@ struct CodeVirtualization : public ModulePass {
           bool IsFramePtr =
               resolveFramePtr(ST->getPointerOperand(), AllocaBase,
                               NextFrameSlot, FrameIdx);
+          if (!IsFramePtr &&
+              !isSupportedPointer(ST->getPointerOperand()->getType(),
+                                  F.getParent()->getDataLayout()))
+            return false;
           if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, ST->getValueOperand()))
             return false;
           if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, ST->getPointerOperand()))
@@ -801,6 +819,9 @@ struct CodeVirtualization : public ModulePass {
             slotFor(Slots, &I);
             continue;
           }
+          if (!isSupportedPointer(GEP->getPointerOperandType(),
+                                  F.getParent()->getDataLayout()))
+            return false;
           if (GEP->getNumIndices() != 1)
             return false;
           Value *Idx = GEP->idx_begin()->get();
