@@ -233,6 +233,18 @@ static bool hasTaokariMaxProtection(const ArgList &Args) {
   return false;
 }
 
+static bool hasTaokariCodeVirtualization(const ArgList &Args) {
+  if (hasTaokariMaxProtection(Args))
+    return true;
+  for (const Arg *A : Args.filtered(options::OPT_mllvm)) {
+    StringRef Value(A->getValue(0));
+    if (Value == "-taokari-vmp" || Value == "--taokari-vmp" ||
+        Value == "-irobf-vmp" || Value == "--irobf-vmp")
+      return true;
+  }
+  return false;
+}
+
 /// Add a CC1 option to specify the debug compilation directory.
 static const char *addDebugCompDirArg(const ArgList &Args,
                                       ArgStringList &CmdArgs,
@@ -6920,6 +6932,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   Args.AddLastArg(CmdArgs, options::OPT_fwritable_strings);
   Args.AddLastArg(CmdArgs, options::OPT_funroll_loops,
                   options::OPT_fno_unroll_loops);
+  if (hasTaokariCodeVirtualization(Args) &&
+      !Args.hasArg(options::OPT_funroll_loops,
+                   options::OPT_fno_unroll_loops))
+    CmdArgs.push_back("-fno-unroll-loops");
   Args.AddLastArg(CmdArgs, options::OPT_floop_interchange,
                   options::OPT_fno_loop_interchange);
   Args.addOptInFlag(CmdArgs, options::OPT_fexperimental_loop_fusion,
@@ -7517,8 +7533,13 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   Args.addOptOutFlag(CmdArgs, options::OPT_fgnu_inline_asm,
                      options::OPT_fno_gnu_inline_asm);
 
-  handleVectorizeLoopsArgs(Args, CmdArgs);
-  handleVectorizeSLPArgs(Args, CmdArgs);
+  const bool TaokariCodeVirtualization = hasTaokariCodeVirtualization(Args);
+  if (!TaokariCodeVirtualization ||
+      Args.hasArg(options::OPT_fvectorize, options::OPT_fno_vectorize))
+    handleVectorizeLoopsArgs(Args, CmdArgs);
+  if (!TaokariCodeVirtualization ||
+      Args.hasArg(options::OPT_fslp_vectorize, options::OPT_fno_slp_vectorize))
+    handleVectorizeSLPArgs(Args, CmdArgs);
 
   StringRef VecWidth = parseMPreferVectorWidthOption(D.getDiags(), Args);
   if (!VecWidth.empty())
