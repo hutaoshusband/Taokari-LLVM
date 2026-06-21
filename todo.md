@@ -726,37 +726,238 @@ measurable.
 
 ## Level 2 — Practical VM
 
+Current status: the L1.5 interpreter already ships several features the
+old L2 list re-asked for. Recorded here as `[x]` so effort goes into the
+real gaps (runtime safety, cipher hardening, per-function interpreter
+diversity, callee-table hardening, anti-analysis), not into rework.
+
+Already landed at L1.5 (verified in `CodeVirtualization.cpp`):
+
 * [x] Virtualize selected functions
-* [ ] **Add full real pointer support** (`LoadInst`/`StoreInst` on external
-      pointer args + globals, aliasing, alignment) — promoted from 1.5
-      middle-way; unblocks virtualizing real C/C++ pointer-heavy functions
-* [x] Encrypt bytecode
-* [x] Add per-function VM key
-* [x] Add per-function opcode mapping
-* [x] Add handler shuffling
-* [ ] Add handler flattening
-* [x] Add bytecode decrypt at runtime
-* [ ] Add indirect handler dispatch
-* [x] Add VM correctness tests
-* [x] Add performance benchmark
+* [x] Encrypt bytecode (`encryptBytecodeWord`, per-word XOR keystream in `replaceWithVM`)
+* [x] Add per-function VM key (`BytecodeKey = RNG()` per `replaceWithVM` call)
+* [x] Add bytecode decrypt at runtime (`fetchWord` re-derives the keystream)
+* [x] Add per-function opcode mapping (`OpcodeMask` XOR over every opcode word,
+      generated per function — note: single XOR *mask*, not a permutation table;
+      upgrade is a real L2 step below)
+* [x] Add handler shuffling (`std::shuffle` in `buildHandlerTable` — note:
+      shuffle is per *module* because the interpreter is a module singleton;
+      per-function divergence is a real L2 step below)
+* [x] Add VM correctness tests (L1.5.3 differential harness)
+* [x] Add performance benchmark (L1.5.4 native-vs-VMP overhead + bounds)
+
+Real L2 work, ordered so each step unblocks the next and every step closes
+one concrete failure mode. Do not reorder Phase A — every later hardening
+claim is meaningless if the VM memory-corrupts on tampered bytecode.
+
+### Phase A — Runtime memory safety (precondition for "bulletproof")
+
+The L1.5 bounds checks (stack depth, PC < bcLen, frame/locals cap) are
+*build-time only*. Once bytecode is encrypted and the key is recoverable
+(it currently is — see Phase C), a patched stream must fault cleanly,
+not write out of bounds. This phase makes the VM safe under active
+tampering before any crypto is piled on top.
+
+* [ ] Add runtime SP bounds check (underflow → trap; overflow into the
+      64-slot `Stack` alloca → trap). Build-time `checkStackDepth` does
+      not help once the attacker patches bytecode at rest.
+* [ ] Add runtime `Locals` slot index bounds check (`OpLoadSlot`/
+      `OpStoreSlot` currently do `Locals[slot]` with no check)
+* [ ] Add runtime `Frame` slot index bounds check (`OpLoadPtr`/`OpStorePtr`
+      currently do `Frame[idx]` with no check; a patched frame index walks
+      into adjacent stack)
+* [ ] Add handler-arity / PC-desync detection (if a fetch lands mid-opcode
+      because an immediate was patched, trap instead of silently skewing PC
+      for the rest of the run)
+* [ ] Add div/rem-by-zero guard (`OpSDiv`/`OpUDiv`/`OpSRem`/`OpURem` —
+      defined trap, not host `#DE` killing the whole process)
+* [ ] Replace silent `ret 0` Bad block with trap + tamper flag (silent
+      wrong results are worse than a loud crash; the flag feeds Phase F's
+      anti-analysis and L3's tamper-response)
+
+### Phase B — Full real pointer support (the promoted 1.5 item, decomposed)
+
+Unblocks virtualizing real C/C++ pointer-heavy functions. Each sub-step
+is independently landable and differentially testable.
+
+* [ ] Add external pointer arg support (`LoadInst`/`StoreInst` through
+      pointer params — currently rejected in `resolveFramePtr`)
+* [ ] Add global pointer access (loads/stores through `GlobalVariable` addrs)
+* [ ] Add non-constant GEP support (runtime offset, not just
+      `accumulateConstantOffset` — currently defers to L2)
+* [ ] Add alignment handling (respect `LoadInst`/`StoreInst::getAlign`;
+      misaligned access under VM must match native semantics)
+* [ ] Add pointer aliasing differential cases (native vs VM over aliasing
+      patterns — two pointers to the same frame slot, etc.)
+* [ ] Add pointer-width correctness (`ptrtoint`/`inttoptr` at the right
+      width; opaque-pointer-aware)
+
+### Phase C — Cipher & key hardening (current scheme is trivially recoverable)
+
+The L1.5 cipher is XOR with a `key + PC * golden_ratio` keystream, and
+the key is a *plaintext literal* at the call site. Hex-Rays shows
+`BytecodeKey` directly. This phase kills that leakage.
+
+* [ ] Derive `BytecodeKey` at runtime from a seed + opaque computation
+      (no plaintext key literal in IR; mix with a runtime nonce like the
+      Constant Encryption L2 pass already does)
+* [ ] Replace XOR+golden-ratio stream cipher with a real PRF / split-key
+      schedule (the golden-ratio LCG is a known, reversible pattern)
+* [ ] Encrypt immediates with a separate layer (today only opcode *words*
+      are masked via `OpcodeMask`; immediates ride the XOR stream and
+      leak structure once the keystream is recovered)
+* [ ] Upgrade opcode mapping from single XOR mask to a per-opcode
+      permutation table (`OpcodeMask` is one mask for all opcodes; a
+      per-opcode bijection defeats "find the mask, decrypt all" attacks)
+* [ ] Add per-basic-block key rotation (one key per function is one
+      breakpoint for the analyst; per-BB rotation forces re-derivation
+      per block)
+* [ ] Add bytecode integrity tag (HMAC/CRC computed at build, checked at
+      VM entry — patched bytecode is detected before it runs, feeds the
+      Phase A tamper flag)
+
+### Phase D — Per-function interpreter diversity
+
+Currently `getOrCreateInterpreter` returns one module-wide
+`__taokari_vmp_interp_i64`. Reversing *one* +vmp function reveals the
+handler table, opcode layout and shuffle for *every* +vmp function in
+the module. This is the single biggest force-multiplier for an analyst
+and must close before L3 polymorphism is meaningful.
+
+* [ ] Add per-function interpreter clone (each +vmp fn gets its own
+      `__taokari_vmp_interp_<fn>` with its own handler table + shuffle)
+* [ ] Add indirect handler dispatch (replace the recognizable `switch`
+      with an encrypted function-pointer table indexed by the decrypted
+      opcode — kills the clean switch Hex-Rays lifts for free)
+* [ ] Add handler flattening (flatten each handler's internal CFG so a
+      single handler is not a one-block read)
+
+### Phase E — Callee-table hardening
+
+`finalizeCalleeTable` stores `ptrtoint(thunk)` as plaintext i64. A
+memory dump resolves every VM callee instantly, and the thunks call the
+real callee directly so the static call graph still resolves.
+
+* [ ] Encrypt callee-table entries (plaintext pointer dump currently
+      hands the analyst every VM callee)
+* [ ] Route thunks through the existing IndirectCall page table (reuse
+      Section 7 instead of inventing a parallel indirection)
+* [ ] Obfuscate thunks themselves (BCF + MBA on argument marshaling so
+      the i64→typed-arg load pattern is not a fingerprint)
+
+### Phase F — Anti-analysis basics
+
+Without these, frequency analysis on handler hits maps every opcode in
+minutes (the most-used handler is almost certainly `OpAdd`/`OpStoreSlot`).
+
+* [ ] Add anti-frequency-analysis padding (emit dummy opcodes/handlers
+      to flatten the handler-hit histogram a tracer records)
+* [ ] Add fake opcodes (opcodes that decrypt to no-ops or to junk
+      handlers; inflate the analyst's opcode map)
+* [ ] Add fake handlers (dead switch cases that look real, never fire on
+      well-formed bytecode)
+
+### Phase G — Hardened-VM testing (bulletproof = tested under attack)
+
+The L1.5.3 harness covers *correct* IR. It does not cover what the VM
+does under tampering, optimizer pressure, or decompiler lifting.
+
+* [ ] Add bytecode-mutation fuzz harness (flip random words/bits in the
+      encrypted stream → must trap via Phase A, never memory-unsafe)
+* [ ] Add property-based differential test (random IR programs across
+      the Phase B ISA → native vs VM, shrinks on mismatch)
+* [ ] Add optimizer survival test (`opt -O2`, `-O3`, LTO must not fold
+      the encrypted bytecode or recover the runtime key)
+* [ ] Add decompiler-lift test (Hex-Rays/Ghidra/IDA snapshot of a VM'd
+      function — baseline what an analyst actually sees)
+
+### Phase H — Performance guardrails (so bulletproof stays shippable)
+
+* [ ] Add hot-loop detection (refuse to VM functions with a high
+      backedge-taken count; interpreter-in-a-hot-loop is catastrophic)
+* [ ] Add per-function overhead budget (refuse virtualization if the
+      L1.5.4 benchmark measures > N× native for this function)
+* [ ] Add bytecode size budget (cap blowup; refuse if `P.Words.size()`
+      exceeds a configurable fraction of native code size)
+
+**Definition of done for L2:**
+Every Phase A bound fires as a clean trap (never memory unsafety) under
+a bytecode-mutation fuzzer. Real C/C++ pointer-heavy functions pass the
+differential harness (Phase B). The key is not a plaintext literal and
+the cipher survives an analyst with the binary (Phase C). Each +vmp
+function has its own interpreter and the dispatch is not a clean switch
+(Phase D). The callee table is not a plaintext pointer dump (Phase E).
+Handler frequency analysis is flat (Phase F). `-O2`/`-O3`/LTO and a
+Hex-Rays lift do not recover plaintext logic (Phase G). Overhead is
+bounded and measured per function (Phase H).
 
 ## Level 3 — Fortress VM
 
-* [ ] Add polymorphic VM builds
-* [ ] Add per-function ISA randomization
-* [ ] Add encrypted basic-block bytecode
-* [ ] Add handler MBA
-* [ ] Add handler BCF
-* [ ] Add fake opcodes
-* [ ] Add fake handlers
-* [ ] Add bytecode integrity checks
-* [ ] Add anti-frequency-analysis padding
-* [ ] Add VM devirtualization test samples
-* [ ] Add heavy warning for overhead
+L3 takes the L2 VM from "hard per function" to "polymorphic across
+builds, hostile to emulation, and resistant to devirtualization tooling."
+Nothing here is meaningful without L2 Phases A/C/D landed first —
+polymorphism on an unsafe or cryptographically trivial VM is noise.
+
+* [ ] Add polymorphic VM builds (per-build interpreter shape: handler
+      structure, alloca layout, register/spill choices differ across two
+      builds of the same source)
+* [ ] Add per-function ISA randomization (per-function opcode *set*, not
+      just permutation — some handlers present/absent, operand encoding
+      varies, so two +vmp functions in the same binary share no ISA)
+* [ ] Add encrypted basic-block bytecode (per-BB keys + integrity tags
+      beyond the L2 per-function scheme; decryption triggered on edge
+      transfer, not at function entry)
+* [ ] Add handler MBA (apply Section 4 MBA inside each handler's
+      arithmetic so the handler body itself is not a clean lift)
+* [ ] Add handler BCF (apply Section 3 BCF to each handler so the
+      handler CFG is not trivially readable)
+* [ ] Add fake opcodes (promote from L2 Phase F once the runtime
+      tolerates them, or land directly here as fortress-tier)
+* [ ] Add fake handlers (same)
+* [ ] Add bytecode integrity checks (promote from L2 Phase C, or land
+      here as cross-function/rolling integrity rather than entry-only)
+* [ ] Add anti-frequency-analysis padding (promote from L2 Phase F, or
+      land here as trace-resistance rather than histogram flattening)
+* [ ] Add VM devirtualization test samples (canonical samples an analyst
+      would feed to a devirt tool — must fail to lift cleanly)
+* [ ] Add heavy warning for overhead (Fortress VM is expensive; the pass
+      must refuse silently slowing a release build without an explicit
+      opt-in)
+
+L3 fortress additions beyond the original list — these are what make the
+VM hostile to *automated* reversing, not just manual reading:
+
+* [ ] Add PC encryption (PC is a plain i64 alloca; a debugger reads
+      control flow for free — encrypt the PC register at rest between
+      fetches)
+* [ ] Add stack/locals encryption at rest between handlers (operand
+      stack and Locals are plaintext i64 arrays; encrypt in the gaps so
+      a memory snapshot does not reveal intermediate values)
+* [ ] Add anti-debug/anti-trace inside the interpreter loop
+      (single-stepping dispatch reveals every handler — gate on
+      Section 12 Dynamic Protections when available)
+* [ ] Add anti-emulation (env/timing checks so the VM refuses to run
+      under a scriptable lifter — the VM must run on real hardware)
+* [ ] Add tamper-response policy (Phase A's tamper flag triggers
+      silent-wrong-results, slow-decay, or trap depending on config —
+      never an obvious crash that tells the analyst they hit a check)
+* [ ] Add VM self-verification (interpreter hashes its own handler
+      table before running; patched handler → tamper flag)
+* [ ] Add cross-function VM state (shared obfuscated runtime so a
+      single +vmp function cannot be lifted in isolation — its
+      handlers depend on module-wide state)
+* [ ] Add per-build handler-table obfuscation seed (two builds of the
+      same source produce structurally different handler tables, so a
+      signature from one build does not match the next)
 
 **Definition of done for L3:**
 Selected functions should not resemble native code logic anymore.
-They should require VM reversing before normal logic reversing.
+Two builds of the same source should not share a VM signature. A
+devirtualization tool fed the L3 samples should fail to lift cleanly.
+Tampering (bytecode patch, handler patch, single-step trace, memory
+snapshot) should be detected and routed through the tamper-response
+policy rather than producing an obvious crash. Overhead is heavy,
+measured, and gated behind an explicit opt-in.
 
 ---
 

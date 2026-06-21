@@ -52,7 +52,7 @@ struct MBA : public FunctionPass {
     if (!Probability)
       return false;
 
-    // ponytail: Level is reserved for L2 (multi-round, opaque constants). L1
+    // Level is reserved for L2 (multi-round, opaque constants). L1
     // applies the basic identity uniformly; new ops land after the snapshot so
     // they cannot grow the worklist.
     (void)Opt.level();

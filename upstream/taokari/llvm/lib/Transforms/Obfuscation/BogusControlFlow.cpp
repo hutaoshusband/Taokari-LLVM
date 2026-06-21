@@ -80,7 +80,7 @@ struct BogusControlFlow : public FunctionPass {
   }
 
   static bool eligible(BasicBlock &BB) {
-    // ponytail: no PHI repair yet; widen this when BCF must cover join blocks.
+    // no PHI repair yet; widen this when BCF must cover join blocks.
     if (&BB == &BB.getParent()->getEntryBlock() || BB.empty() ||
         BB.isEHPad() || isa<PHINode>(BB.begin()))
       return false;

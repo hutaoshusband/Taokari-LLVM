@@ -581,7 +581,7 @@ Value *StringEncryption::resolvePoolBase(IRBuilder<> &IRBInsert,
     InsertPt = &*PtIt;
   else
     InsertPt = IRBInsert.GetInsertBlock()->getTerminator();
-  // ponytail: page-table decryption needs a Function context; derive it from
+  // page-table decryption needs a Function context; derive it from
   // the insertion block.
   Function *Fn = InsertPt->getFunction();
   BuildDecryptArgs BDA{};
@@ -1362,7 +1362,7 @@ Value *StringEncryption::resolveDecryptorCallee(IRBuilder<> &IRBInsert,
                                                 Function *DecFunc) {
   if (!UseDecryptorIndirectCall)
     return DecFunc;
-  // ponytail: indirect-call hardening is owned by the dedicated IndirectCall
+  // indirect-call hardening is owned by the dedicated IndirectCall
   // pass downstream. Rather than duplicate its page-table machinery here
   // (which would race the global CalleeIndex map), we route the call through
   // an opaque pointer loaded from a private global. The IndirectCall pass
