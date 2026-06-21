@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import random
 import subprocess
 import sys
 import tempfile
@@ -93,8 +94,9 @@ CALL_RE = re.compile(
     r"call i64 @__taokari_vmp_interp_i64\("
     r"ptr [^,]*@__taokari_vmp_bc_(\w+), i64 \d+, "
     r"ptr [^,]*@__taokari_vmp_pcmap_\w+, ptr [^,]+, i64 \d+, "
-    r"ptr [^,]+, i64 (-?\d+), i64 (-?\d+)\)"
+    r"ptr [^,]+, i64 (-?\d+), i64 (-?\d+), i64 (-?\d+)\)"
 )
+I64_RE = re.compile(r"i64 (-?\d+)")
 
 
 def run(cmd: list[str], *, cwd: Path = ROOT,
@@ -137,6 +139,14 @@ def encode(words: list[int], starts: list[int], key: int,
     return out, pcmap
 
 
+def bytecode_tag(encoded: list[int]) -> int:
+    tag = 0xCBF29CE484222325
+    for i, word in enumerate(encoded):
+        tag ^= to_u64(word) + to_u64(i * GOLDEN)
+        tag = to_u64(tag * 0x100000001B3)
+    return to_i64(tag)
+
+
 def program(*items: tuple[int, list[int]]) -> tuple[list[int], list[int]]:
     words: list[int] = []
     starts: list[int] = []
@@ -171,12 +181,13 @@ def replace_array(text: str, regex: re.Pattern[str], name: str,
     return regex.sub(repl, text)
 
 
-def mutate_ir(text: str, name: str, count: int, key: int, opmask: int,
-              words: list[int], starts: list[int]) -> str:
-    count = max(count, len(words))
-    encoded, pcmap = encode(words, starts, key, opmask, count)
+def replace_encoded_ir(text: str, name: str, encoded: list[int],
+                       pcmap: list[int] | None,
+                       update_tag: bool) -> str:
+    count = len(encoded)
     text = replace_array(text, BC_RE, name, "i64", encoded)
-    text = replace_array(text, PCMAP_RE, name, "i8", pcmap)
+    if pcmap is not None:
+        text = replace_array(text, PCMAP_RE, name, "i8", pcmap)
     text = re.sub(
         rf"\[\d+ x i64\], ptr @__taokari_vmp_bc_{re.escape(name)}",
         f"[{count} x i64], ptr @__taokari_vmp_bc_{name}",
@@ -193,7 +204,30 @@ def mutate_ir(text: str, name: str, count: int, key: int, opmask: int,
         rf"\g<1>{count}\g<2>",
         text,
     )
+    if update_tag:
+        tag = bytecode_tag(encoded)
+        text = re.sub(
+            rf"(@__taokari_vmp_bc_{re.escape(name)}, i64 \d+, "
+            rf"ptr @__taokari_vmp_pcmap_{re.escape(name)}, ptr [^,]+, "
+            rf"i64 \d+, ptr [^,]+, i64 )-?\d+",
+            rf"\g<1>{tag}",
+            text,
+        )
     return text
+
+
+def mutate_ir(text: str, name: str, count: int, key: int, opmask: int,
+              words: list[int], starts: list[int]) -> str:
+    count = max(count, len(words))
+    encoded, pcmap = encode(words, starts, key, opmask, count)
+    return replace_encoded_ir(text, name, encoded, pcmap, update_tag=True)
+
+
+def encoded_words(text: str, name: str) -> list[int]:
+    for match in BC_RE.finditer(text):
+        if match.group(1) == name:
+            return [int(v) for v in I64_RE.findall(match.group(3))]
+    raise ValueError(f"missing bytecode global for {name}")
 
 
 def fail(msg: str) -> int:
@@ -226,7 +260,7 @@ def main() -> int:
         calls = CALL_RE.findall(text)
         if not calls:
             return fail("missing interpreter call")
-        name, key_s, mask_s = calls[0]
+        name, _tag_s, key_s, mask_s = calls[0]
         key = int(key_s)
         opmask = int(mask_s)
         globals_by_name = {m.group(1): int(m.group(2)) for m in BC_RE.finditer(text)}
@@ -272,6 +306,38 @@ def main() -> int:
             ll = tmpdir / f"{label}.ll"
             exe = tmpdir / f"{label}.exe"
             ll.write_text(mutate_ir(text, name, count, key, opmask, words, starts),
+                          encoding="utf-8")
+            build = run([str(CLANG), str(ll), "-o", str(exe)], use_vs_env=True)
+            if build.returncode:
+                sys.stderr.write(build.stdout + build.stderr)
+                return fail(f"{label} did not compile")
+            result = run([str(exe)])
+            if result.returncode != TRAP_EXIT:
+                sys.stderr.write(result.stdout + result.stderr)
+                return fail(f"{label} returned {result.returncode}, expected {TRAP_EXIT}")
+            print(f"  ok {label}")
+
+        base_encoded = encoded_words(text, name)
+        rng = random.Random(0x54414F)
+        fuzz_cases: list[tuple[str, list[int], list[int] | None]] = []
+        for i in range(8):
+            mutated = base_encoded.copy()
+            idx = rng.randrange(len(mutated))
+            mutated[idx] = to_i64(to_u64(mutated[idx]) ^ (1 << rng.randrange(63)))
+            fuzz_cases.append((f"encrypted-bitflip-{i}", mutated, None))
+        for i in range(8):
+            mutated = base_encoded.copy()
+            mutated[rng.randrange(len(mutated))] = to_i64(rng.getrandbits(64))
+            fuzz_cases.append((f"encrypted-word-replace-{i}", mutated, None))
+        fuzz_cases.append(("encrypted-truncated", base_encoded[:-1], [0] * (len(base_encoded) - 1)))
+        fuzz_cases.append(("encrypted-extended", base_encoded + [to_i64(rng.getrandbits(64))],
+                           [0] * (len(base_encoded) + 1)))
+
+        for label, encoded, pcmap in fuzz_cases:
+            ll = tmpdir / f"{label}.ll"
+            exe = tmpdir / f"{label}.exe"
+            ll.write_text(replace_encoded_ir(text, name, encoded, pcmap,
+                                             update_tag=False),
                           encoding="utf-8")
             build = run([str(CLANG), str(ll), "-o", str(exe)], use_vs_env=True)
             if build.returncode:

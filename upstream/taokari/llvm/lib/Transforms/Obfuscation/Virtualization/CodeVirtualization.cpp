@@ -990,6 +990,11 @@ struct CodeVirtualization : public ModulePass {
     return static_cast<int64_t>(static_cast<uint64_t>(Word) ^ Schedule);
   }
 
+  uint64_t mixBytecodeTag(uint64_t Tag, uint64_t Word, uint64_t Index) const {
+    Tag ^= Word + (Index * 0x9E3779B97F4A7C15ULL);
+    return Tag * 0x100000001B3ULL;
+  }
+
   Value *loadWord(IRBuilder<> &B, Type *I64, Value *BC, Value *PC,
                   Value *One) {
     Value *Addr = B.CreateGEP(I64, BC, PC);
@@ -1035,6 +1040,7 @@ struct CodeVirtualization : public ModulePass {
     Value *Args;
     Value *ArgLen;
     Value *TamperFlag;
+    Value *ExpectedTag;
     Value *BytecodeKey;
     Value *OpcodeMask;
     BasicBlock *Dispatch;
@@ -1491,12 +1497,13 @@ struct CodeVirtualization : public ModulePass {
     Type *I8 = Type::getInt8Ty(Ctx);
     Type *Ptr = PointerType::getUnqual(Ctx);
     // signature is i64(i64* bc, i64 bcLen, i8* pcMap, i64* args,
-    // i64 argLen, i64* tamper, i64 key, i64 opmask). bcLen is the
+    // i64 argLen, i64* tamper, i64 tag, i64 key, i64 opmask). bcLen is the
     // bytecode word count; the dispatch loop checks PC < bcLen before each
     // fetch so a corrupted PC (relevant once L2 encrypts the bytecode) faults
     // to the Bad block instead of reading out of bounds.
     auto *FTy =
-        FunctionType::get(I64, {Ptr, I64, Ptr, Ptr, I64, Ptr, I64, I64}, false);
+        FunctionType::get(I64, {Ptr, I64, Ptr, Ptr, I64, Ptr, I64, I64, I64},
+                          false);
     auto *F = Function::Create(FTy, GlobalValue::InternalLinkage,
                                "__taokari_vmp_interp_i64", M);
     F->addFnAttr(Attribute::NoUnwind);
@@ -1514,6 +1521,8 @@ struct CodeVirtualization : public ModulePass {
     ArgLen->setName("arg.len");
     Value *TamperFlag = &*ArgIt++;
     TamperFlag->setName("tamper");
+    Value *ExpectedTag = &*ArgIt++;
+    ExpectedTag->setName("bytecode.tag");
     Value *BytecodeKey = &*ArgIt++;
     BytecodeKey->setName("bytecode.key");
     Value *OpcodeMask = &*ArgIt;
@@ -1536,7 +1545,31 @@ struct CodeVirtualization : public ModulePass {
     auto *SP = B.CreateAlloca(I64, nullptr, "sp");
     B.CreateStore(ConstantInt::get(I64, 0), PC);
     B.CreateStore(ConstantInt::get(I64, 0), SP);
-    B.CreateBr(Dispatch);
+    auto *Tag = B.CreateAlloca(I64, nullptr, "tag");
+    auto *TagI = B.CreateAlloca(I64, nullptr, "tag.i");
+    B.CreateStore(ConstantInt::get(I64, 0xCBF29CE484222325ULL), Tag);
+    B.CreateStore(ConstantInt::get(I64, 0), TagI);
+    BasicBlock *TagHdr = BasicBlock::Create(Ctx, "tag.hdr", F);
+    BasicBlock *TagBody = BasicBlock::Create(Ctx, "tag.body", F);
+    BasicBlock *TagDone = BasicBlock::Create(Ctx, "tag.done", F);
+    B.CreateBr(TagHdr);
+    B.SetInsertPoint(TagHdr);
+    Value *CurTagI = B.CreateLoad(I64, TagI);
+    B.CreateCondBr(B.CreateICmpULT(CurTagI, BCLen), TagBody, TagDone);
+    B.SetInsertPoint(TagBody);
+    Value *CurWord = B.CreateLoad(I64, B.CreateGEP(I64, BC, CurTagI));
+    Value *CurTag = B.CreateLoad(I64, Tag);
+    Value *TagMix =
+        B.CreateAdd(CurWord, B.CreateMul(CurTagI, ConstantInt::get(I64, 0x9E3779B97F4A7C15ULL)));
+    Value *NextTag =
+        B.CreateMul(B.CreateXor(CurTag, TagMix),
+                    ConstantInt::get(I64, 0x100000001B3ULL));
+    B.CreateStore(NextTag, Tag);
+    B.CreateStore(B.CreateAdd(CurTagI, ConstantInt::get(I64, 1)), TagI);
+    B.CreateBr(TagHdr);
+    B.SetInsertPoint(TagDone);
+    B.CreateCondBr(B.CreateICmpEQ(B.CreateLoad(I64, Tag), ExpectedTag),
+                   Dispatch, Bad);
 
     B.SetInsertPoint(Dispatch);
     Value *OpPC = B.CreateLoad(I64, PC);
@@ -1558,7 +1591,7 @@ struct CodeVirtualization : public ModulePass {
     InterpCtx IC{I64,   F,       &Ctx, BC,       BCLen, PCMap, PC,
                  SP,    Stack,   Locals, Frame,  CallArgs,
                  CalleeTable, static_cast<unsigned>(CalleeOrder.size()),
-                 Args,  ArgLen,  TamperFlag, BytecodeKey, OpcodeMask,
+                 Args,  ArgLen,  TamperFlag, ExpectedTag, BytecodeKey, OpcodeMask,
                  Dispatch, Bad};
     Value *MappedOp = fetchWord(B, IC);
     Value *Op = B.CreateXor(MappedOp, OpcodeMask);
@@ -1595,8 +1628,10 @@ struct CodeVirtualization : public ModulePass {
       return false;
 
     SmallVector<Constant *, 64> Words;
+    uint64_t BytecodeTag = 0xCBF29CE484222325ULL;
     for (size_t I = 0; I < EncodedWords.size(); ++I) {
       int64_t Word = encryptBytecodeWord(EncodedWords[I], I, BytecodeKey);
+      BytecodeTag = mixBytecodeTag(BytecodeTag, static_cast<uint64_t>(Word), I);
       Words.push_back(ConstantInt::get(I64, static_cast<uint64_t>(Word), true));
     }
     auto *ArrayTy = ArrayType::get(I64, Words.size());
@@ -1646,6 +1681,7 @@ struct CodeVirtualization : public ModulePass {
     Value *Result = B.CreateCall(
         Interp, {BCPtr, BCLen, PCMapPtr, ArgsPtr,
                  ConstantInt::get(I64, F.arg_size()), TamperFlag,
+                 ConstantInt::get(I64, BytecodeTag),
                  ConstantInt::get(I64, BytecodeKey),
                  ConstantInt::get(I64, OpcodeMask)});
     Value *Tampered = B.CreateLoad(I64, TamperFlag);
