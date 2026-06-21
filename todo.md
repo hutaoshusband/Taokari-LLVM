@@ -701,7 +701,7 @@ Compatibility roadmap:
       unsupported islands stay native
 * [x] Add compatibility report: per function `virtualized`, `partially
       virtualized`, or `skipped`, with exact reason
-* [ ] Keep EXE, normal DLL load, and manual-map DLL tests as release-blocking
+* [x] Keep EXE, normal DLL load, and manual-map DLL tests as release-blocking
       gates
 
 **Definition of done for full compatibility:**

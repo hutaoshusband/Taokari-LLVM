@@ -80,9 +80,20 @@ class Case:
     no_rtti: bool = False
 
 
+@dataclass(frozen=True)
+class ReleaseGate:
+    name: str
+    script: Path
+
+
 def case_path(name: str) -> Path:
     return TESTING / "cases" / name
 
+
+RELEASE_GATES = [
+    ReleaseGate("vmp_exe_full_virtualization", TESTING / "scripts" / "verify_vmp_full_virtualization.py"),
+    ReleaseGate("vmp_dll_load_and_manual_map", TESTING / "scripts" / "verify_vmp_dll_load.py"),
+]
 
 IMGUI = TESTING / "vendor" / "imgui"
 CASES = [
@@ -259,6 +270,27 @@ def measure_runtime(exe: Path, rounds: int = 3) -> tuple[float, subprocess.Compl
     return best, last
 
 
+def run_release_gates(*, keep_going: bool) -> int:
+    failures = 0
+    for gate in RELEASE_GATES:
+        log("GATE", gate.name, "yellow")
+        result = run([sys.executable, str(gate.script)])
+        if result.returncode:
+            failures += 1
+            if result.stdout:
+                sys.stdout.write(result.stdout)
+            if result.stderr:
+                sys.stderr.write(result.stderr)
+            log("FAIL", gate.name, "red")
+            if not keep_going:
+                return failures
+            continue
+        if result.stdout:
+            sys.stdout.write(result.stdout)
+        log("PASS", gate.name, "green")
+    return failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compile and run Taokari obfuscation tests.")
     parser.add_argument("--clang", type=Path, default=DEFAULT_CLANG)
@@ -358,6 +390,8 @@ def main() -> int:
             writer.writeheader()
             writer.writerows(benchmark_rows)
         log("BENCH", str(args.benchmark_out), "green")
+    if not args.case and not args.benchmark_out:
+        failures += run_release_gates(keep_going=args.keep_going)
     return 1 if failures else 0
 
 
