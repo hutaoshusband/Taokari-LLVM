@@ -37,6 +37,11 @@ static cl::opt<uint32_t> VMPMaxBytecodeWords(
     cl::desc("Maximum bytecode words per VMP function before virtualization "
              "is refused; 0 disables the limit."));
 
+static cl::opt<uint32_t> VMPPaddingPercent(
+    "taokari-vmp-padding", cl::init(0), cl::NotHidden,
+    cl::desc("Percent of VMP instructions followed by a semantic no-op "
+             "padding opcode, 0..100."));
+
 // Opcode encoding is the stable on-the-wire bytecode value. These
 // integers must NOT change once bytecode is shipped; the interpreter handler
 // table is keyed off them. L2 opcode-mapping/encryption layers will sit on
@@ -98,6 +103,7 @@ enum Opcode : int64_t {
   // External pointer GEP with one runtime index: base + index * byte stride.
   OpGep = 37,
   OpPtrConst = 38,
+  OpPad = 39,
   // Dead anti-analysis handlers. They are emitted into the interpreter
   // dispatcher but never encoded into valid opcode maps.
   OpFakeArith = 48,
@@ -1014,6 +1020,8 @@ struct CodeVirtualization : public ModulePass {
       return {2, 1, 1};
     case OpPtrConst:
       return {0, 1, 1};
+    case OpPad:
+      return {0, 0, 1};
     case OpCall:
       // pops NArgs values (runtime), fetches calleeIdx + nargs + VmTy, pushes
       // 1 result. Pops/Pushes are conservative (actual pop count is data).
@@ -1068,6 +1076,7 @@ struct CodeVirtualization : public ModulePass {
     case OpStoreMem:
     case OpGep:
     case OpPtrConst:
+    case OpPad:
       Count = 1;
       return true;
     case OpCmpEq:
@@ -1192,6 +1201,51 @@ struct CodeVirtualization : public ModulePass {
       I += 1 + Immediates;
     }
     return true;
+  }
+
+  bool insertDummyPadding(BytecodeProgram &P) {
+    unsigned Percent = std::min<uint32_t>(VMPPaddingPercent, 100);
+    if (!Percent)
+      return true;
+
+    SmallVector<int64_t, 64> Old(P.Words.begin(), P.Words.end());
+    SmallVector<int64_t, 64> Padded;
+    DenseMap<size_t, size_t> Remap;
+    size_t I = 0;
+    while (I < Old.size()) {
+      unsigned Immediates = 0;
+      if (!opcodeImmediateCount(Old[I], Immediates) ||
+          I + 1 + Immediates > Old.size())
+        return false;
+      Remap[I] = Padded.size();
+      for (size_t J = I; J < I + 1 + Immediates; ++J)
+        Padded.push_back(Old[J]);
+      if (std::uniform_int_distribution<unsigned>(1, 100)(RNG) <= Percent) {
+        Padded.push_back(OpPad);
+        Padded.push_back(static_cast<int64_t>(RNG()));
+      }
+      I += 1 + Immediates;
+    }
+    if (I != Old.size())
+      return false;
+
+    I = 0;
+    while (I < Padded.size()) {
+      unsigned Immediates = 0;
+      if (!opcodeImmediateCount(Padded[I], Immediates) ||
+          I + 1 + Immediates > Padded.size())
+        return false;
+      if (Padded[I] == OpJmp || Padded[I] == OpBrTrue) {
+        auto It = Remap.find(static_cast<size_t>(Padded[I + 1]));
+        if (It == Remap.end())
+          return false;
+        Padded[I + 1] = static_cast<int64_t>(It->second);
+      }
+      I += 1 + Immediates;
+    }
+
+    P.Words = std::move(Padded);
+    return checkStackDepth(P);
   }
 
   uint64_t bytecodeDomain(bool IsOpcodeWord) const {
@@ -1639,6 +1693,11 @@ struct CodeVirtualization : public ModulePass {
                    Value *PtrVal =
                        B.CreateLoad(Ptr, B.CreateGEP(Ptr, C.PtrTable, Idx));
                    pushStk(B, C, B.CreatePtrToInt(PtrVal, C.I64));
+                   B.CreateBr(C.Dispatch);
+                 }});
+    H.push_back({OpPad, "pad", shapeOf(OpPad),
+                 [this, &C](IRBuilder<> &B) {
+                   (void)fetchWord(B, C);
                    B.CreateBr(C.Dispatch);
                  }});
 
@@ -2372,6 +2431,14 @@ struct CodeVirtualization : public ModulePass {
         OptimizationRemarkMissed R(DEBUG_TYPE, "EncodeFailed", F);
         R << "skipped: bytecode encoding failed (frame overflow, stack "
              "depth, or unsupported operand pattern)";
+        ORE.emit(R);
+        ++Skipped;
+        continue;
+      }
+      if (!insertDummyPadding(P)) {
+        OptimizationRemarkMissed R(DEBUG_TYPE, "PaddingFailed", F);
+        R << "skipped: bytecode padding failed (invalid branch target or "
+             "opcode shape)";
         ORE.emit(R);
         ++Skipped;
         continue;

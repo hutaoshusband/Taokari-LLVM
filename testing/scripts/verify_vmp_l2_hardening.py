@@ -115,7 +115,7 @@ def check_ir(text: str) -> int:
     if len(opmaps) < len(calls) or len(set(opmaps.values())) < 4:
         return fail("opcode maps are not per-function")
 
-    expected_ops = set(range(1, 39))
+    expected_ops = set(range(1, 40))
     for name, key_arg in calls:
         words = globals_by_name.get(name)
         if not words:
