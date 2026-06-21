@@ -145,6 +145,12 @@ CASES = [
     # an IndirectGlobalVariable surface; inlined comparison functors fold under
     # -O2/LTO.
     Case("stl_containers", (case_path("stl_containers") / "src" / "main.cpp",), "stl:45359:6663465:10017:5120:317450\n"),
+    # Multithreading & synchronisation fixture: std::thread pool join,
+    # std::mutex + lock_guard contention, producer/consumer on
+    # condition_variable, std::async + std::future, std::atomic fetch_add.
+    # Thread entry points are indirect calls; mutex/atomic ordering must stay
+    # race-free after obfuscation.
+    Case("multithreading", (case_path("multithreading") / "src" / "main.cpp",), "thread:1480266:4000:10000:59718:12000\n"),
     Case("cpp_console", (case_path("cpp_console") / "src" / "main.cpp",), "cpp-console:144\n"),
     Case("cpp_classes", (case_path("cpp_classes") / "src" / "main.cpp",), "classes:124:taokari\n"),
     Case("cpp_templates", (case_path("cpp_templates") / "src" / "main.cpp",), "templates:55:29\n"),
