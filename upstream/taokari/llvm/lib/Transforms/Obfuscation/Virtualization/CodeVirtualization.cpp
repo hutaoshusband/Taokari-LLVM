@@ -2,6 +2,7 @@
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
@@ -180,6 +181,7 @@ struct CodeVirtualization : public ModulePass {
   DenseMap<Function *, unsigned> CalleeIndex;
   SmallVector<Function *, 8> CalleeOrder;
   GlobalVariable *CalleeTable = nullptr;
+  uint64_t CalleeTableKey = 0;
 
   CodeVirtualization(ObfuscationOptions *ArgsOptions) : ModulePass(ID) {
     this->ArgsOptions = ArgsOptions;
@@ -1293,6 +1295,23 @@ struct CodeVirtualization : public ModulePass {
     return B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 31)));
   }
 
+  uint64_t calleeTableMaskWord(uint64_t Index) const {
+    return bytecodeScheduleWord(CalleeTableKey, Index,
+                                0x6A09E667F3BCC909ULL);
+  }
+
+  Value *calleeTableMaskWord(IRBuilder<> &B, InterpCtx &C, Value *Index) {
+    Value *X = B.CreateXor(
+        ConstantInt::get(C.I64, CalleeTableKey),
+        B.CreateMul(Index, ConstantInt::get(C.I64, 0x9E3779B97F4A7C15ULL)));
+    X = B.CreateXor(X, ConstantInt::get(C.I64, 0x6A09E667F3BCC909ULL));
+    X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 30)));
+    X = B.CreateMul(X, ConstantInt::get(C.I64, 0xBF58476D1CE4E5B9ULL));
+    X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 27)));
+    X = B.CreateMul(X, ConstantInt::get(C.I64, 0x94D049BB133111EBULL));
+    return B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 31)));
+  }
+
   Value *fetchWord(IRBuilder<> &B, InterpCtx &C) {
     Value *Cur = B.CreateLoad(C.I64, C.PC);
     branchIfFalse(B, C, B.CreateICmpULT(Cur, C.BCLen));
@@ -1555,9 +1574,9 @@ struct CodeVirtualization : public ModulePass {
     // opcode would hit the Bad default (which never fires because no OpCall
     // was emitted). Fetches <calleeIdx> <nargs> <VmTy>, pops nargs values
     // into the CallArgs buffer (popping yields declaration order because the
-    // encoder pushed them in reverse), loads the call-thunk pointer from
-    // CalleeTable[calleeIdx], calls it uniformly as i64(i64*), narrows the
-    // i64 result by VmTy, and pushes it.
+    // encoder pushed them in reverse), validates the masked CalleeTable token,
+    // calls the matching thunk uniformly as i64(i64*), narrows the i64 result
+    // by VmTy, and pushes it.
     if (C.CalleeTable) {
       H.push_back({OpCall, "call", shapeOf(OpCall),
                    [this, &C](IRBuilder<> &B) {
@@ -1594,16 +1613,31 @@ struct CodeVirtualization : public ModulePass {
                                    Counter);
                      B.CreateBr(LoopHdr);
                      B.SetInsertPoint(LoopDone);
-                     Value *ThunkPtrInt = B.CreateLoad(
+                     Value *MaskedCalleeToken = B.CreateLoad(
                          C.I64, B.CreateGEP(C.I64, C.CalleeTable, CalleeIdx));
-                     Value *ThunkPtr = B.CreateIntToPtr(
-                         ThunkPtrInt, PointerType::getUnqual(*C.Ctx));
+                     branchIfFalse(
+                         B, C,
+                         B.CreateICmpEQ(MaskedCalleeToken,
+                                        calleeTableMaskWord(B, C, CalleeIdx)));
                      auto *ThunkFnTy = FunctionType::get(
                          C.I64, {PointerType::getUnqual(*C.Ctx)}, false);
-                     Value *Result =
-                         B.CreateCall(ThunkFnTy, ThunkPtr, {C.CallArgs});
-                     pushStk(B, C, narrowTo(B, C, Result, Ty));
-                     B.CreateBr(C.Dispatch);
+                     SwitchInst *CallSwitch = B.CreateSwitch(CalleeIdx, C.Bad,
+                                                             C.CalleeCount);
+                     Module &M = *C.F->getParent();
+                     for (auto [Index, Callee] : llvm::enumerate(CalleeOrder)) {
+                       BasicBlock *CallBB =
+                           BasicBlock::Create(*C.Ctx, "call.target", C.F);
+                       CallSwitch->addCase(
+                           ConstantInt::get(cast<IntegerType>(C.I64),
+                                            static_cast<uint64_t>(Index)),
+                           CallBB);
+                       B.SetInsertPoint(CallBB);
+                       Function *Thunk = getOrCreateCallThunk(M, Callee);
+                       Value *Result =
+                           B.CreateCall(ThunkFnTy, Thunk, {C.CallArgs});
+                       pushStk(B, C, narrowTo(B, C, Result, Ty));
+                       B.CreateBr(C.Dispatch);
+                     }
                    }});
     }
 
@@ -2128,15 +2162,21 @@ struct CodeVirtualization : public ModulePass {
   void finalizeCalleeTable(Module &M) {
     if (CalleeOrder.empty()) {
       CalleeTable = nullptr;
+      CalleeTableKey = 0;
       return;
     }
-    // Replace each direct callee with its call-thunk in the table.
+    // Store masked per-index callee tokens; OpCall validates them before
+    // dispatching to the generated call-thunk case.
+    CalleeTableKey = RNG();
+    if (!CalleeTableKey)
+      CalleeTableKey = 0xD6E8FEB86659FD93ULL;
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
     SmallVector<Constant *, 8> Entries;
-    for (Function *Callee : CalleeOrder) {
-      Function *Thunk = getOrCreateCallThunk(M, Callee);
-      Entries.push_back(ConstantExpr::getPtrToInt(Thunk, I64));
+    for (auto [Index, Callee] : llvm::enumerate(CalleeOrder)) {
+      (void)getOrCreateCallThunk(M, Callee);
+      Entries.push_back(
+          ConstantInt::get(I64, calleeTableMaskWord(static_cast<uint64_t>(Index))));
     }
     auto *ArrayTy = ArrayType::get(I64, Entries.size());
     CalleeTable = new GlobalVariable(

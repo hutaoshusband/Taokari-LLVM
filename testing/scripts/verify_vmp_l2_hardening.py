@@ -20,6 +20,10 @@ GLOBAL_RE = re.compile(
 OPMAP_RE = re.compile(
     r"@__taokari_vmp_opmap_(\w+) = .*?\[(\d+) x i64\] \[(.*?)\]",
 )
+CALLEE_TABLE_RE = re.compile(
+    r"@__taokari_vmp_callees = .*?\[(\d+) x i64\] \[(.*?)\]",
+    re.S,
+)
 CALL_RE = re.compile(
     r"call i64 @(__taokari_vmp_interp_i64_[^(]+)\((.*?)\)"
 )
@@ -111,6 +115,21 @@ def check_ir(text: str) -> int:
         return fail("handler cases are still canonical order")
     if len(set(case_orders)) < 2:
         return fail("handler switch order is still shared")
+
+    callee_match = CALLEE_TABLE_RE.search(text)
+    if not callee_match:
+        return fail("missing direct-call callee table")
+    callee_count = int(callee_match.group(1))
+    callee_body = callee_match.group(2)
+    if "__taokari_vmp_callthunk_" not in text:
+        return fail("direct-call thunks were not emitted")
+    if "__taokari_vmp_callthunk_" in callee_body or "ptrtoint" in callee_body:
+        return fail("callee table still exposes thunk pointers")
+    callee_tokens = [int(v) for v in I64_RE.findall(callee_body)]
+    if len(callee_tokens) != callee_count:
+        return fail("callee table token count is wrong")
+    if any(0 <= token < callee_count for token in callee_tokens):
+        return fail("callee table entries are still plaintext indices")
     return 0
 
 
