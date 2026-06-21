@@ -162,6 +162,12 @@ CASES = [
     # Inline asm must pass through unchanged; packed GEP offsets must stay
     # byte-exact after ConstantIntEncryption.
     Case("inline_asm", (case_path("inline_asm") / "src" / "main.cpp",), "asm:6912:260:130:305468953:1111:8710\n"),
+    # Preprocessor & macros fixture: token paste (##) with two-level
+    # indirection, stringize (#), variadic compound-literal arg counting,
+    # multi-line do/while(0) clamp macro, conditional #if selection,
+    # __LINE__, and static_assert. Macro expansion feeds the int/string
+    # constants that ConstantInt/ConstantString encryption must preserve.
+    Case("preprocessor", (case_path("preprocessor") / "src" / "main.c",), "preproc:1170:-564375010:4:100:TAO23\n", no_rtti=True),
     Case("cpp_console", (case_path("cpp_console") / "src" / "main.cpp",), "cpp-console:144\n"),
     Case("cpp_classes", (case_path("cpp_classes") / "src" / "main.cpp",), "classes:124:taokari\n"),
     Case("cpp_templates", (case_path("cpp_templates") / "src" / "main.cpp",), "templates:55:29\n"),
