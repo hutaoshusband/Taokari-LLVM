@@ -144,6 +144,16 @@ def rotl64(v: int, rot: int) -> int:
     return to_u64((v << rot) | (v >> (64 - rot))) if rot else v
 
 
+def bytecode_schedule(key: int, index: int) -> int:
+    x = to_u64(key) ^ to_u64(index * GOLDEN) ^ 0xA5A5A5A5D3C3B2A1
+    x ^= x >> 30
+    x = to_u64(x * 0xBF58476D1CE4E5B9)
+    x ^= x >> 27
+    x = to_u64(x * 0x94D049BB133111EB)
+    x ^= x >> 31
+    return to_u64(x)
+
+
 def derived_keys(text: str) -> dict[str, int]:
     seeds = {name: to_u64(int(value)) for name, value in KEY_SEED_RE.findall(text)}
     keys: dict[str, int] = {}
@@ -171,7 +181,7 @@ def encode(words: list[int], starts: list[int], key: int,
     out: list[int] = []
     for i, word in enumerate(plain):
         mapped = word ^ opmask if pcmap[i] else word
-        enc = to_u64(mapped) ^ to_u64(key + i * GOLDEN)
+        enc = to_u64(mapped) ^ bytecode_schedule(key, i)
         out.append(to_i64(enc))
     return out, pcmap
 

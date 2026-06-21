@@ -32,6 +32,14 @@ def fail(msg: str) -> int:
 
 
 def check_ir(text: str) -> int:
+    for constant in (
+        "-6510615554653179231",
+        "-4658895280553007687",
+        "-7723592293110705685",
+    ):
+        if constant not in text:
+            return fail("bytecode stream schedule constants missing")
+
     globals_by_name: dict[str, list[int]] = {}
     for name, _count, body in GLOBAL_RE.findall(text):
         words = [int(v) for v in I64_RE.findall(body)]

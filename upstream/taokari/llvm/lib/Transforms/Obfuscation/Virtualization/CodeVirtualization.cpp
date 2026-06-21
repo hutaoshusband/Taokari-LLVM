@@ -1100,9 +1100,20 @@ struct CodeVirtualization : public ModulePass {
 
   int64_t encryptBytecodeWord(int64_t Word, size_t Index,
                               uint64_t BytecodeKey) const {
-    uint64_t Schedule =
-        BytecodeKey + (static_cast<uint64_t>(Index) * 0x9E3779B97F4A7C15ULL);
-    return static_cast<int64_t>(static_cast<uint64_t>(Word) ^ Schedule);
+    return static_cast<int64_t>(
+        static_cast<uint64_t>(Word) ^
+        bytecodeScheduleWord(BytecodeKey, static_cast<uint64_t>(Index)));
+  }
+
+  uint64_t bytecodeScheduleWord(uint64_t Key, uint64_t Index) const {
+    uint64_t X =
+        Key ^ (Index * 0x9E3779B97F4A7C15ULL) ^ 0xA5A5A5A5D3C3B2A1ULL;
+    X ^= X >> 30;
+    X *= 0xBF58476D1CE4E5B9ULL;
+    X ^= X >> 27;
+    X *= 0x94D049BB133111EBULL;
+    X ^= X >> 31;
+    return X;
   }
 
   uint64_t rotl64(uint64_t V, unsigned Rot) const {
@@ -1228,14 +1239,24 @@ struct CodeVirtualization : public ModulePass {
     return Width;
   }
 
+  Value *bytecodeScheduleWord(IRBuilder<> &B, InterpCtx &C, Value *Index) {
+    Value *X = B.CreateXor(
+        C.BytecodeKey,
+        B.CreateMul(Index, ConstantInt::get(C.I64, 0x9E3779B97F4A7C15ULL)));
+    X = B.CreateXor(X, ConstantInt::get(C.I64, 0xA5A5A5A5D3C3B2A1ULL));
+    X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 30)));
+    X = B.CreateMul(X, ConstantInt::get(C.I64, 0xBF58476D1CE4E5B9ULL));
+    X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 27)));
+    X = B.CreateMul(X, ConstantInt::get(C.I64, 0x94D049BB133111EBULL));
+    return B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 31)));
+  }
+
   Value *fetchWord(IRBuilder<> &B, InterpCtx &C) {
     Value *Cur = B.CreateLoad(C.I64, C.PC);
     branchIfFalse(B, C, B.CreateICmpULT(Cur, C.BCLen));
     Value *Enc = B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.BC, Cur));
     B.CreateStore(B.CreateAdd(Cur, ConstantInt::get(C.I64, 1)), C.PC);
-    Value *Mix = B.CreateMul(Cur, ConstantInt::get(C.I64, 0x9E3779B97F4A7C15ULL));
-    Value *Key = B.CreateAdd(C.BytecodeKey, Mix);
-    return B.CreateXor(Enc, Key);
+    return B.CreateXor(Enc, bytecodeScheduleWord(B, C, Cur));
   }
 
   void pushStk(IRBuilder<> &B, InterpCtx &C, Value *V) {
