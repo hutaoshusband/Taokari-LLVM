@@ -117,6 +117,11 @@ CASES = [
     # std::function, capturing lambdas, and C varargs. Stresses IndirectCall
     # on every call site, struct return ABI, and varargs ABI.
     Case("functions", (case_path("functions") / "src" / "main.cpp",), "functions:15:14:23:23:36:111:25:105:15:7:16\n"),
+    # Inheritance & polymorphism fixture: abstract base, multiple inheritance,
+    # a virtual-inheritance diamond, virtual destructor, polymorphic delete
+    # via unique_ptr, and catch-by-base (RTTI). Stresses IndirectCall on every
+    # virtual call, this-adjustment thunks, and MicrosoftRTTIEraser.
+    Case("cpp_inheritance", (case_path("cpp_inheritance") / "src" / "main.cpp",), "inherit:272:140:7\n"),
     Case("cpp_console", (case_path("cpp_console") / "src" / "main.cpp",), "cpp-console:144\n"),
     Case("cpp_classes", (case_path("cpp_classes") / "src" / "main.cpp",), "classes:124:taokari\n"),
     Case("cpp_templates", (case_path("cpp_templates") / "src" / "main.cpp",), "templates:55:29\n"),
