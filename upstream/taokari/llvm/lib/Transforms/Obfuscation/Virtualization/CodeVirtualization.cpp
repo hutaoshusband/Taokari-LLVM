@@ -21,7 +21,9 @@
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/RandomNumberGenerator.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
 
 #include <algorithm>
@@ -55,6 +57,18 @@ static cl::opt<uint32_t> VMPMaxBytecodeExpansion(
     "taokari-vmp-max-bytecode-expansion", cl::init(0), cl::NotHidden,
     cl::desc("Maximum bytecode words per original IR instruction before VMP "
              "refuses a function; 0 disables the limit."));
+
+static cl::opt<std::string> VMPCompatReportPath(
+    "taokari-vmp-compat-report", cl::init(""), cl::NotHidden,
+    cl::desc("Write a TSV VMP compatibility report to this path."));
+
+struct VMPCompatEntry {
+  std::string FunctionName;
+  std::string Status;
+  std::string Reason;
+  unsigned Words = 0;
+  unsigned SplitRegions = 0;
+};
 
 // Opcode encoding is the stable on-the-wire bytecode value. These
 // integers must NOT change once bytecode is shipped; the interpreter handler
@@ -407,6 +421,36 @@ struct CodeVirtualization : public ModulePass {
       return true;
     }
     return false;
+  }
+
+  void addCompatEntry(SmallVectorImpl<VMPCompatEntry> &Entries, Function &F,
+                      StringRef Status, StringRef Reason, unsigned Words = 0,
+                      unsigned SplitRegions = 0) const {
+    VMPCompatEntry Entry;
+    Entry.FunctionName = std::string(F.getName());
+    Entry.Status = std::string(Status);
+    Entry.Reason = std::string(Reason);
+    Entry.Words = Words;
+    Entry.SplitRegions = SplitRegions;
+    Entries.push_back(std::move(Entry));
+  }
+
+  void writeCompatReport(ArrayRef<VMPCompatEntry> Entries) const {
+    if (VMPCompatReportPath.empty())
+      return;
+    std::error_code EC;
+    raw_fd_ostream OS(VMPCompatReportPath, EC, sys::fs::OF_Text);
+    if (EC) {
+      errs() << "taokari-vmp: failed to write compatibility report '"
+             << VMPCompatReportPath << "': " << EC.message() << "\n";
+      return;
+    }
+    OS << "function\tstatus\treason\twords\tsplit_regions\n";
+    for (const VMPCompatEntry &Entry : Entries) {
+      OS << Entry.FunctionName << '\t' << Entry.Status << '\t'
+         << Entry.Reason << '\t' << Entry.Words << '\t'
+         << Entry.SplitRegions << '\n';
+    }
   }
 
   bool shouldSkip(Function &F) const {
@@ -2881,6 +2925,7 @@ struct CodeVirtualization : public ModulePass {
     // see which functions virtualized and why skipped functions were rejected.
     unsigned Virtualized = 0;
     unsigned Skipped = 0;
+    SmallVector<VMPCompatEntry, 8> CompatReport;
 
     // Phase 1: encode every target. This populates CalleeOrder with the
     // call targets referenced across all virtualized functions.
@@ -2895,6 +2940,8 @@ struct CodeVirtualization : public ModulePass {
           << ore::NV("BackEdges", BackEdges) << " > "
           << ore::NV("Limit", VMPMaxBackEdges.getValue()) << ")";
         ORE.emit(R);
+        addCompatEntry(CompatReport, *F, "skipped",
+                       "hot-loop budget exceeded");
         ++Skipped;
         continue;
       }
@@ -2908,12 +2955,16 @@ struct CodeVirtualization : public ModulePass {
             << ore::NV("SplitRegions", (unsigned)SplitTargets.size())
             << " split region(s))";
           ORE.emit(R);
+          addCompatEntry(CompatReport, *F, "partially_virtualized",
+                         "unsupported islands stay native",
+                         0, SplitTargets.size());
           continue;
         }
         OptimizationRemarkMissed R(DEBUG_TYPE, "UnsupportedIR", F);
         R << "skipped: unsupported IR (PHI/call/EH/memory pattern outside "
              "the L1.5 ISA)";
         ORE.emit(R);
+        addCompatEntry(CompatReport, *F, "skipped", "unsupported IR");
         ++Skipped;
         continue;
       }
@@ -2923,6 +2974,8 @@ struct CodeVirtualization : public ModulePass {
         R << "skipped: bytecode encoding failed (frame overflow, stack "
              "depth, or unsupported operand pattern)";
         ORE.emit(R);
+        addCompatEntry(CompatReport, *F, "skipped",
+                       "bytecode encoding failed");
         ++Skipped;
         continue;
       }
@@ -2931,6 +2984,8 @@ struct CodeVirtualization : public ModulePass {
         R << "skipped: bytecode padding failed (invalid branch target or "
              "opcode shape)";
         ORE.emit(R);
+        addCompatEntry(CompatReport, *F, "skipped",
+                       "bytecode padding failed");
         ++Skipped;
         continue;
       }
@@ -2952,6 +3007,9 @@ struct CodeVirtualization : public ModulePass {
           << ore::NV("Instructions", InstCount) << " * "
           << ore::NV("Multiplier", VMPMaxBytecodeExpansion.getValue()) << ")";
         ORE.emit(R);
+        addCompatEntry(CompatReport, *F, "skipped",
+                       "bytecode expansion budget exceeded",
+                       (unsigned)P.Words.size());
         ++Skipped;
         continue;
       }
@@ -2962,6 +3020,9 @@ struct CodeVirtualization : public ModulePass {
           << ore::NV("Words", (unsigned)P.Words.size()) << " > "
           << ore::NV("Limit", VMPMaxBytecodeWords.getValue()) << ")";
         ORE.emit(R);
+        addCompatEntry(CompatReport, *F, "skipped",
+                       "bytecode size budget exceeded",
+                       (unsigned)P.Words.size());
         ++Skipped;
         continue;
       }
@@ -2981,11 +3042,14 @@ struct CodeVirtualization : public ModulePass {
         << ore::NV("Words", (unsigned)P.Words.size())
         << " bytecode words)";
       ORE.emit(R);
+      addCompatEntry(CompatReport, *F, "virtualized", "ok",
+                     (unsigned)P.Words.size());
       ++Virtualized;
     }
 
     LLVM_DEBUG(dbgs() << "taokari-vmp: " << Virtualized << " virtualized, "
                       << Skipped << " skipped\n");
+    writeCompatReport(CompatReport);
     return Changed;
   }
 };

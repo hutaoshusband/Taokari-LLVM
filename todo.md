@@ -699,7 +699,7 @@ Compatibility roadmap:
 * [x] Add indirect/function-pointer call support or split-around fallback
 * [x] Add function splitting: VM-supported regions become bytecode,
       unsupported islands stay native
-* [ ] Add compatibility report: per function `virtualized`, `partially
+* [x] Add compatibility report: per function `virtualized`, `partially
       virtualized`, or `skipped`, with exact reason
 * [ ] Keep EXE, normal DLL load, and manual-map DLL tests as release-blocking
       gates
