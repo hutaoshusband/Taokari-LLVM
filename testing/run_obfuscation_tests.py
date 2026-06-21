@@ -107,6 +107,11 @@ CASES = [
     # bit-mask idioms, and a byte-order probe. Validates ConstantIntEncryption
     # and MBA on AND/OR/XOR under -O2/LTO.
     Case("bit_ops", (case_path("bit_ops") / "src" / "main.c",), "bitops:4043304975:253011243:896:31:2\n"),
+    # Control-flow & loop fixture: nested if/switch/for/while/do-while,
+    # break/continue/goto/return, comma operator, recursive factorial and a
+    # recursive BST built with malloc. Stresses Flattening, IndirectBranch,
+    # LegacyLowerSwitch and BCF opaque predicates.
+    Case("control_flow", (case_path("control_flow") / "src" / "main.cpp",), "ctrlflow:3628800:1:702:2208152:460\n"),
     Case("cpp_console", (case_path("cpp_console") / "src" / "main.cpp",), "cpp-console:144\n"),
     Case("cpp_classes", (case_path("cpp_classes") / "src" / "main.cpp",), "classes:124:taokari\n"),
     Case("cpp_templates", (case_path("cpp_templates") / "src" / "main.cpp",), "templates:55:29\n"),
