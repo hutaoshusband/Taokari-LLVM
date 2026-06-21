@@ -122,6 +122,11 @@ CASES = [
     # via unique_ptr, and catch-by-base (RTTI). Stresses IndirectCall on every
     # virtual call, this-adjustment thunks, and MicrosoftRTTIEraser.
     Case("cpp_inheritance", (case_path("cpp_inheritance") / "src" / "main.cpp",), "inherit:272:140:7\n"),
+    # Advanced templates fixture: full + partial specialisations, non-type
+    # parameter, variadic template, CRTP base, generic Matrix<T> with operator
+    # overloads, and a generic bubble_sort. Each instantiation is its own IR
+    # function exercised by ConstantIntEncryption/MBA/IndirectCall.
+    Case("cpp_templates_adv", (case_path("cpp_templates_adv") / "src" / "main.cpp",), "templates-adv:3:42:15:6:70:165029893\n"),
     Case("cpp_console", (case_path("cpp_console") / "src" / "main.cpp",), "cpp-console:144\n"),
     Case("cpp_classes", (case_path("cpp_classes") / "src" / "main.cpp",), "classes:124:taokari\n"),
     Case("cpp_templates", (case_path("cpp_templates") / "src" / "main.cpp",), "templates:55:29\n"),
