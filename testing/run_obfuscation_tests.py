@@ -168,6 +168,12 @@ CASES = [
     # __LINE__, and static_assert. Macro expansion feeds the int/string
     # constants that ConstantInt/ConstantString encryption must preserve.
     Case("preprocessor", (case_path("preprocessor") / "src" / "main.c",), "preproc:1170:-564375010:4:100:TAO23\n", no_rtti=True),
+    # Security & sanitizer-compat fixture: unsigned wrap-around, signed/unsigned
+    # division+modulo rounding, signed/unsigned comparison promotion, strict-
+    # aliasing-safe memcpy punning, length-bounded string ops, bounds-clamped
+    # stack indexing, and INT_MIN/-1 guard. All well-defined; obfuscation must
+    # not introduce UB by reassociating signed overflow.
+    Case("security_edge", (case_path("security_edge") / "src" / "main.c",), "sec:4294967295:699:701:10:1065353216:827111744:81:0\n", no_rtti=True),
     Case("cpp_console", (case_path("cpp_console") / "src" / "main.cpp",), "cpp-console:144\n"),
     Case("cpp_classes", (case_path("cpp_classes") / "src" / "main.cpp",), "classes:124:taokari\n"),
     Case("cpp_templates", (case_path("cpp_templates") / "src" / "main.cpp",), "templates:55:29\n"),
