@@ -11,6 +11,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/RandomNumberGenerator.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
+#include "llvm/Transforms/Obfuscation/OpaquePredicate.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
 #include <algorithm>
@@ -122,15 +123,27 @@ struct BogusControlFlow : public FunctionPass {
     Pred->getTerminator()->replaceSuccessorWith(&BB, Guard);
 
     IRBuilder<> GuardIR(Guard);
-    auto *Load =
-        GuardIR.CreateAlignedLoad(Int64, Nonce, Align(8), true, "bcf.nonce");
-    Value *A = GuardIR.CreateMul(
-        Load, GuardIR.CreateAdd(Load, ConstantInt::get(Int64, 1)),
-        "bcf.opaque.mul");
-    Value *Even = GuardIR.CreateICmpEQ(
-        GuardIR.CreateAnd(A, ConstantInt::get(Int64, 1), "bcf.opaque.bit"),
-        ConstantInt::get(Int64, 0), "bcf.opaque");
-    GuardIR.CreateCondBr(Even, &BB, Fake);
+    Value *Opaque = nullptr;
+    if (Level >= 2) {
+      Value *Seed = taokari::makeContextSeed(
+          F, GuardIR, Int64, FuncRNG, taokari::OpaqueSeedKind::Global,
+          "bcf.seed");
+      Opaque = (FuncRNG() & 1)
+                   ? taokari::makeTruePredicate(GuardIR, Seed, FuncRNG,
+                                                "bcf.opaque")
+                   : taokari::makeUnfoldableTruePredicate(
+                         GuardIR, Seed, FuncRNG, "bcf.opaque");
+    } else {
+      auto *Load =
+          GuardIR.CreateAlignedLoad(Int64, Nonce, Align(8), true, "bcf.nonce");
+      Value *A = GuardIR.CreateMul(
+          Load, GuardIR.CreateAdd(Load, ConstantInt::get(Int64, 1)),
+          "bcf.opaque.mul");
+      Opaque = GuardIR.CreateICmpEQ(
+          GuardIR.CreateAnd(A, ConstantInt::get(Int64, 1), "bcf.opaque.bit"),
+          ConstantInt::get(Int64, 0), "bcf.opaque");
+    }
+    GuardIR.CreateCondBr(Opaque, &BB, Fake);
     return true;
   }
 

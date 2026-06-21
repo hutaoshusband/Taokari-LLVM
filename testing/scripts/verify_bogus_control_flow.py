@@ -91,6 +91,7 @@ def main() -> int:
             "__taokari_bcf_junk",
             "bcf.fake.call",
             "bcf.fake.nonce",
+            "bcf.seed.vload",
             "bcf.opaque",
         ]
         missing = [needle for needle in required if needle not in text]
