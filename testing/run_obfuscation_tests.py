@@ -112,6 +112,11 @@ CASES = [
     # recursive BST built with malloc. Stresses Flattening, IndirectBranch,
     # LegacyLowerSwitch and BCF opaque predicates.
     Case("control_flow", (case_path("control_flow") / "src" / "main.cpp",), "ctrlflow:3628800:1:702:2208152:460\n"),
+    # Functions & parameter passing fixture: value/reference/pointer params,
+    # varying return types (int/double/struct), inline, function pointers,
+    # std::function, capturing lambdas, and C varargs. Stresses IndirectCall
+    # on every call site, struct return ABI, and varargs ABI.
+    Case("functions", (case_path("functions") / "src" / "main.cpp",), "functions:15:14:23:23:36:111:25:105:15:7:16\n"),
     Case("cpp_console", (case_path("cpp_console") / "src" / "main.cpp",), "cpp-console:144\n"),
     Case("cpp_classes", (case_path("cpp_classes") / "src" / "main.cpp",), "classes:124:taokari\n"),
     Case("cpp_templates", (case_path("cpp_templates") / "src" / "main.cpp",), "templates:55:29\n"),
