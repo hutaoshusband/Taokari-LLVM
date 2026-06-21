@@ -193,15 +193,25 @@ def main() -> int:
             print(f"vmp pointer support: FAIL (missing bytecode {expected - names})",
                   file=sys.stderr)
             return 1
-        if "i64 35, label" not in text or "i64 36, label" not in text:
+        opmap_values = {
+            int(v)
+            for body in re.findall(r"@__taokari_vmp_opmap_\w+ = .*?\[\d+ x i64\] \[(.*?)\]",
+                                   text, re.S)
+            for v in re.findall(r"i64 (-?\d+)", body)
+        }
+        if "indirectbr" not in text:
+            print("vmp pointer support: FAIL (indirect handler dispatch missing)",
+                  file=sys.stderr)
+            return 1
+        if not {35, 36}.issubset(opmap_values):
             print("vmp pointer support: FAIL (external memory handlers missing)",
                   file=sys.stderr)
             return 1
-        if "i64 37, label" not in text:
+        if 37 not in opmap_values:
             print("vmp pointer support: FAIL (external GEP handler missing)",
                   file=sys.stderr)
             return 1
-        if "i64 38, label" not in text or "__taokari_vmp_ptrs_" not in text:
+        if 38 not in opmap_values or "__taokari_vmp_ptrs_" not in text:
             print("vmp pointer support: FAIL (global pointer table missing)",
                   file=sys.stderr)
             return 1

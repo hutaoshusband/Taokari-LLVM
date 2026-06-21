@@ -2025,13 +2025,31 @@ struct CodeVirtualization : public ModulePass {
     branchIfFalse(B, IC,
                   B.CreateICmpNE(Op, ConstantInt::getSigned(I64, -1)));
     SmallVector<Handler, 24> Handlers = buildHandlerTable(IC);
-    auto *Sw = B.CreateSwitch(Op, Bad, Handlers.size());
-
+    uint64_t DispatchKey = RNG();
+    if (!DispatchKey)
+      DispatchKey = 0xA0761D6478BD642FULL;
+    Value *DispatchToken =
+        B.CreateXor(Op, ConstantInt::get(I64, DispatchKey));
+    Value *Target = BlockAddress::get(F, Bad);
+    SmallVector<BasicBlock *, 24> Dests;
+    Dests.push_back(Bad);
+    SmallVector<std::pair<Handler *, BasicBlock *>, 24> HandlerBlocks;
     for (Handler &H : Handlers) {
       BasicBlock *CaseBB = BasicBlock::Create(Ctx, H.Name, F);
-      Sw->addCase(cast<ConstantInt>(ConstantInt::get(I64, H.Op)), CaseBB);
+      uint64_t EncOp = static_cast<uint64_t>(H.Op) ^ DispatchKey;
+      Value *Hit = B.CreateICmpEQ(DispatchToken, ConstantInt::get(I64, EncOp));
+      Target = B.CreateSelect(Hit, BlockAddress::get(F, CaseBB), Target,
+                              "handler.target");
+      Dests.push_back(CaseBB);
+      HandlerBlocks.push_back({&H, CaseBB});
+    }
+    auto *IBI = B.CreateIndirectBr(Target, Dests.size());
+    for (BasicBlock *Dest : Dests)
+      IBI->addDestination(Dest);
+
+    for (auto [H, CaseBB] : HandlerBlocks) {
       B.SetInsertPoint(CaseBB);
-      H.Emit(B);
+      H->Emit(B);
     }
 
     B.SetInsertPoint(Bad);

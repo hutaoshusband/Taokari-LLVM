@@ -144,17 +144,10 @@ def check_ir(text: str) -> int:
     if len(rotated) < 2:
         return fail("per-basic-block bytecode rotation is not observable")
 
-    switch_bodies = re.findall(r"switch i64 .*?\[(.*?)\]", text, re.S)
-    if not switch_bodies:
-        return fail("missing interpreter switch")
-    case_orders = [
-        tuple(int(v) for v in re.findall(r"i64 (\d+), label", body))
-        for body in switch_bodies
-    ]
-    if any(order == tuple(sorted(order)) for order in case_orders):
-        return fail("handler cases are still canonical order")
-    if len(set(case_orders)) < 2:
-        return fail("handler switch order is still shared")
+    if text.count("indirectbr") < len(calls):
+        return fail("VM handler dispatch is not indirectbr-backed")
+    if text.count("blockaddress(") < len(calls):
+        return fail("VM handler dispatch does not use blockaddress targets")
 
     callee_match = CALLEE_TABLE_RE.search(text)
     if not callee_match:
