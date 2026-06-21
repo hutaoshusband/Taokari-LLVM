@@ -20,6 +20,10 @@ GLOBAL_RE = re.compile(
 OPMAP_RE = re.compile(
     r"@__taokari_vmp_opmap_(\w+) = .*?\[(\d+) x i64\] \[(.*?)\]",
 )
+PCMAP_RE = re.compile(
+    r"@__taokari_vmp_pcmap_(\w+) = .*?constant \[(\d+) x i8\] c\"(.*?)\"",
+    re.S,
+)
 CALLEE_TABLE_RE = re.compile(
     r"@__taokari_vmp_callees = .*?\[(\d+) x i64\] \[(.*?)\]",
     re.S,
@@ -40,12 +44,28 @@ def fail(msg: str) -> int:
     return 1
 
 
+def parse_ir_c_bytes(body: str) -> list[int]:
+    out: list[int] = []
+    i = 0
+    while i < len(body):
+        if body[i] == "\\" and i + 2 < len(body):
+            h = body[i + 1:i + 3]
+            if re.fullmatch(r"[0-9A-Fa-f]{2}", h):
+                out.append(int(h, 16))
+                i += 3
+                continue
+        out.append(ord(body[i]) & 0xFF)
+        i += 1
+    return out
+
+
 def check_ir(text: str) -> int:
     for constant in (
         "-6510615554653179231",
         "4354685564936845354",
         "-4658895280553007687",
         "-7723592293110705685",
+        "-3372029247567499371",
     ):
         if constant not in text:
             return fail("bytecode stream schedule constants missing")
@@ -60,6 +80,12 @@ def check_ir(text: str) -> int:
         values = tuple(int(v) for v in I64_RE.findall(body))
         if values:
             opmaps[name] = values
+    pcmaps: dict[str, list[int]] = {}
+    for name, count, body in PCMAP_RE.findall(text):
+        flags = parse_ir_c_bytes(body)
+        if len(flags) != int(count):
+            return fail(f"{name} pcmap length is wrong")
+        pcmaps[name] = flags
 
     calls: list[tuple[str, str]] = []
     interp_names: list[str] = []
@@ -103,6 +129,20 @@ def check_ir(text: str) -> int:
             return fail(f"{name} missing runtime key seed global")
         if 0 <= words[0] < 64:
             return fail(f"{name} bytecode first word is plaintext")
+        flags = pcmaps.get(name)
+        if not flags:
+            return fail(f"{name} missing pc rotation map")
+        if len(flags) != len(words):
+            return fail(f"{name} pc rotation map length does not match bytecode")
+        if not any((flag & 1) != 0 for flag in flags):
+            return fail(f"{name} pc map lost opcode-start markers")
+
+    rotated = [
+        name for name, flags in pcmaps.items()
+        if len({flag >> 1 for flag in flags}) > 1
+    ]
+    if len(rotated) < 2:
+        return fail("per-basic-block bytecode rotation is not observable")
 
     switch_bodies = re.findall(r"switch i64 .*?\[(.*?)\]", text, re.S)
     if not switch_bodies:

@@ -1112,10 +1112,14 @@ struct CodeVirtualization : public ModulePass {
     return I == Words.size();
   }
 
-  bool computeOpcodeStarts(const SmallVectorImpl<int64_t> &Words,
-                           SmallVectorImpl<uint8_t> &Starts) const {
-    Starts.assign(Words.size(), 0);
+  bool computePCMapFlags(const SmallVectorImpl<int64_t> &Words,
+                         SmallVectorImpl<uint8_t> &Flags,
+                         uint8_t RotationStep) const {
+    SmallVector<uint8_t, 64> Starts(Words.size(), 0);
+    SmallVector<uint8_t, 64> Leaders(Words.size(), 0);
     size_t I = 0;
+    if (!Words.empty())
+      Leaders[0] = 1;
     while (I < Words.size()) {
       unsigned Immediates = 0;
       if (!opcodeImmediateCount(Words[I], Immediates))
@@ -1125,20 +1129,68 @@ struct CodeVirtualization : public ModulePass {
       Starts[I] = 1;
       I += 1 + Immediates;
     }
-    return I == Words.size();
+    if (I != Words.size())
+      return false;
+
+    I = 0;
+    while (I < Words.size()) {
+      unsigned Immediates = 0;
+      if (!opcodeImmediateCount(Words[I], Immediates))
+        return false;
+      size_t Next = I + 1 + Immediates;
+      auto MarkTarget = [&](int64_t Target) {
+        if (Target >= 0 && static_cast<uint64_t>(Target) < Words.size() &&
+            Starts[static_cast<size_t>(Target)])
+          Leaders[static_cast<size_t>(Target)] = 1;
+      };
+      switch (static_cast<Opcode>(Words[I])) {
+      case OpJmp:
+        MarkTarget(Words[I + 1]);
+        break;
+      case OpBrTrue:
+        MarkTarget(Words[I + 1]);
+        if (Next < Words.size())
+          Leaders[Next] = 1;
+        break;
+      default:
+        break;
+      }
+      I = Next;
+    }
+
+    Flags.assign(Words.size(), 0);
+    uint8_t Rotation = 0;
+    for (I = 0; I < Words.size();) {
+      unsigned Immediates = 0;
+      if (!opcodeImmediateCount(Words[I], Immediates))
+        return false;
+      if (Leaders[I])
+        Rotation = static_cast<uint8_t>((Rotation + RotationStep) & 0x7F);
+      uint8_t Packed = static_cast<uint8_t>((Rotation << 1) | 1);
+      Flags[I] = Packed;
+      for (size_t J = I + 1; J < I + 1 + Immediates; ++J)
+        Flags[J] = static_cast<uint8_t>(Rotation << 1);
+      I += 1 + Immediates;
+    }
+    return true;
   }
 
   uint64_t bytecodeDomain(bool IsOpcodeWord) const {
     return IsOpcodeWord ? 0xA5A5A5A5D3C3B2A1ULL : 0x3C6EF372FE94F82AULL;
   }
 
+  uint64_t bytecodeRotationDomain(uint8_t PCFlags) const {
+    return static_cast<uint64_t>(PCFlags >> 1) * 0xD1342543DE82EF95ULL;
+  }
+
   int64_t encryptBytecodeWord(int64_t Word, size_t Index,
                               uint64_t BytecodeKey,
-                              bool IsOpcodeWord) const {
+                              uint8_t PCFlags) const {
     return static_cast<int64_t>(
         static_cast<uint64_t>(Word) ^
         bytecodeScheduleWord(BytecodeKey, static_cast<uint64_t>(Index),
-                             bytecodeDomain(IsOpcodeWord)));
+                             bytecodeDomain((PCFlags & 1) != 0) ^
+                                 bytecodeRotationDomain(PCFlags)));
   }
 
   uint64_t bytecodeScheduleWord(uint64_t Key, uint64_t Index,
@@ -1276,14 +1328,19 @@ struct CodeVirtualization : public ModulePass {
   }
 
   Value *bytecodeScheduleWord(IRBuilder<> &B, InterpCtx &C, Value *Index) {
-    Value *IsOpcodeWord =
-        B.CreateICmpNE(B.CreateLoad(Type::getInt8Ty(*C.Ctx),
-                                    B.CreateGEP(Type::getInt8Ty(*C.Ctx),
-                                                C.PCMap, Index)),
-                       ConstantInt::get(Type::getInt8Ty(*C.Ctx), 0));
+    Type *I8 = Type::getInt8Ty(*C.Ctx);
+    Value *PCFlags = B.CreateLoad(I8, B.CreateGEP(I8, C.PCMap, Index));
+    Value *IsOpcodeWord = B.CreateICmpNE(
+        B.CreateAnd(PCFlags, ConstantInt::get(I8, 1)),
+        ConstantInt::get(I8, 0));
     Value *Domain = B.CreateSelect(
         IsOpcodeWord, ConstantInt::get(C.I64, 0xA5A5A5A5D3C3B2A1ULL),
         ConstantInt::get(C.I64, 0x3C6EF372FE94F82AULL));
+    Value *Rotation = B.CreateZExt(
+        B.CreateLShr(PCFlags, ConstantInt::get(I8, 1)), C.I64);
+    Domain = B.CreateXor(
+        Domain,
+        B.CreateMul(Rotation, ConstantInt::get(C.I64, 0xD1342543DE82EF95ULL)));
     Value *X = B.CreateXor(
         C.BytecodeKey,
         B.CreateMul(Index, ConstantInt::get(C.I64, 0x9E3779B97F4A7C15ULL)));
@@ -1947,8 +2004,9 @@ struct CodeVirtualization : public ModulePass {
     BasicBlock *Fetch = BasicBlock::Create(Ctx, "fetch", F);
     B.CreateCondBr(InBounds, PcMapCheck, Bad);
     B.SetInsertPoint(PcMapCheck);
+    Value *PCFlags = B.CreateLoad(I8, B.CreateGEP(I8, PCMap, OpPC));
     Value *IsOpStart =
-        B.CreateLoad(I8, B.CreateGEP(I8, PCMap, OpPC));
+        B.CreateAnd(PCFlags, ConstantInt::get(I8, 1));
     B.CreateCondBr(B.CreateICmpNE(IsOpStart, ConstantInt::get(I8, 0)), Fetch,
                    Bad);
     B.SetInsertPoint(Fetch);
@@ -1995,8 +2053,9 @@ struct CodeVirtualization : public ModulePass {
     if (!buildOpcodeMaps(OpcodeEncode, OpcodeDecode))
       return false;
     SmallVector<int64_t, 64> EncodedWords(P.Words.begin(), P.Words.end());
-    SmallVector<uint8_t, 64> OpcodeStarts;
-    if (!computeOpcodeStarts(P.Words, OpcodeStarts))
+    SmallVector<uint8_t, 64> PCFlags;
+    uint8_t RotationStep = static_cast<uint8_t>((RNG() % 63) + 1);
+    if (!computePCMapFlags(P.Words, PCFlags, RotationStep))
       return false;
     if (!mapOpcodeWords(EncodedWords, OpcodeEncode))
       return false;
@@ -2004,8 +2063,8 @@ struct CodeVirtualization : public ModulePass {
     SmallVector<Constant *, 64> Words;
     uint64_t BytecodeTag = 0xCBF29CE484222325ULL;
     for (size_t I = 0; I < EncodedWords.size(); ++I) {
-      int64_t Word = encryptBytecodeWord(EncodedWords[I], I, BytecodeKey,
-                                         OpcodeStarts[I] != 0);
+      int64_t Word =
+          encryptBytecodeWord(EncodedWords[I], I, BytecodeKey, PCFlags[I]);
       BytecodeTag = mixBytecodeTag(BytecodeTag, static_cast<uint64_t>(Word), I);
       Words.push_back(ConstantInt::get(I64, static_cast<uint64_t>(Word), true));
     }
@@ -2019,7 +2078,7 @@ struct CodeVirtualization : public ModulePass {
 
     Type *I8 = Type::getInt8Ty(Ctx);
     SmallVector<Constant *, 64> Starts;
-    for (uint8_t V : OpcodeStarts)
+    for (uint8_t V : PCFlags)
       Starts.push_back(ConstantInt::get(I8, V));
     auto *PCMapArrayTy = ArrayType::get(I8, Starts.size());
     auto *PCMap = new GlobalVariable(
