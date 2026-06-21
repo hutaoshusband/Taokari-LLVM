@@ -1,6 +1,8 @@
 """Runtime tamper checks for the Taokari VMP interpreter."""
 from __future__ import annotations
 
+import argparse
+import os
 import re
 import random
 import subprocess
@@ -118,8 +120,15 @@ KEY_DERIV_RE = re.compile(
 I64_RE = re.compile(r"i64 (-?\d+)")
 
 
-def run(cmd: list[str], *, cwd: Path = ROOT,
-        use_vs_env: bool = False) -> subprocess.CompletedProcess[str]:
+def find_asan_runtime_dir() -> Path | None:
+    clang_root = CLANG.parents[1] / "lib" / "clang"
+    for dll in clang_root.glob("*/lib/windows/clang_rt.asan_dynamic-x86_64.dll"):
+        return dll.parent
+    return None
+
+
+def run(cmd: list[str], *, cwd: Path = ROOT, use_vs_env: bool = False,
+        env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     if use_vs_env and VSDEVCMD.exists():
         with tempfile.NamedTemporaryFile("w", suffix=".cmd", delete=False,
                                          encoding="utf-8") as handle:
@@ -129,10 +138,10 @@ def run(cmd: list[str], *, cwd: Path = ROOT,
             handle.write(subprocess.list2cmdline(cmd) + "\n")
         try:
             return subprocess.run(["cmd.exe", "/c", str(batch)], cwd=cwd,
-                                  text=True, capture_output=True)
+                                  text=True, capture_output=True, env=env)
         finally:
             batch.unlink(missing_ok=True)
-    return subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
+    return subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, env=env)
 
 
 def to_u64(v: int) -> int:
@@ -300,9 +309,25 @@ def fail(msg: str) -> int:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--asan", action="store_true",
+                        help="link mutated bytecode executables with ASan")
+    args = parser.parse_args()
+
     if not CLANG.exists():
         print(f"missing clang: {CLANG}", file=sys.stderr)
         return 2
+
+    link_flags: list[str] = []
+    run_env = None
+    if args.asan:
+        asan_dir = find_asan_runtime_dir()
+        if asan_dir is None:
+            print("missing ASan runtime DLL", file=sys.stderr)
+            return 2
+        link_flags.append("-fsanitize=address")
+        run_env = os.environ.copy()
+        run_env["PATH"] = str(asan_dir) + os.pathsep + run_env.get("PATH", "")
 
     with tempfile.TemporaryDirectory(prefix="taokari-vmp-traps-") as tmp:
         tmpdir = Path(tmp)
@@ -380,11 +405,12 @@ def main() -> int:
             ll.write_text(mutate_ir(text, name, count, key, opcode_encode,
                                     words, starts),
                           encoding="utf-8")
-            build = run([str(CLANG), str(ll), "-o", str(exe)], use_vs_env=True)
+            build = run([str(CLANG), str(ll), *link_flags, "-o", str(exe)],
+                        use_vs_env=True)
             if build.returncode:
                 sys.stderr.write(build.stdout + build.stderr)
                 return fail(f"{label} did not compile")
-            result = run([str(exe)])
+            result = run([str(exe)], env=run_env)
             if result.returncode != TRAP_EXIT:
                 sys.stderr.write(result.stdout + result.stderr)
                 return fail(f"{label} returned {result.returncode}, expected {TRAP_EXIT}")
@@ -412,17 +438,19 @@ def main() -> int:
             ll.write_text(replace_encoded_ir(text, name, encoded, pcmap,
                                              update_tag=False),
                           encoding="utf-8")
-            build = run([str(CLANG), str(ll), "-o", str(exe)], use_vs_env=True)
+            build = run([str(CLANG), str(ll), *link_flags, "-o", str(exe)],
+                        use_vs_env=True)
             if build.returncode:
                 sys.stderr.write(build.stdout + build.stderr)
                 return fail(f"{label} did not compile")
-            result = run([str(exe)])
+            result = run([str(exe)], env=run_env)
             if result.returncode != TRAP_EXIT:
                 sys.stderr.write(result.stdout + result.stderr)
                 return fail(f"{label} returned {result.returncode}, expected {TRAP_EXIT}")
             print(f"  ok {label}")
 
-    print("vmp runtime traps: ok")
+    suffix = " asan" if args.asan else ""
+    print(f"vmp runtime traps{suffix}: ok")
     return 0
 
 
