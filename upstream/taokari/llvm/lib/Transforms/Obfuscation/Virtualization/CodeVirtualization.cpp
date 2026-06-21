@@ -104,9 +104,9 @@ enum Opcode : int64_t {
   // L1.5.1 direct calls. OpCall fetches <calleeIdx> <nargs>
   // <resultVmTy>, pops nargs operand-stack values into a call-args buffer,
   // calls callees[calleeIdx] (resolved by the encoder to a direct Function*),
-  // and pushes the i64 return narrowed by resultVmTy. Integer args/return
-  // only; pointer/float/vararg callees reject the whole function. Indirect/
-  // virtual calls stay rejected.
+  // and pushes the i64 return narrowed by resultVmTy. Integer and pointer
+  // args/returns are carried as i64; float/aggregate/vararg callees reject
+  // the whole function. Indirect/virtual calls stay rejected.
   OpCall = 34,
   // External pointer argument load/store. Pointers are carried as i64
   // addresses; memory is accessed bytewise at the encoded integer width.
@@ -161,6 +161,12 @@ static VmTy vmTyFromType(Type *Ty) {
   // per-use when it knows the signedness from the instruction (e.g. UDiv is
   // unsigned). For plain loads/args the conservative default is signed.
   return T;
+}
+
+static VmTy vmTyFromStackType(Type *Ty) {
+  if (Ty->isPointerTy())
+    return {64, false};
+  return vmTyFromType(Ty);
 }
 
 // Pack VmTy into a single int64 immediate (bits 0..7 = width,
@@ -250,19 +256,21 @@ struct CodeVirtualization : public ModulePass {
 
   // True if a CallInst is virtualizable by the L1.5.1 OpCall path.
   // Requirements: direct callee (Function*, not a function pointer), non-
-  // variadic, integer args each <=64 bits, integer-or-void return <=64 bits.
-  // Indirect/virtual calls, vararg, pointer/float args reject the caller.
+  // variadic, int/pointer args, and int/pointer/void return.
+  // Indirect/virtual calls, vararg, float/vector/aggregate args reject the
+  // caller.
   bool isVMCompatibleCall(const CallInst &CI) const {
     const Function *Callee = dyn_cast<Function>(CI.getCalledOperand());
     if (!Callee)
       return false; // indirect call (function pointer)
     if (Callee->isVarArg())
       return false;
+    const DataLayout &DL = CI.getFunction()->getParent()->getDataLayout();
     if (!Callee->getReturnType()->isVoidTy() &&
-        !isSupportedInt(Callee->getReturnType()))
+        !isSupportedArg(Callee->getReturnType(), DL))
       return false;
     for (const Use &Arg : CI.args()) {
-      if (!isSupportedInt(Arg->getType()))
+      if (!isSupportedArg(Arg->getType(), DL))
         return false;
     }
     if (CI.arg_size() > 8)
@@ -975,7 +983,7 @@ struct CodeVirtualization : public ModulePass {
           P.Words.push_back(static_cast<int64_t>(CI->arg_size()));
           VmTy RetTy{64, true};
           if (!Callee->getReturnType()->isVoidTy())
-            RetTy = vmTyFromType(Callee->getReturnType());
+            RetTy = vmTyFromStackType(Callee->getReturnType());
           P.Words.push_back(packVmTy(RetTy));
           if (!Callee->getReturnType()->isVoidTy()) {
             P.Words.push_back(OpStoreSlot);
@@ -2623,7 +2631,7 @@ struct CodeVirtualization : public ModulePass {
     ArgsPtr->setName("args");
 
     // Build typed argument values by loading each i64 slot and truncating to
-    // the callee's declared arg type.
+    // the callee's declared arg type, or inttoptr-ing raw pointer addresses.
     SmallVector<Value *, 8> CallArgs;
     unsigned I = 0;
     Value *Zero = ConstantInt::get(I64, 0);
@@ -2632,8 +2640,11 @@ struct CodeVirtualization : public ModulePass {
           ArrayType::get(I64, std::max<unsigned>(1, Callee->arg_size())),
           ArgsPtr, {Zero, ConstantInt::get(I64, I++)});
       Value *Raw = B.CreateLoad(I64, SlotPtr);
-      // Truncate the canonical i64 down to the declared arg width.
-      CallArgs.push_back(B.CreateTrunc(Raw, A.getType()));
+      if (A.getType()->isPointerTy())
+        CallArgs.push_back(B.CreateIntToPtr(Raw, A.getType()));
+      else
+        // Truncate the canonical i64 down to the declared arg width.
+        CallArgs.push_back(B.CreateTrunc(Raw, A.getType()));
     }
 
     if (Callee->getReturnType()->isVoidTy()) {
@@ -2641,11 +2652,9 @@ struct CodeVirtualization : public ModulePass {
       B.CreateRet(maskThunkResult(B, M, ConstantInt::get(I64, 0)));
     } else {
       Value *Result = B.CreateCall(Callee, CallArgs);
-      // ZExt to i64 -- the call result is already in canonical form when the
-      // callee is itself virtualized; for external callees we trust the
-      // declared type. Sign vs zero: zext is safe because the OpCall handler
-      // narrows via VmTy afterward.
-      Value *Wide = B.CreateZExt(Result, I64);
+      Value *Wide = Callee->getReturnType()->isPointerTy()
+                        ? B.CreatePtrToInt(Result, I64)
+                        : B.CreateZExtOrTrunc(Result, I64);
       B.CreateRet(maskThunkResult(B, M, Wide));
     }
     return Thunk;

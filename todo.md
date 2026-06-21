@@ -695,7 +695,7 @@ Compatibility roadmap:
 * [x] Add raw `switch` lowering
 * [x] Add `memcpy` / `memset` / `memmove` intrinsic support
 * [x] Add multi-index and struct-field GEP support
-* [ ] Add pointer args and pointer returns in VM direct calls
+* [x] Add pointer args and pointer returns in VM direct calls
 * [ ] Add indirect/function-pointer call support or split-around fallback
 * [ ] Add function splitting: VM-supported regions become bytecode,
       unsupported islands stay native
