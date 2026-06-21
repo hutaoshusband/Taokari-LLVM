@@ -151,6 +151,11 @@ CASES = [
     # Thread entry points are indirect calls; mutex/atomic ordering must stay
     # race-free after obfuscation.
     Case("multithreading", (case_path("multithreading") / "src" / "main.cpp",), "thread:1480266:4000:10000:59718:12000\n"),
+    # File & stream I/O fixture: ofstream/ifstream/fstream in text + binary,
+    # ios::out/app/binary, seekg/seekp, hex/oct formatting, and file lifecycle.
+    # Exercises the vtable-backed iostream path (IndirectCall) and the hex/oct
+    # manipulator constants (ConstantIntEncryption).
+    Case("file_io", (case_path("file_io") / "src" / "main.cpp",), "io:168:150:4399400:0xff 0100 00042\n"),
     Case("cpp_console", (case_path("cpp_console") / "src" / "main.cpp",), "cpp-console:144\n"),
     Case("cpp_classes", (case_path("cpp_classes") / "src" / "main.cpp",), "classes:124:taokari\n"),
     Case("cpp_templates", (case_path("cpp_templates") / "src" / "main.cpp",), "templates:55:29\n"),
