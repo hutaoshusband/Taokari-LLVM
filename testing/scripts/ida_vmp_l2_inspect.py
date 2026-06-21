@@ -16,6 +16,11 @@ import ida_pro
 import ida_ua
 import idautils
 
+try:
+    import ida_hexrays
+except ImportError:
+    ida_hexrays = None
+
 
 def main() -> int:
     report_path = os.environ.get("TAOKARI_IDA_REPORT")
@@ -53,11 +58,24 @@ def main() -> int:
         if data:
             first_qwords[name] = int.from_bytes(data, "little", signed=True)
 
+    hexrays_available = bool(
+        ida_hexrays and ida_hexrays.init_hexrays_plugin()
+    )
+    pseudocode_lines = 0
+    if hexrays_available and interp_ea is not None:
+        try:
+            cfunc = ida_hexrays.decompile(interp_ea)
+            pseudocode_lines = len(str(cfunc).splitlines()) if cfunc else 0
+        except Exception:
+            pseudocode_lines = 0
+
     report = {
         "interpreter_found": interp_ea is not None,
         "interpreter_ea": interp_ea,
         "bytecode_globals": len(bytecode),
         "first_qwords": first_qwords,
+        "hexrays_available": hexrays_available,
+        "interpreter_pseudocode_lines": pseudocode_lines,
         "xor_count": mnems.get("xor", 0),
         "imul_count": mnems.get("imul", 0),
         "jmp_count": mnems.get("jmp", 0),
@@ -67,6 +85,7 @@ def main() -> int:
         report["interpreter_found"]
         and report["xor_count"] >= 2
         and report["imul_count"] >= 1
+        and (not hexrays_available or pseudocode_lines >= 20)
     )
     report["ok"] = ok
     with open(report_path, "w", encoding="utf-8") as handle:
