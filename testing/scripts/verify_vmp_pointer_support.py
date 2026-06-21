@@ -36,14 +36,27 @@ VMP int ptr_alias_case(int *p, int *q) {
   return *p;
 }
 
+VMP int ptr_gep_load_case(int *p, unsigned i) {
+  return p[i & 3] + 9;
+}
+
+VMP int ptr_gep_store_case(int *p, unsigned i, int v) {
+  p[i & 3] = v - 4;
+  return p[i & 3];
+}
+
 int main(void) {
   int a = 39;
   int b = 0;
   int c = 1;
+  int arr[4] = {3, 5, 7, 11};
   int load = ptr_load_case(&a);
   int store = ptr_store_case(&b, 20);
   int alias = ptr_alias_case(&c, &c);
-  printf("ptr:%d:%d:%d:%d:%d\n", load, store, b, alias, c);
+  int gep_load = ptr_gep_load_case(arr, 6);
+  int gep_store = ptr_gep_store_case(arr, 1, 44);
+  printf("ptr:%d:%d:%d:%d:%d:%d:%d:%d\n", load, store, b, alias, c,
+         gep_load, gep_store, arr[1]);
   return 0;
 }
 """
@@ -120,13 +133,23 @@ def main() -> int:
             return 1
         text = ll.read_text(encoding="utf-8", errors="ignore")
         names = set(re.findall(r"@__taokari_vmp_bc_(ptr_\w+_case)", text))
-        expected = {"ptr_load_case", "ptr_store_case", "ptr_alias_case"}
+        expected = {
+            "ptr_load_case",
+            "ptr_store_case",
+            "ptr_alias_case",
+            "ptr_gep_load_case",
+            "ptr_gep_store_case",
+        }
         if not expected.issubset(names):
             print(f"vmp pointer support: FAIL (missing bytecode {expected - names})",
                   file=sys.stderr)
             return 1
         if "i64 35, label" not in text or "i64 36, label" not in text:
             print("vmp pointer support: FAIL (external memory handlers missing)",
+                  file=sys.stderr)
+            return 1
+        if "i64 37, label" not in text:
+            print("vmp pointer support: FAIL (external GEP handler missing)",
                   file=sys.stderr)
             return 1
 

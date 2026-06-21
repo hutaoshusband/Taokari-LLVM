@@ -87,6 +87,8 @@ enum Opcode : int64_t {
   // addresses; memory is accessed bytewise at the encoded integer width.
   OpLoadMem = 35,
   OpStoreMem = 36,
+  // External pointer GEP with one runtime index: base + index * byte stride.
+  OpGep = 37,
 };
 
 // How many operand-stack pops and bytecode immediates a handler
@@ -752,10 +754,33 @@ struct CodeVirtualization : public ModulePass {
           P.Words.push_back(packVmTy(vmTyFromType(ST->getValueOperand()->getType())));
           continue;
         }
-        // GetElementPtrInst produces no bytecode of its own -- emitValue
-        // resolves it to a PushConst frame index when the pointer is used.
-        if (isa<GetElementPtrInst>(I)) {
-          slotFor(Slots, &I); // register so emitValue(GEP) can re-resolve
+        // VM-local GEPs produce no bytecode; external pointer-arg GEPs compute
+        // base + index * stride and store the raw address in a locals slot.
+        if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
+          int64_t FrameIdx = 0;
+          if (resolveFramePtr(GEP, AllocaBase, NextFrameSlot, FrameIdx)) {
+            slotFor(Slots, &I);
+            continue;
+          }
+          if (GEP->getNumIndices() != 1)
+            return false;
+          Value *Idx = GEP->idx_begin()->get();
+          if (!isSupportedInt(Idx->getType()))
+            return false;
+          Type *ElemTy = GEP->getSourceElementType();
+          if (!ElemTy->isSized())
+            return false;
+          uint64_t Scale =
+              F.getParent()->getDataLayout().getTypeAllocSize(ElemTy);
+          if (!emitValue(P, Slots, AllocaBase, NextFrameSlot,
+                         GEP->getPointerOperand()))
+            return false;
+          if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, Idx))
+            return false;
+          P.Words.push_back(OpGep);
+          P.Words.push_back(static_cast<int64_t>(Scale));
+          P.Words.push_back(OpStoreSlot);
+          P.Words.push_back(slotFor(Slots, &I));
           continue;
         }
         // AllocaInst produces no bytecode of its own -- references resolve
@@ -911,6 +936,8 @@ struct CodeVirtualization : public ModulePass {
     case OpStoreMem:
       // pops frame idx, pops value, fetches VmTy
       return {2, 0, 1};
+    case OpGep:
+      return {2, 1, 1};
     case OpCall:
       // pops NArgs values (runtime), fetches calleeIdx + nargs + VmTy, pushes
       // 1 result. Pops/Pushes are conservative (actual pop count is data).
@@ -959,6 +986,7 @@ struct CodeVirtualization : public ModulePass {
     case OpStorePtr:
     case OpLoadMem:
     case OpStoreMem:
+    case OpGep:
       Count = 1;
       return true;
     case OpCmpEq:
@@ -1323,6 +1351,14 @@ struct CodeVirtualization : public ModulePass {
                    Value *V = popStk(B, C);
                    Value *Ty = fetchWord(B, C);
                    storeHostInt(B, C, Addr, V, Ty);
+                   B.CreateBr(C.Dispatch);
+                 }});
+    H.push_back({OpGep, "gep", shapeOf(OpGep),
+                 [this, &C](IRBuilder<> &B) {
+                   Value *Index = popStk(B, C);
+                   Value *Base = popStk(B, C);
+                   Value *Scale = fetchWord(B, C);
+                   pushStk(B, C, B.CreateAdd(Base, B.CreateMul(Index, Scale)));
                    B.CreateBr(C.Dispatch);
                  }});
 
