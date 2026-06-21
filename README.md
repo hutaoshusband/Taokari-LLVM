@@ -7,15 +7,14 @@
 ![Pass Manager](https://img.shields.io/badge/codegen-legacy%20PM%20%2B%20new--PM%20wrapper-orange)
 ![License](https://img.shields.io/badge/license-Apache--2.0%20%2B%20LLVM%20exceptions-green)
 
-Taokari is a hardened fork of [Arkari](https://github.com/komimoe/Arkari) — itself in
-the Goron / Hikari / OLLVM lineage — focused on one question:
+Taokari is my hardened fork of [Arkari](https://github.com/komimoe/Arkari), itself in
+the Goron / Hikari / OLLVM lineage, focused on one question:
 
 > **What makes an obfuscator survive a serious analyst on IDA Pro 9.2 + D810?**
 
-The answer is **not** more IR passes. D810's default rule sets recognise and collapse
+The answer is **not** only more IR passes. D810's default rule sets recognise and collapse
 classic OLLVM-class IR patterns, and the Hex-Rays microcode lifter sees every IR pass in
-clean form. Taokari's defensible delta is two layers built on top of Arkari's existing IR
-obfuscator:
+clean form. Taokari adds these layers on top of Arkari's existing IR obfuscator:
 
 1. **A Machine-IR backend layer** that runs after register allocation, where D810 never
    sees it.
@@ -28,15 +27,19 @@ and preserved. Taokari adds on top of it.
 
 ---
 
-## Why Taokari, not just Arkari?
+## Why Taokari and not Arkari?
 
-### Pillar 1 — the Machine-IR layer (the moat)
+I started from Arkari and kept the parts that matter: flattening, indirect calls,
+indirect branches, indirect globals, constant and string encryption, MSVC RTTI hiding,
+and the Windows SEH / funclet handling. Then I added the parts Arkari does not have:
+backend obfuscation after register allocation, stronger IR transforms, metadata cleanup,
+literal max protection, and selected-function VM protection.
 
-The categorically new thing. A `MachineFunctionPass` scheduled in
-`X86PassConfig::addPreEmitPass()` — i.e. **after register allocation and scheduling**. Any
-code it emits reaches the final binary and is **never** given to an IR-level simplifier,
-so the Hex-Rays microcode lifter never sees it in clean form. This is the layer that
-survives where IR-only obfuscators lose to D810.
+### Machine-IR backend obfuscation
+
+This is a `MachineFunctionPass` scheduled in `X86PassConfig::addPreEmitPass()`,
+after register allocation and scheduling. The emitted bytes are produced below the LLVM
+IR optimizer, so IR cleanup passes cannot simplify them away before code generation.
 
 | Sub-pass | What it emits (x86-64, net-neutral, side-effecting) | Defeats |
 | --- | --- | --- |
@@ -63,7 +66,7 @@ Notes:
   obfuscation gate cannot be peephole-pruned away. See
   [`docs/MACHINE_IR_OBFUSCATION.md`](docs/MACHINE_IR_OBFUSCATION.md).
 
-### Pillar 2 — optimizer-resistant IR transforms
+### Optimizer-resistant IR transforms
 
 Arkari's IR passes are strong but honest — a clean switch dispatcher, pure
 constant-expression encryption that an aggressive optimizer can re-fold. Taokari adds
@@ -118,6 +121,7 @@ capped at 4.
 | **indgv** — indirect globals | `-irobf-indgv` | 0-4 | Two-tier page table, skips thread-local/DLL-import/EH globals, AArch64 PAC key 2 (data) |
 | **rtti** — MSVC RTTI eraser | `-irobf-rtti` | — | BLAKE3-keyed type-name rewrite (requires `randomSeed` in config) |
 | **meta** — metadata hygiene | `-irobf-meta` | 0-4 | Strips `llvm.ident`/debug/source-path metadata, renames internal helper symbols, supports export allowlists, and randomizes helper sections for PE/ELF/Mach-O at L3 |
+| **vmp** — selected-function virtualization | `-irobf-vmp` | 0-3 | *(Taokari addition)* `+vmp` functions lower to bytecode and an interpreter; current work includes pointer support, per-function interpreter diversity, runtime-derived keys, opcode permutation tables, indirect handler dispatch, fake handlers, runtime traps, DLL load checks, and IDA inspection gates |
 
 ### Per-function control
 
@@ -251,6 +255,18 @@ mathematically impossible. The full living list is in [`todo.md`](todo.md).
   L1, MSVC RTTI eraser).
 - MIR L1 infrastructure and L2 core passes (`dirtybytes`, `junk`, `sub`, `unmodelled`).
 - MIR L3 hardening: runtime-dependent dirty-byte guards, Fortress performance budget.
+- Metadata hygiene: `-irobf-meta` / `-taokari-meta`, helper renaming, export allowlists,
+  and section randomization at higher levels.
+- Literal maximum protection flag: `-mllvm -taokari-max`.
+- VMP L1 and L1.5: selected-function virtualization, arithmetic/memory/branch opcodes,
+  PHI lowering, VM-local loads/stores, direct-call trampolines, differential tests,
+  baseline benchmark, and build-time bounds checks.
+- VMP L2 work already landed after the last README update: pointer support, runtime traps,
+  bytecode integrity fuzzing, DLL load verification, runtime-derived keys, separate
+  immediate streams, opcode permutation tables, per-function interpreter diversity,
+  callee-table token hardening, per-block keys, indirect handler dispatch, fake handlers,
+  bytecode and overhead guardrails, dummy opcode padding, BCF/MBA-hardened call thunks,
+  manual-map DLL validation, and IDA/Hex-Rays inspection gates.
 
 **Partial / needs hardening:**
 
@@ -261,13 +277,19 @@ mathematically impossible. The full living list is in [`todo.md`](todo.md).
   their own predicates inline.
 - New-PM codegen wiring: the new-PM `TaokariMachineObfPass` class is registered but not
   yet plugged into `X86CodeGenPassBuilder` — only the legacy `addPreEmitPass` hook is live.
+- VMP is strong enough to be a real selected-function protection path now, but it is not
+  full-program virtualization. It still needs compatibility reporting, function splitting
+  around unsupported IR, wider pointer/aggregate coverage, and release-blocking EXE/DLL
+  matrix runs before I call it full compatibility.
+- VMP L3 is not done: PC encryption, stack/locals encryption between handlers,
+  anti-debug/anti-trace behavior inside the interpreter loop, cross-function VM state,
+  and devirtualization sample gates are still work.
 
 **Backlog (not implemented — do not expect these yet):**
 
 - Function outlining / callout obfuscation.
-- Code virtualization (VM).
 - Dynamic / anti-debug runtime protections.
-- Full metadata / symbol / debug-info stripping (beyond MSVC RTTI).
+- Full symbol/debug-info cleanup beyond the current metadata hygiene pass.
 - Release profiles (`dev` / `balanced` / `strong` / `fortress`).
 - AArch64 MIR port; new-PM migration of the IR passes.
 
@@ -282,6 +304,9 @@ mathematically impossible. The full living list is in [`todo.md`](todo.md).
 - **MBA is single-round today.** Level-2 multi-round and opaque-constant variants are
   reserved but not shipped.
 - **The MIR layer is x86_64-only.** No 32-bit x86, no AArch64.
+- **VMP is selected-function protection, not automatic whole-program protection.** Loader
+  glue, CRT startup, EH-heavy code, TLS setup, hot loops, and unsupported IR should stay
+  native or be split around until the compatibility report and function splitting are done.
 - **Flattening refuses EH-heavy functions** (`hasPersonalityFn`, invoke/cleanup/catch
   pads) and oversized/alloca-heavy functions — the `c_seh` and `cpp_funclet` test cases
   exist precisely to guard this.

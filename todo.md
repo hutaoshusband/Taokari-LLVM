@@ -644,6 +644,72 @@ Checks should be distributed, indirect, guarded and hard to remove cleanly.
 Current status: L1.5 complete; Level 2 started.
 This should be treated as advanced / expensive protection.
 
+## Product Direction — Compatibility-First VM Protection
+
+The goal is not to virtualize every instruction in every program at any cost.
+That creates a huge interpreter, heavy slowdown, more compatibility bugs, and
+one obvious reversing target. The product goal is a practical VMProtect-style
+alternative: keep the EXE/DLL ABI normal, keep loaders working, and turn the
+sensitive code into VM bytecode so the original logic is no longer readable as
+native code.
+
+**Principle:** full compatibility means the protected program still runs.
+It does not mean every instruction must become VM bytecode. Unsupported or
+loader-sensitive code should either stay native or be split around, with clear
+diagnostics explaining what was virtualized and what stayed native.
+
+Protection target:
+
+* [ ] Native EXE programs keep working under normal process startup
+* [ ] DLLs keep working under `LoadLibrary` / `GetProcAddress`
+* [ ] DLLs keep working under manual mapping when imports, relocations, TLS,
+      section protections, and entrypoint invocation are handled by the loader
+* [ ] Native code can call VM-protected code
+* [ ] VM-protected code can call native code
+* [ ] Sensitive functions become bytecode + VM state transitions
+* [ ] Reversing protected logic requires recovering the bytecode format,
+      opcode mapping, handler semantics, key schedule, call-thunk routing,
+      local/frame model, and pointer/memory model
+
+What should be virtualized first:
+
+* [ ] License checks
+* [ ] Auth / entitlement decisions
+* [ ] Crypto or proprietary algorithms
+* [ ] Game or product logic that should not read cleanly in a decompiler
+* [ ] Anti-tamper decisions and policy code
+
+What should not be forced through the VM by default:
+
+* [ ] CRT startup / loader-critical code
+* [ ] `DllMain` unless the function is known small and safe
+* [ ] SEH / EH-heavy regions
+* [ ] TLS initialization glue
+* [ ] System callback thunks
+* [ ] Hot loops unless explicitly allowed by budget knobs
+* [ ] Code using unsupported IR patterns when native fallback preserves behavior
+
+Compatibility roadmap:
+
+* [ ] Add `void` protected-function support
+* [ ] Add raw `switch` lowering
+* [ ] Add `memcpy` / `memset` / `memmove` intrinsic support
+* [ ] Add multi-index and struct-field GEP support
+* [ ] Add pointer args and pointer returns in VM direct calls
+* [ ] Add indirect/function-pointer call support or split-around fallback
+* [ ] Add function splitting: VM-supported regions become bytecode,
+      unsupported islands stay native
+* [ ] Add compatibility report: per function `virtualized`, `partially
+      virtualized`, or `skipped`, with exact reason
+* [ ] Keep EXE, normal DLL load, and manual-map DLL tests as release-blocking
+      gates
+
+**Definition of done for full compatibility:**
+Real-world EXE and DLL programs continue to run, sensitive code can be made
+unreadable without breaking unsupported glue, and every fallback is explicit.
+The VM should maximize protected coverage while preserving behavior, not
+silently force unsafe IR through an incomplete interpreter.
+
 ## Level 1 — Research Prototype
 
 * [x] Study xVMP architecture
