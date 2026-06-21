@@ -1098,16 +1098,22 @@ struct CodeVirtualization : public ModulePass {
     return I == Words.size();
   }
 
-  int64_t encryptBytecodeWord(int64_t Word, size_t Index,
-                              uint64_t BytecodeKey) const {
-    return static_cast<int64_t>(
-        static_cast<uint64_t>(Word) ^
-        bytecodeScheduleWord(BytecodeKey, static_cast<uint64_t>(Index)));
+  uint64_t bytecodeDomain(bool IsOpcodeWord) const {
+    return IsOpcodeWord ? 0xA5A5A5A5D3C3B2A1ULL : 0x3C6EF372FE94F82AULL;
   }
 
-  uint64_t bytecodeScheduleWord(uint64_t Key, uint64_t Index) const {
-    uint64_t X =
-        Key ^ (Index * 0x9E3779B97F4A7C15ULL) ^ 0xA5A5A5A5D3C3B2A1ULL;
+  int64_t encryptBytecodeWord(int64_t Word, size_t Index,
+                              uint64_t BytecodeKey,
+                              bool IsOpcodeWord) const {
+    return static_cast<int64_t>(
+        static_cast<uint64_t>(Word) ^
+        bytecodeScheduleWord(BytecodeKey, static_cast<uint64_t>(Index),
+                             bytecodeDomain(IsOpcodeWord)));
+  }
+
+  uint64_t bytecodeScheduleWord(uint64_t Key, uint64_t Index,
+                                uint64_t Domain) const {
+    uint64_t X = Key ^ (Index * 0x9E3779B97F4A7C15ULL) ^ Domain;
     X ^= X >> 30;
     X *= 0xBF58476D1CE4E5B9ULL;
     X ^= X >> 27;
@@ -1240,10 +1246,18 @@ struct CodeVirtualization : public ModulePass {
   }
 
   Value *bytecodeScheduleWord(IRBuilder<> &B, InterpCtx &C, Value *Index) {
+    Value *IsOpcodeWord =
+        B.CreateICmpNE(B.CreateLoad(Type::getInt8Ty(*C.Ctx),
+                                    B.CreateGEP(Type::getInt8Ty(*C.Ctx),
+                                                C.PCMap, Index)),
+                       ConstantInt::get(Type::getInt8Ty(*C.Ctx), 0));
+    Value *Domain = B.CreateSelect(
+        IsOpcodeWord, ConstantInt::get(C.I64, 0xA5A5A5A5D3C3B2A1ULL),
+        ConstantInt::get(C.I64, 0x3C6EF372FE94F82AULL));
     Value *X = B.CreateXor(
         C.BytecodeKey,
         B.CreateMul(Index, ConstantInt::get(C.I64, 0x9E3779B97F4A7C15ULL)));
-    X = B.CreateXor(X, ConstantInt::get(C.I64, 0xA5A5A5A5D3C3B2A1ULL));
+    X = B.CreateXor(X, Domain);
     X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 30)));
     X = B.CreateMul(X, ConstantInt::get(C.I64, 0xBF58476D1CE4E5B9ULL));
     X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 27)));
@@ -1920,7 +1934,8 @@ struct CodeVirtualization : public ModulePass {
     SmallVector<Constant *, 64> Words;
     uint64_t BytecodeTag = 0xCBF29CE484222325ULL;
     for (size_t I = 0; I < EncodedWords.size(); ++I) {
-      int64_t Word = encryptBytecodeWord(EncodedWords[I], I, BytecodeKey);
+      int64_t Word = encryptBytecodeWord(EncodedWords[I], I, BytecodeKey,
+                                         OpcodeStarts[I] != 0);
       BytecodeTag = mixBytecodeTag(BytecodeTag, static_cast<uint64_t>(Word), I);
       Words.push_back(ConstantInt::get(I64, static_cast<uint64_t>(Word), true));
     }

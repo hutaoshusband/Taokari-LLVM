@@ -144,8 +144,9 @@ def rotl64(v: int, rot: int) -> int:
     return to_u64((v << rot) | (v >> (64 - rot))) if rot else v
 
 
-def bytecode_schedule(key: int, index: int) -> int:
-    x = to_u64(key) ^ to_u64(index * GOLDEN) ^ 0xA5A5A5A5D3C3B2A1
+def bytecode_schedule(key: int, index: int, is_opcode: bool) -> int:
+    domain = 0xA5A5A5A5D3C3B2A1 if is_opcode else 0x3C6EF372FE94F82A
+    x = to_u64(key) ^ to_u64(index * GOLDEN) ^ domain
     x ^= x >> 30
     x = to_u64(x * 0xBF58476D1CE4E5B9)
     x ^= x >> 27
@@ -181,7 +182,7 @@ def encode(words: list[int], starts: list[int], key: int,
     out: list[int] = []
     for i, word in enumerate(plain):
         mapped = word ^ opmask if pcmap[i] else word
-        enc = to_u64(mapped) ^ bytecode_schedule(key, i)
+        enc = to_u64(mapped) ^ bytecode_schedule(key, i, pcmap[i] != 0)
         out.append(to_i64(enc))
     return out, pcmap
 
