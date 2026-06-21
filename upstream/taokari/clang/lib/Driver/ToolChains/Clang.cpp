@@ -224,6 +224,15 @@ static bool ShouldEnableAutolink(const ArgList &Args, const ToolChain &TC,
                       Default);
 }
 
+static bool hasTaokariMaxProtection(const ArgList &Args) {
+  for (const Arg *A : Args.filtered(options::OPT_mllvm)) {
+    StringRef Value(A->getValue(0));
+    if (Value == "-taokari-max" || Value == "--taokari-max")
+      return true;
+  }
+  return false;
+}
+
 /// Add a CC1 option to specify the debug compilation directory.
 static const char *addDebugCompDirArg(const ArgList &Args,
                                       ArgStringList &CmdArgs,
@@ -558,16 +567,18 @@ static void addPGOAndCoverageFlags(const ToolChain &TC, Compilation &C,
   }
 
   StringRef CoverageCompDir;
-  if (Arg *A = Args.getLastArg(options::OPT_ffile_compilation_dir_EQ,
-                               options::OPT_fcoverage_compilation_dir_EQ))
-    CoverageCompDir = A->getValue();
-  if (CoverageCompDir.empty()) {
-    if (auto CWD = D.getVFS().getCurrentWorkingDirectory())
-      CmdArgs.push_back(
-          Args.MakeArgString(Twine("-fcoverage-compilation-dir=") + *CWD));
-  } else
-    CmdArgs.push_back(Args.MakeArgString(Twine("-fcoverage-compilation-dir=") +
-                                         CoverageCompDir));
+  if (!hasTaokariMaxProtection(Args)) {
+    if (Arg *A = Args.getLastArg(options::OPT_ffile_compilation_dir_EQ,
+                                 options::OPT_fcoverage_compilation_dir_EQ))
+      CoverageCompDir = A->getValue();
+    if (CoverageCompDir.empty()) {
+      if (auto CWD = D.getVFS().getCurrentWorkingDirectory())
+        CmdArgs.push_back(
+            Args.MakeArgString(Twine("-fcoverage-compilation-dir=") + *CWD));
+    } else
+      CmdArgs.push_back(Args.MakeArgString(
+          Twine("-fcoverage-compilation-dir=") + CoverageCompDir));
+  }
 
   if (Args.hasArg(options::OPT_fprofile_exclude_files_EQ)) {
     auto *Arg = Args.getLastArg(options::OPT_fprofile_exclude_files_EQ);
@@ -4745,13 +4756,16 @@ renderDebugOptions(const ToolChain &TC, const Driver &D, const llvm::Triple &T,
   }
 
   // Add in -fdebug-compilation-dir if necessary.
-  const char *DebugCompilationDir =
-      addDebugCompDirArg(Args, CmdArgs, D.getVFS());
+  const bool TaokariMaxProtection = hasTaokariMaxProtection(Args);
+  const char *DebugCompilationDir = TaokariMaxProtection
+                                        ? nullptr
+                                        : addDebugCompDirArg(Args, CmdArgs,
+                                                             D.getVFS());
 
   addDebugPrefixMapArg(D, TC, Args, CmdArgs);
 
   // Add the output path to the object file for CodeView debug infos.
-  if (EmitCodeView && Output.isFilename())
+  if (EmitCodeView && !TaokariMaxProtection && Output.isFilename())
     addDebugObjectName(Args, CmdArgs, DebugCompilationDir,
                        Output.getFilename());
 }
