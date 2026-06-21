@@ -271,7 +271,7 @@ struct CodeVirtualization : public ModulePass {
       return true;
     if (F.getName().starts_with("__taokari_vmp_"))
       return true;
-    if (!isSupportedInt(F.getReturnType()))
+    if (!F.getReturnType()->isVoidTy() && !isSupportedInt(F.getReturnType()))
       return true;
     if (F.arg_size() > 8)
       return true;
@@ -959,10 +959,12 @@ struct CodeVirtualization : public ModulePass {
           continue;
         }
         if (auto *Ret = dyn_cast<ReturnInst>(&I)) {
-          if (!Ret->getReturnValue())
-            return false;
-          if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, Ret->getReturnValue()))
-            return false;
+          if (Value *RetVal = Ret->getReturnValue()) {
+            if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, RetVal))
+              return false;
+          } else {
+            P.Words.append({OpPushConst, 0, packVmTy({64, true})});
+          }
           P.Words.push_back(OpRet);
           continue;
         }
@@ -2416,7 +2418,10 @@ struct CodeVirtualization : public ModulePass {
     B.CreateCall(Exit, {ConstantInt::get(Type::getInt32Ty(Ctx), 86)});
     B.CreateUnreachable();
     B.SetInsertPoint(Ok);
-    B.CreateRet(B.CreateTruncOrBitCast(Result, F.getReturnType()));
+    if (F.getReturnType()->isVoidTy())
+      B.CreateRetVoid();
+    else
+      B.CreateRet(B.CreateTruncOrBitCast(Result, F.getReturnType()));
     return true;
   }
 
