@@ -14,6 +14,10 @@
 
 using namespace llvm;
 
+namespace llvm {
+extern cl::opt<bool> TaokariMaxProtection;
+}
+
 static cl::opt<bool>
 EnableIRObfuscation("irobf", cl::init(false), cl::NotHidden,
                     cl::desc("Enable IR Code Obfuscation."));
@@ -324,6 +328,38 @@ struct ObfuscationPassManager : public ModulePass {
     Opt->rttiOpt()->readOpt(EnableRttiEraser);
     Opt->metaOpt()->readOpt(EnableMetadataHygiene, LevelMetadataHygiene);
     Opt->vmpOpt()->readOpt(EnableVMP, LevelVMP);
+
+    if (TaokariMaxProtection) {
+      for (const auto &O : Opt->getAllOpt()) {
+        O->setEnable(true);
+        O->setLevel(4);
+        O->setProbability(100);
+        O->setFunctionProbability(100);
+      }
+      Opt->bcfOpt()->setLoopCount(3);
+      Opt->cseOpt()->setMinStringLength(1);
+      Opt->cseOpt()->setStringLocalStackDecrypt(true);
+      Opt->cseOpt()->setStringHeapDecrypt(true);
+      Opt->cseOpt()->setStringReencryptAfterUse(true);
+      Opt->cseOpt()->setStringDecryptorMBA(true);
+      Opt->cseOpt()->setStringDecryptorFlattening(true);
+      Opt->cseOpt()->setStringDecryptorIndirectCall(true);
+      Opt->cseOpt()->setStringShardedPool(true);
+      Opt->cseOpt()->setStringFakePools(true);
+      Opt->cseOpt()->setStringPageTableAccess(true);
+      Opt->cseOpt()->setStringDelayedDecrypt(true);
+      Opt->cieOpt()->setMinConstSize(1);
+      Opt->cieOpt()->setVolatileSeed(true);
+      Opt->cieOpt()->setConstDecryptorMBA(true);
+      Opt->cfeOpt()->setVolatileSeed(true);
+      Opt->cfeOpt()->setConstDecryptorMBA(true);
+      Opt->metaOpt()->setReleaseStrip(true);
+      Opt->metaOpt()->setRandomizeSections(true);
+      if (Opt->randomSeed().empty())
+        Opt->randomSeed().append("taokari-max-default-seed");
+      TaokariBCFBeforeFlattening = true;
+      TaokariBCFAfterFlattening = true;
+    }
     return Opt;
   }
 
@@ -333,7 +369,7 @@ struct ObfuscationPassManager : public ModulePass {
         EnableIRFlattening || EnableIRStringEncryption ||
         EnableIRConstantIntEncryption || EnableIRConstantFPEncryption ||
         EnableBogusControlFlow || EnableMBA || EnableRttiEraser ||
-        EnableMetadataHygiene || EnableVMP ||
+        EnableMetadataHygiene || EnableVMP || TaokariMaxProtection ||
         !TaokariConfigPath.empty() || !ArkariConfigPath.empty()) {
       EnableIRObfuscation = true;
     }

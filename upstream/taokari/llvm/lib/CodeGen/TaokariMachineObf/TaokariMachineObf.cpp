@@ -50,6 +50,12 @@ using namespace llvm;
 #define DEBUG_TYPE "taokari-mir"
 #define PASS_NAME "Taokari Machine IR Obfuscation"
 
+namespace llvm {
+cl::opt<bool> TaokariMaxProtection(
+    "taokari-max", cl::init(false), cl::NotHidden,
+    cl::desc("Enable every current Taokari protection at maximum strength."));
+} // namespace llvm
+
 namespace {
 
 // Master flag: -mllvm -taokari-mir=<passes>.
@@ -102,10 +108,21 @@ struct MirSubpasses {
     Junk = true;
     Substitution = true;
   }
+  void enableMax() {
+    enableAll();
+    Unmodelled = true;
+    FakeBounds = true;
+    FunctionSplit = true;
+    Sse = true;
+  }
 };
 
 static MirSubpasses parseMirFlag() {
   MirSubpasses Passes;
+  if (TaokariMaxProtection) {
+    Passes.enableMax();
+    return Passes;
+  }
   if (TaokariMirFlag.empty())
     return Passes;
 
@@ -117,8 +134,13 @@ static MirSubpasses parseMirFlag() {
     Token = Token.take_until([](char C) { return C == ':' || C == '='; });
     if (Token.empty())
       continue;
-    if (Token == "1" || Token == "on" || Token == "all" || Token == "max") {
+    if (Token == "1" || Token == "on" || Token == "all") {
       Passes.enableAll();
+      SawKnownToken = true;
+      continue;
+    }
+    if (Token == "max") {
+      Passes.enableMax();
       SawKnownToken = true;
       continue;
     }

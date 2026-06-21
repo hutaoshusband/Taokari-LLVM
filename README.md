@@ -136,6 +136,13 @@ __attribute__((annotate("+mir:unmodelled")))
 
 ### A worked example
 
+Literal maximum protection, including every current IR pass, VMP,
+metadata/RTTI hygiene, and every current MIR/backend sub-pass:
+
+```bat
+clang -O2 -mllvm -taokari-max main.c -o main_max.exe
+```
+
 ```bat
 :: IR layer: enable flattening, bogus control flow, MBA, constant/string encryption,
 :: and indirect call/branch/globals — all at the max capped level.

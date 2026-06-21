@@ -94,7 +94,8 @@ a comma-separated list of MIR sub-passes:
 - `fakebounds` (`fakeboundaries`, `fakeprologue`, `fakeprologues` aliases)
 - `split` (`functionsplit`, `functionsplitting`, `boundary` aliases)
 - `marker`
-- `1`, `on`, `all`, `max` for all Level 2 passes plus the legacy marker
+- `1`, `on`, `all` for all Level 2 passes plus the legacy marker
+- `max` for every current MIR sub-pass, including Fortress-only passes
 
 Per-pass probabilities are controlled by:
 
