@@ -102,6 +102,11 @@ CASES = [
     # inc/dec, all relational operators, short-circuit &&/||/!, ternary on
     # int and FP. Exercises ConstantInt/FP encryption and MBA on add/sub.
     Case("arith_logic", (case_path("arith_logic") / "src" / "main.c",), "arith:6160:5775:42:110:142:301.142857\n"),
+    # Bitwise & shift operator fixture: AND/OR/XOR/complement on int and
+    # unsigned, << >>, every compound bit-assignment form, set/clear/toggle
+    # bit-mask idioms, and a byte-order probe. Validates ConstantIntEncryption
+    # and MBA on AND/OR/XOR under -O2/LTO.
+    Case("bit_ops", (case_path("bit_ops") / "src" / "main.c",), "bitops:4043304975:253011243:896:31:2\n"),
     Case("cpp_console", (case_path("cpp_console") / "src" / "main.cpp",), "cpp-console:144\n"),
     Case("cpp_classes", (case_path("cpp_classes") / "src" / "main.cpp",), "classes:124:taokari\n"),
     Case("cpp_templates", (case_path("cpp_templates") / "src" / "main.cpp",), "templates:55:29\n"),
