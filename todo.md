@@ -667,7 +667,7 @@ Protection target:
 * [x] Native code can call VM-protected code
 * [x] VM-protected code can call native code
 * [x] Sensitive functions become bytecode + VM state transitions
-* [ ] Reversing protected logic requires recovering the bytecode format,
+* [x] Reversing protected logic requires recovering the bytecode format,
       opcode mapping, handler semantics, key schedule, call-thunk routing,
       local/frame model, and pointer/memory model
 
