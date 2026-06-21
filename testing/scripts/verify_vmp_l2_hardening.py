@@ -148,6 +148,14 @@ def check_ir(text: str) -> int:
         return fail("VM handler dispatch is not indirectbr-backed")
     if text.count("blockaddress(") < len(calls):
         return fail("VM handler dispatch does not use blockaddress targets")
+    indirect_dests = [
+        len(re.findall(r"label ", body))
+        for body in re.findall(r"indirectbr ptr .*?\[(.*?)\]", text, re.S)
+    ]
+    if len(indirect_dests) < len(calls):
+        return fail("missing VM indirectbr destination lists")
+    if any(count < len(expected_ops) + 4 for count in indirect_dests):
+        return fail("fake/dead handler targets are missing")
 
     callee_match = CALLEE_TABLE_RE.search(text)
     if not callee_match:

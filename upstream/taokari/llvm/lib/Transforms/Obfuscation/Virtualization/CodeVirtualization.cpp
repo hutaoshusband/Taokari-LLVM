@@ -92,6 +92,11 @@ enum Opcode : int64_t {
   // External pointer GEP with one runtime index: base + index * byte stride.
   OpGep = 37,
   OpPtrConst = 38,
+  // Dead anti-analysis handlers. They are emitted into the interpreter
+  // dispatcher but never encoded into valid opcode maps.
+  OpFakeArith = 48,
+  OpFakeMem = 49,
+  OpFakeCall = 50,
 };
 
 // How many operand-stack pops and bytecode immediates a handler
@@ -1007,6 +1012,10 @@ struct CodeVirtualization : public ModulePass {
       // pops NArgs values (runtime), fetches calleeIdx + nargs + VmTy, pushes
       // 1 result. Pops/Pushes are conservative (actual pop count is data).
       return {0, 1, 3};
+    case OpFakeArith:
+    case OpFakeMem:
+    case OpFakeCall:
+      return {0, 0, 0};
     case OpJmp:
       return {0, 0, 1};
     case OpBrTrue:
@@ -1068,6 +1077,10 @@ struct CodeVirtualization : public ModulePass {
     case OpCall:
       Count = 3;
       return true;
+    case OpFakeArith:
+    case OpFakeMem:
+    case OpFakeCall:
+      return false;
     }
     return false;
   }
@@ -1896,6 +1909,25 @@ struct CodeVirtualization : public ModulePass {
                  }});
     H.push_back({OpRet, "ret", shapeOf(OpRet),
                  [this, &C](IRBuilder<> &B) { B.CreateRet(popStk(B, C)); }});
+
+    auto addFakeHandler = [&](Opcode Op, StringRef Name, uint64_t Salt) {
+      H.push_back({Op, Name, {0, 0, 0}, [&C, Salt](IRBuilder<> &B) {
+                     Value *PCVal = B.CreateLoad(C.I64, C.PC);
+                     Value *SPVal = B.CreateLoad(C.I64, C.SP);
+                     Value *Mix = B.CreateXor(
+                         B.CreateMul(PCVal, ConstantInt::get(C.I64, Salt)),
+                         B.CreateAdd(SPVal,
+                                     ConstantInt::get(C.I64, Salt >> 1)));
+                     Value *Flag = B.CreateOr(
+                         B.CreateLoad(C.I64, C.TamperFlag),
+                         B.CreateAnd(Mix, ConstantInt::get(C.I64, 1)));
+                     B.CreateStore(Flag, C.TamperFlag);
+                     B.CreateBr(C.Bad);
+                   }});
+    };
+    addFakeHandler(OpFakeArith, "fakearith", 0x9E3779B97F4A7C15ULL);
+    addFakeHandler(OpFakeMem, "fakemem", 0xD1342543DE82EF95ULL);
+    addFakeHandler(OpFakeCall, "fakecall", 0xA0761D6478BD642FULL);
 
     if (H.size() > 1) {
       std::shuffle(H.begin(), H.end(), RNG);
