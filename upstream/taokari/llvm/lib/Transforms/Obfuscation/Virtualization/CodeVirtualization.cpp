@@ -1,6 +1,7 @@
 #include "llvm/Transforms/Obfuscation/CodeVirtualization.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
@@ -360,6 +361,7 @@ struct CodeVirtualization : public ModulePass {
         if (auto *Cast = dyn_cast<CastInst>(&I)) {
           const DataLayout &DL = F.getParent()->getDataLayout();
           switch (Cast->getOpcode()) {
+          case Instruction::SExt:
           case Instruction::ZExt:
           case Instruction::Trunc:
             if (!isSupportedInt(Cast->getSrcTy()) ||
@@ -792,6 +794,7 @@ struct CodeVirtualization : public ModulePass {
         if (auto *Cast = dyn_cast<CastInst>(&I)) {
           const DataLayout &DL = F.getParent()->getDataLayout();
           switch (Cast->getOpcode()) {
+          case Instruction::SExt:
           case Instruction::ZExt:
           case Instruction::Trunc:
             if (!isSupportedInt(Cast->getSrcTy()) ||
@@ -864,34 +867,42 @@ struct CodeVirtualization : public ModulePass {
           P.Words.push_back(packVmTy(vmTyFromType(ST->getValueOperand()->getType())));
           continue;
         }
-        // VM-local GEPs produce no bytecode; external pointer-arg GEPs compute
-        // base + index * stride and store the raw address in a locals slot.
+        // VM-local GEPs produce no bytecode; external pointer GEPs compute
+        // base + variable scaled offsets + constant field offsets.
         if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
           int64_t FrameIdx = 0;
           if (resolveFramePtr(GEP, AllocaBase, NextFrameSlot, FrameIdx)) {
             slotFor(Slots, &I);
             continue;
           }
-          if (!isSupportedPointer(GEP->getPointerOperandType(),
-                                  F.getParent()->getDataLayout()))
+          const DataLayout &DL = F.getParent()->getDataLayout();
+          if (!isHostPointer(GEP->getPointerOperand(), AllocaBase,
+                             NextFrameSlot, DL))
             return false;
-          if (GEP->getNumIndices() != 1)
+          unsigned PtrBits = DL.getPointerSizeInBits(
+              GEP->getPointerAddressSpace());
+          SmallMapVector<Value *, APInt, 4> VariableOffsets;
+          APInt ConstantOffset(PtrBits, 0);
+          if (!GEP->collectOffset(DL, PtrBits, VariableOffsets,
+                                  ConstantOffset))
             return false;
-          Value *Idx = GEP->idx_begin()->get();
-          if (!isSupportedInt(Idx->getType()))
-            return false;
-          Type *ElemTy = GEP->getSourceElementType();
-          if (!ElemTy->isSized())
-            return false;
-          uint64_t Scale =
-              F.getParent()->getDataLayout().getTypeAllocSize(ElemTy);
           if (!emitValue(P, Slots, AllocaBase, NextFrameSlot,
                          GEP->getPointerOperand()))
             return false;
-          if (!emitValue(P, Slots, AllocaBase, NextFrameSlot, Idx))
-            return false;
-          P.Words.push_back(OpGep);
-          P.Words.push_back(static_cast<int64_t>(Scale));
+          for (auto &[Idx, Scale] : VariableOffsets) {
+            if (!isSupportedInt(Idx->getType()) ||
+                !emitValue(P, Slots, AllocaBase, NextFrameSlot, Idx))
+              return false;
+            P.Words.push_back(OpGep);
+            P.Words.push_back(Scale.getSExtValue());
+          }
+          if (ConstantOffset != 0) {
+            P.Words.push_back(OpPushConst);
+            P.Words.push_back(1);
+            P.Words.push_back(packVmTy({64, true}));
+            P.Words.push_back(OpGep);
+            P.Words.push_back(ConstantOffset.getSExtValue());
+          }
           P.Words.push_back(OpStoreSlot);
           P.Words.push_back(slotFor(Slots, &I));
           continue;
