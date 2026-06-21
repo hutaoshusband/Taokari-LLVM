@@ -139,6 +139,12 @@ CASES = [
     # IndirectGlobalVariable targets; refcount arithmetic must stay
     # MBA/ConstantInt-stable; destructor count must stay leak-free.
     Case("dynamic_memory", (case_path("dynamic_memory") / "src" / "main.cpp",), "dynmem:11:15:30:42:77:3119:1101:14\n"),
+    # STL containers & algorithms fixture: vector/list/deque/map/unordered_map/
+    # set, forward + reverse iterators, std::sort/accumulate/transform/find/
+    # count_if, capturing lambdas, range-for, auto. Allocator-backed growth is
+    # an IndirectGlobalVariable surface; inlined comparison functors fold under
+    # -O2/LTO.
+    Case("stl_containers", (case_path("stl_containers") / "src" / "main.cpp",), "stl:45359:6663465:10017:5120:317450\n"),
     Case("cpp_console", (case_path("cpp_console") / "src" / "main.cpp",), "cpp-console:144\n"),
     Case("cpp_classes", (case_path("cpp_classes") / "src" / "main.cpp",), "classes:124:taokari\n"),
     Case("cpp_templates", (case_path("cpp_templates") / "src" / "main.cpp",), "templates:55:29\n"),
