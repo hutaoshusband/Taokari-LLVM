@@ -665,7 +665,7 @@ Protection target:
 * [x] DLLs keep working under manual mapping when imports, relocations, TLS,
       section protections, and entrypoint invocation are handled by the loader
 * [x] Native code can call VM-protected code
-* [ ] VM-protected code can call native code
+* [x] VM-protected code can call native code
 * [ ] Sensitive functions become bytecode + VM state transitions
 * [ ] Reversing protected logic requires recovering the bytecode format,
       opcode mapping, handler semantics, key schedule, call-thunk routing,
