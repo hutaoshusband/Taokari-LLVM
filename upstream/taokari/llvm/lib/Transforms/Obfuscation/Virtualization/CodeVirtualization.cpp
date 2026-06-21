@@ -115,6 +115,8 @@ enum Opcode : int64_t {
   OpGep = 37,
   OpPtrConst = 38,
   OpPad = 39,
+  OpPad2 = 40,
+  OpPad3 = 41,
   // Dead anti-analysis handlers. They are emitted into the interpreter
   // dispatcher but never encoded into valid opcode maps.
   OpFakeArith = 48,
@@ -1032,6 +1034,8 @@ struct CodeVirtualization : public ModulePass {
     case OpPtrConst:
       return {0, 1, 1};
     case OpPad:
+    case OpPad2:
+    case OpPad3:
       return {0, 0, 1};
     case OpCall:
       // pops NArgs values (runtime), fetches calleeIdx + nargs + VmTy, pushes
@@ -1088,6 +1092,8 @@ struct CodeVirtualization : public ModulePass {
     case OpGep:
     case OpPtrConst:
     case OpPad:
+    case OpPad2:
+    case OpPad3:
       Count = 1;
       return true;
     case OpCmpEq:
@@ -1112,6 +1118,44 @@ struct CodeVirtualization : public ModulePass {
   }
 
   static constexpr unsigned kOpcodeTableSize = 64;
+
+  bool isPadOpcode(int64_t Op) const {
+    return Op == OpPad || Op == OpPad2 || Op == OpPad3;
+  }
+
+  struct OpcodeHistogram {
+    unsigned Total = 0;
+    unsigned TopHits = 0;
+    unsigned PadHits = 0;
+    unsigned TopShareBp = 0;
+  };
+
+  OpcodeHistogram opcodeHistogram(ArrayRef<int64_t> Words) const {
+    unsigned Counts[kOpcodeTableSize] = {};
+    size_t I = 0;
+    while (I < Words.size()) {
+      unsigned Immediates = 0;
+      if (!opcodeImmediateCount(Words[I], Immediates) ||
+          I + 1 + Immediates > Words.size())
+        break;
+      int64_t Op = Words[I];
+      if (Op >= 0 && static_cast<size_t>(Op) < kOpcodeTableSize) {
+        ++Counts[static_cast<size_t>(Op)];
+        if (isPadOpcode(Op))
+          ++Counts[0];
+      }
+      I += 1 + Immediates;
+    }
+
+    OpcodeHistogram H;
+    for (unsigned Op = 1; Op < kOpcodeTableSize; ++Op) {
+      H.Total += Counts[Op];
+      H.TopHits = std::max(H.TopHits, Counts[Op]);
+    }
+    H.PadHits = Counts[0];
+    H.TopShareBp = H.Total ? (H.TopHits * 10000U) / H.Total : 0;
+    return H;
+  }
 
   bool buildOpcodeMaps(SmallVectorImpl<int64_t> &Encode,
                        SmallVectorImpl<int64_t> &Decode) {
@@ -1222,6 +1266,9 @@ struct CodeVirtualization : public ModulePass {
     SmallVector<int64_t, 64> Old(P.Words.begin(), P.Words.end());
     SmallVector<int64_t, 64> Padded;
     DenseMap<size_t, size_t> Remap;
+    static constexpr Opcode Pads[] = {OpPad, OpPad2, OpPad3};
+    static constexpr unsigned NumPads = sizeof(Pads) / sizeof(Pads[0]);
+    unsigned PadCounts[NumPads] = {};
     size_t I = 0;
     while (I < Old.size()) {
       unsigned Immediates = 0;
@@ -1232,7 +1279,12 @@ struct CodeVirtualization : public ModulePass {
       for (size_t J = I; J < I + 1 + Immediates; ++J)
         Padded.push_back(Old[J]);
       if (std::uniform_int_distribution<unsigned>(1, 100)(RNG) <= Percent) {
-        Padded.push_back(OpPad);
+        unsigned Best = 0;
+        for (unsigned K = 1; K < NumPads; ++K)
+          if (PadCounts[K] < PadCounts[Best])
+            Best = K;
+        Padded.push_back(Pads[Best]);
+        ++PadCounts[Best];
         Padded.push_back(static_cast<int64_t>(RNG()));
       }
       I += 1 + Immediates;
@@ -1734,11 +1786,15 @@ struct CodeVirtualization : public ModulePass {
                    pushStk(B, C, B.CreatePtrToInt(PtrVal, C.I64));
                    B.CreateBr(C.Dispatch);
                  }});
-    H.push_back({OpPad, "pad", shapeOf(OpPad),
-                 [this, &C](IRBuilder<> &B) {
-                   (void)fetchWord(B, C);
-                   B.CreateBr(C.Dispatch);
-                 }});
+    auto addPad = [&](Opcode Op, StringRef Name) {
+      H.push_back({Op, Name, shapeOf(Op), [this, &C](IRBuilder<> &B) {
+                     (void)fetchWord(B, C);
+                     B.CreateBr(C.Dispatch);
+                   }});
+    };
+    addPad(OpPad, "pad");
+    addPad(OpPad2, "pad2");
+    addPad(OpPad3, "pad3");
 
     // direct call (L1.5.1). Only registered when a callee table
     // exists (i.e. at least one direct call was encoded). Modules with no
@@ -2518,6 +2574,14 @@ struct CodeVirtualization : public ModulePass {
         ++Skipped;
         continue;
       }
+      OpcodeHistogram Hist = opcodeHistogram(P.Words);
+      OptimizationRemark HR(DEBUG_TYPE, "PaddingHistogram", F);
+      HR << "padding histogram ("
+         << ore::NV("Opcodes", Hist.Total) << " opcodes, "
+         << ore::NV("TopHits", Hist.TopHits) << " top hits, "
+         << ore::NV("TopShareBp", Hist.TopShareBp) << " bp, "
+         << ore::NV("PadHits", Hist.PadHits) << " pad hits)";
+      ORE.emit(HR);
       unsigned InstCount = countInstructions(*F);
       if (VMPMaxBytecodeExpansion && InstCount &&
           P.Words.size() >
