@@ -127,6 +127,12 @@ CASES = [
     # overloads, and a generic bubble_sort. Each instantiation is its own IR
     # function exercised by ConstantIntEncryption/MBA/IndirectCall.
     Case("cpp_templates_adv", (case_path("cpp_templates_adv") / "src" / "main.cpp",), "templates-adv:3:42:15:6:70:165029893\n"),
+    # Exceptions & RAII fixture: standard + custom exceptions, multiple catch
+    # clauses (order matters), std::throw_with_nested + rethrow_if_nested,
+    # RAII destructor order during unwind, noexcept, and exception_ptr capture
+    # /rethrow. C++ exceptions lower to funclets on x64; the unwind tables and
+    # the exception_ptr ABI are fragile under Flattening + BCF.
+    Case("exceptions_raii", (case_path("exceptions_raii") / "src" / "main.cpp",), "exc:2100:3100:1142:4100:100:105:200:15:-3:50\n"),
     Case("cpp_console", (case_path("cpp_console") / "src" / "main.cpp",), "cpp-console:144\n"),
     Case("cpp_classes", (case_path("cpp_classes") / "src" / "main.cpp",), "classes:124:taokari\n"),
     Case("cpp_templates", (case_path("cpp_templates") / "src" / "main.cpp",), "templates:55:29\n"),
