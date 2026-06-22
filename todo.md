@@ -1282,9 +1282,9 @@ This is required before Taokari can become serious.
 
 ## Level 3 — Attack-Oriented Verification
 
-* [ ] Run `opt -O2` survival tests
-* [ ] Run `opt -O3` survival tests
-* [ ] Run LTO survival tests
+* [x] Run `opt -O2` survival tests
+* [x] Run `opt -O3` survival tests
+* [x] Run LTO survival tests
 * [ ] Add decompiler snapshot tests
 * [ ] Add string leak tests
 * [ ] Add symbol leak tests
