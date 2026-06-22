@@ -117,7 +117,22 @@ struct MBA : public FunctionPass {
                                           Name + ".vload");
     Value *Odd = IRB.CreateOr(Loaded, ConstantInt::get(Ty, 1),
                               Name + ".odd");
-    return IRB.CreateMul(Loaded, Odd, Name + ".noise");
+    switch (FuncRNG() % 4) {
+    case 0:
+      return IRB.CreateMul(Loaded, Odd, Name + ".noise.mul");
+    case 1:
+      return IRB.CreateXor(IRB.CreateAdd(Loaded, Odd, Name + ".noise.add"),
+                           Odd, Name + ".noise.xor");
+    case 2:
+      return IRB.CreateSub(IRB.CreateOr(Loaded, Odd, Name + ".noise.or"),
+                           IRB.CreateAnd(Loaded, Odd, Name + ".noise.and"),
+                           Name + ".noise.sub");
+    default:
+      return IRB.CreateMul(
+          IRB.CreateAdd(Loaded, IRB.CreateXor(Loaded, Odd, Name + ".noise.xor"),
+                        Name + ".noise.add"),
+          Odd, Name + ".noise.mul");
+    }
   }
 
   static Value *hardenResult(BinaryOperator &BO, IRBuilder<NoFolder> &IRB,
