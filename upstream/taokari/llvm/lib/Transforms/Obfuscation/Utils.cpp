@@ -298,6 +298,17 @@ IntegerType *getPageTableIntTy(Module &M) {
                           M.getDataLayout().getPointerSizeInBits());
 }
 
+static uint8_t scramblePageMask(uint8_t Mask, uint64_t ObjKey,
+                                unsigned Round) {
+  unsigned Mul =
+      (static_cast<unsigned>(ObjKey >> ((Round & 7u) * 8u)) & 15u) | 1u;
+  unsigned Add =
+      static_cast<unsigned>((ObjKey >> (((Round + 3u) & 7u) * 8u)) ^
+                            (ObjKey >> (((Round + 1u) & 7u) * 8u))) &
+      15u;
+  return static_cast<uint8_t>(((Mask & 15u) * Mul + Add) & 15u);
+}
+
 void maskCipher(uint8_t  mask, APInt &preIndex, uint64_t objKey,
                 unsigned newIndex) {
   switch (mask) {
@@ -434,7 +445,8 @@ void createPageTable(const CreatePageTableArgs &args) {
       APInt preIndex(BitWidth, args.IndexMap->at(Obj));
       for (unsigned k = 0; k < 4; ++k) {
         const auto mask = static_cast<uint8_t>(ObjMask >> (k * 4)) % 16u;
-        maskCipher(mask, preIndex, ObjFullKey, j);
+        maskCipher(scramblePageMask(mask, ObjFullKey, k),
+                   preIndex, ObjFullKey, j);
       }
       auto toWriteData = ConstantInt::get(IntTy, preIndex);
       ConstantObjectIndex.push_back(toWriteData);
@@ -495,7 +507,8 @@ void enhancedPageTable(const CreatePageTableArgs &     args,
 
       for (unsigned k = 0; k < 2 * args.CountLoop; ++k) {
         const auto mask = static_cast<uint8_t>(ObjMask >> (k * 4)) % 16u;
-        maskCipher(mask, preIndex, ObjFullKey, j);
+        maskCipher(scramblePageMask(mask, ObjFullKey, k),
+                   preIndex, ObjFullKey, j);
       }
       auto toWriteData = ConstantInt::get(IntTy, preIndex);
       ConstantObjectIndex.push_back(toWriteData);
@@ -657,7 +670,7 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
       SmallVector<uint8_t, 16> maskIndex;
       for (unsigned j = 0; j < 2 * args.FuncLoopCount; ++j) {
         auto mask = static_cast<uint8_t>(FuncMask >> (j * 4)) % 16u;
-        maskIndex.push_back(mask);
+        maskIndex.push_back(scramblePageMask(mask, args.FuncKey, j));
       }
       for (int j = maskIndex.size() - 1; j >= 0; --j) {
         NextIndex = createDecIndexSwitch(maskIndex[j], NextIndex, PrevIndex,
@@ -680,7 +693,7 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
       SmallVector<uint8_t, 16> maskIndex;
       for (unsigned j = 0; j < 4; ++j) {
         auto mask = static_cast<uint8_t>(ModuleMask >> (j * 4)) % 16u;
-        maskIndex.push_back(mask);
+        maskIndex.push_back(scramblePageMask(mask, args.ModuleKey, j));
       }
       for (int j = maskIndex.size() - 1; j >= 0; --j) {
         NextIndex = createDecIndexSwitch(maskIndex[j], NextIndex, PrevIndex,
