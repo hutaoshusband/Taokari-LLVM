@@ -449,11 +449,11 @@ Main weakness: no AArch64 parity test and limited fake target noise.
 
 * [x] Add per-function branch table variants
 * [x] Add multiple decrypt formulas
-* [ ] Add bogus branch destinations
-* [ ] Add trap destinations
+* [x] Add bogus branch destinations
+* [x] Add trap destinations
 * [ ] Add fake recovery paths
 * [x] Add branch-table integrity checks
-* [ ] Add dispatcher integration
+* [x] Add dispatcher integration
 * [x] Add cross-pass tests with flattening
 * [x] Add cross-pass tests with BCF
 
