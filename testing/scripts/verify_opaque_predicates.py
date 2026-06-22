@@ -126,6 +126,11 @@ def main() -> int:
       "RNG() % 3" not in opq_source):
     print("missing L1 opaque predicate family variety", file=sys.stderr)
     return 1
+  if ("Salt->getLimitedValue() % 3" not in opq_source or
+      "even.sub" not in opq_source or
+      "even.xor" not in opq_source):
+    print("missing makeEvenLowBit shape variety", file=sys.stderr)
+    return 1
 
   include_dir = run([str(LLVM_CONFIG), "--includedir"]).stdout.strip()
   libs = words(run([str(LLVM_CONFIG), "--libs", "core", "support", "obfuscation"]).stdout)

@@ -42,9 +42,20 @@ Value *makeEvenLowBit(IRBuilder<> &IRB, Value *Seed, ConstantInt *Salt,
                       const Twine &Name) {
   auto *IntTy = cast<IntegerType>(Seed->getType());
   Value *Mixed = IRB.CreateAdd(Seed, Salt, Name + ".mix");
-  Value *Carry =
-      IRB.CreateAnd(Mixed, ConstantInt::get(IntTy, 1), Name + ".carry");
-  Value *Even = IRB.CreateAdd(Mixed, Carry, Name + ".even");
+  auto *One = ConstantInt::get(IntTy, 1);
+  Value *Low = IRB.CreateAnd(Mixed, One, Name + ".low");
+  Value *Even = nullptr;
+  switch (Salt->getLimitedValue() % 3) {
+  case 1:
+    Even = IRB.CreateSub(Mixed, Low, Name + ".even.sub");
+    break;
+  case 2:
+    Even = IRB.CreateXor(Mixed, Low, Name + ".even.xor");
+    break;
+  default:
+    Even = IRB.CreateAdd(Mixed, Low, Name + ".even.add");
+    break;
+  }
   return IRB.CreateAnd(Even, ConstantInt::get(IntTy, 1), Name + ".bit");
 }
 
