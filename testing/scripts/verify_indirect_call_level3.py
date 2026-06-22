@@ -97,6 +97,10 @@ def main() -> int:
             "CalleeKeys[TableCallee] = nextNonZeroKey()" not in source_text or
             "uint64_t Seed = nextNonZeroKey()" not in source_text):
         return fail("indirect-call PAC keys are not drawn as nonzero RNG keys")
+    if ("switch (RNG() % 3)" not in source_text or
+            "shard.pred.xor" not in source_text or
+            "shard.pred.add" not in source_text):
+        return fail("indirect-call shard guard shape variety missing")
 
     with tempfile.TemporaryDirectory(prefix="taokari-icall-l3-") as tmp_name:
         tmp = Path(tmp_name)

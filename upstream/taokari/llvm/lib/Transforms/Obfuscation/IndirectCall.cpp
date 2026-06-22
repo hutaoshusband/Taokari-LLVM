@@ -169,9 +169,33 @@ struct IndirectCall : public FunctionPass {
 
     IRBuilder<> B(Entry);
     auto *A = B.CreateAlignedLoad(I64, SeedGV, Align(8), true);
-    auto *Bv = B.CreateAdd(B.CreateAlignedLoad(I64, SeedGV, Align(8), true),
-                           ConstantInt::get(I64, 1));
-    B.CreateCondBr(B.CreateICmpEQ(A, Bv), Fake, Real);
+    auto *Bv = B.CreateAlignedLoad(I64, SeedGV, Align(8), true);
+    Value *Pred = nullptr;
+    switch (RNG() % 3) {
+    case 1: {
+      auto *Salt = ConstantInt::get(I64, nextNonZeroKey());
+      Value *L = B.CreateXor(A, Salt, "shard.pred.xor.l");
+      Value *R = B.CreateAdd(B.CreateXor(Bv, Salt, "shard.pred.xor.r"),
+                             ConstantInt::get(I64, 1), "shard.pred.xor.inc");
+      Pred = B.CreateICmpEQ(L, R, "shard.pred");
+      break;
+    }
+    case 2: {
+      auto *Salt = ConstantInt::get(I64, nextNonZeroKey());
+      Value *L = B.CreateAdd(A, Salt, "shard.pred.add.l");
+      Value *R = B.CreateXor(B.CreateAdd(Bv, Salt, "shard.pred.add.r"),
+                             ConstantInt::get(I64, 1), "shard.pred.add.flip");
+      Pred = B.CreateICmpEQ(L, R, "shard.pred");
+      break;
+    }
+    default: {
+      Value *R = B.CreateAdd(Bv, ConstantInt::get(I64, 1),
+                             "shard.pred.inc");
+      Pred = B.CreateICmpEQ(A, R, "shard.pred");
+      break;
+    }
+    }
+    B.CreateCondBr(Pred, Fake, Real);
 
     SmallVector<Value *, 8> Args;
     for (Argument &Arg : Shard->args())

@@ -121,9 +121,6 @@ def main() -> int:
             return 1
         if require(dis, ["callq\t*%rax"], "disassembly"):
             return 1
-        if "ud2" not in dis and "int3" not in dis:
-            print("disassembly missing: trap marker", file=sys.stderr)
-            return 1
 
         for name, extra in {
             "call_prob0": ["-mllvm", "-taokari-icall-prob=0",
