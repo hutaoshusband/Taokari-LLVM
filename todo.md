@@ -1288,7 +1288,7 @@ This is required before Taokari can become serious.
 * [ ] Add decompiler snapshot tests
 * [x] Add string leak tests
 * [x] Add symbol leak tests
-* [ ] Add CFG complexity metric
+* [x] Add CFG complexity metric
 * [ ] Add call graph breakage metric
 * [x] Add regression dashboard
 * [x] Add release-blocking test mode
