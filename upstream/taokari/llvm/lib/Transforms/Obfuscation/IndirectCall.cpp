@@ -121,6 +121,7 @@ struct IndirectCall : public FunctionPass {
 
     auto &Ctx = M.getContext();
     auto *I64 = Type::getInt64Ty(Ctx);
+    auto *PtrTy = PointerType::getUnqual(Ctx);
     uint64_t Seed = RNG();
     if (!Seed)
       Seed = 0xC3A5C85C97CB3127ULL;
@@ -129,6 +130,26 @@ struct IndirectCall : public FunctionPass {
         ConstantInt::get(I64, Seed),
         "__taokari_icall_shard_seed_" + Callee->getName());
     SeedGV->setAlignment(Align(8));
+
+    // Pointer tables. The shard body has no direct call edge to the real
+    // callee: the address is loaded from a private global as an i64 (the
+    // linker fills the slot with an IMAGE_REL_AMD64_ADDR64 reloc, exactly
+    // like the existing IndirectCall page-table entries), inttoptr'd to a
+    // function pointer and called indirectly. The IR has no `call @callee`
+    // edge for Hex-Rays or a static disassembler to lift directly; the
+    // absolute address lives in .data as a reloc, the same place every
+    // other IndirectCall entry already lives, so no new leakage is added.
+    Constant *CalleePtrInt = ConstantExpr::getPtrToInt(Callee, I64);
+    auto *CalleePtrGV = new GlobalVariable(
+        M, I64, false, GlobalValue::PrivateLinkage, CalleePtrInt,
+        "__taokari_icall_shard_ptr_" + Callee->getName());
+    CalleePtrGV->setAlignment(Align(8));
+
+    Constant *FakePtrInt = ConstantExpr::getPtrToInt(FakeTarget, I64);
+    auto *FakePtrGV = new GlobalVariable(
+        M, I64, false, GlobalValue::PrivateLinkage, FakePtrInt,
+        "__taokari_icall_shard_fptr_" + Callee->getName());
+    FakePtrGV->setAlignment(Align(8));
 
     BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Shard);
     BasicBlock *Real = BasicBlock::Create(Ctx, "real", Shard);
@@ -150,27 +171,40 @@ struct IndirectCall : public FunctionPass {
     for (Argument &Arg : Shard->args())
       Args.push_back(&Arg);
 
+    // Runtime pointer reconstruction: load the absolute address from the
+    // private pointer table, inttoptr to a function pointer, then an
+    // indirect call. The called operand is a runtime value, so the IR has
+    // no direct call edge to the real callee for Hex-Rays or a static
+    // disassembler to lift.
+    auto emitIndirectShardCall = [&](BasicBlock *BB, GlobalVariable *PtrGV,
+                                     FunctionType *FTy) -> CallInst * {
+      IRBuilder<> B2(BB);
+      auto *AddrInt = B2.CreateAlignedLoad(I64, PtrGV, Align(8), true,
+                                           "shard.addr");
+      Value *DecPtr = B2.CreateIntToPtr(AddrInt, PtrTy, "shard.ptr");
+      auto *Call = B2.CreateCall(FTy, DecPtr, Args);
+      return Call;
+    };
+
     B.SetInsertPoint(Fake);
-    if (Callee->getReturnType()->isVoidTy()) {
-      auto *FakeCall = B.CreateCall(FakeTarget, Args);
-      FakeCall->setCallingConv(Callee->getCallingConv());
-      B.CreateRetVoid();
-    } else {
-      auto *FakeCall = B.CreateCall(FakeTarget, Args);
-      FakeCall->setCallingConv(Callee->getCallingConv());
-      Value *FakeResult = FakeCall;
-      B.CreateRet(FakeResult);
+    {
+      auto *FakeCall =
+          emitIndirectShardCall(Fake, FakePtrGV, FakeTarget->getFunctionType());
+      if (Callee->getReturnType()->isVoidTy())
+        B.CreateRetVoid();
+      else
+        B.CreateRet(FakeCall);
     }
 
     B.SetInsertPoint(Real);
-    if (Callee->getReturnType()->isVoidTy()) {
-      auto *RealCall = B.CreateCall(Callee, Args);
-      RealCall->setCallingConv(Callee->getCallingConv());
-      B.CreateRetVoid();
-    } else {
-      auto *RealCall = B.CreateCall(Callee, Args);
-      RealCall->setCallingConv(Callee->getCallingConv());
-      B.CreateRet(RealCall);
+    {
+      auto *RealCall =
+          emitIndirectShardCall(Real, CalleePtrGV, Callee->getFunctionType());
+      if (Callee->getReturnType()->isVoidTy()) {
+        B.CreateRetVoid();
+      } else {
+        B.CreateRet(RealCall);
+      }
     }
 
     CalleeShards[Callee] = Shard;

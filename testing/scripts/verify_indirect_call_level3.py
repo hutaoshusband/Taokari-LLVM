@@ -59,10 +59,14 @@ def check_l3_ir(text: str) -> int:
     ]
     if sum(1 for formula in formulas if formula in text) < 4:
         return fail("not enough call reconstruction formula variants")
-    if not re.search(r"call(?:\s+\w+)*\s+i32\s+@callee_a", text):
-        return fail("real callout edge missing inside shard")
-    if not re.search(r"call(?:\s+\w+)*\s+i32\s+@__taokari_icall_fake_", text):
-        return fail("fake call edge missing inside shard")
+    if not re.search(r"__taokari_icall_shard_ptr_callee_a", text):
+        return fail("encrypted real callee pointer missing inside shard")
+    if not re.search(r"__taokari_icall_shard_fptr_callee_a", text):
+        return fail("encrypted fake callee pointer missing inside shard")
+    if not re.search(r"inttoptr\s+i64.*to\s+ptr", text):
+        return fail("indirect-call target reconstruction missing inside shard")
+    if re.search(r"call(?:\s+\w+)*\s+i32\s+@callee_a\(", text):
+        return fail("shard still exposes a direct call to the real callee")
     if len(set(re.findall(r"@[^ ]+_IndirectCallee_enhanced_page_table_\d+", text))) < 3:
         return fail("not enough decryptor/page-table variants")
     return 0
