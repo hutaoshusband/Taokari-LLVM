@@ -240,6 +240,19 @@ struct CodeVirtualization : public ModulePass {
   GlobalVariable *CalleeTable = nullptr;
   uint64_t CalleeTableKey = 0;
   unsigned IndirectCallStubCounter = 0;
+  struct ScheduleConstants {
+    uint64_t Step = 0;
+    uint64_t Mix1 = 0;
+    uint64_t Mix2 = 0;
+    uint64_t OpcodeDomain = 0;
+    uint64_t OperandDomain = 0;
+    uint64_t RotationDomain = 0;
+    uint64_t CalleeDomain = 0;
+    uint64_t RouteDomain = 0;
+    uint64_t HashOffset = 0;
+    uint64_t HashPrime = 0;
+    uint64_t KeyMul = 0;
+  } Schedule;
 
   CodeVirtualization(ObfuscationOptions *ArgsOptions) : ModulePass(ID) {
     this->ArgsOptions = ArgsOptions;
@@ -258,6 +271,27 @@ struct CodeVirtualization : public ModulePass {
     while (!Key)
       Key = RNG();
     return Key;
+  }
+
+  uint64_t nextOddKey() {
+    uint64_t Key = 1;
+    while (Key == 1)
+      Key = nextNonZeroKey() | 1ULL;
+    return Key;
+  }
+
+  void initScheduleConstants() {
+    Schedule.Step = nextOddKey();
+    Schedule.Mix1 = nextOddKey();
+    Schedule.Mix2 = nextOddKey();
+    Schedule.OpcodeDomain = nextNonZeroKey();
+    Schedule.OperandDomain = nextNonZeroKey();
+    Schedule.RotationDomain = nextOddKey();
+    Schedule.CalleeDomain = nextNonZeroKey();
+    Schedule.RouteDomain = nextNonZeroKey();
+    Schedule.HashOffset = nextNonZeroKey();
+    Schedule.HashPrime = nextOddKey();
+    Schedule.KeyMul = nextOddKey();
   }
 
   bool isSupportedInt(Type *Ty) const {
@@ -1653,11 +1687,11 @@ struct CodeVirtualization : public ModulePass {
   }
 
   uint64_t bytecodeDomain(bool IsOpcodeWord) const {
-    return IsOpcodeWord ? 0xA5A5A5A5D3C3B2A1ULL : 0x3C6EF372FE94F82AULL;
+    return IsOpcodeWord ? Schedule.OpcodeDomain : Schedule.OperandDomain;
   }
 
   uint64_t bytecodeRotationDomain(uint8_t PCFlags) const {
-    return static_cast<uint64_t>(PCFlags >> 1) * 0xD1342543DE82EF95ULL;
+    return static_cast<uint64_t>(PCFlags >> 1) * Schedule.RotationDomain;
   }
 
   int64_t encryptBytecodeWord(int64_t Word, size_t Index,
@@ -1672,11 +1706,11 @@ struct CodeVirtualization : public ModulePass {
 
   uint64_t bytecodeScheduleWord(uint64_t Key, uint64_t Index,
                                 uint64_t Domain) const {
-    uint64_t X = Key ^ (Index * 0x9E3779B97F4A7C15ULL) ^ Domain;
+    uint64_t X = Key ^ (Index * Schedule.Step) ^ Domain;
     X ^= X >> 30;
-    X *= 0xBF58476D1CE4E5B9ULL;
+    X *= Schedule.Mix1;
     X ^= X >> 27;
-    X *= 0x94D049BB133111EBULL;
+    X *= Schedule.Mix2;
     X ^= X >> 31;
     return X;
   }
@@ -1695,11 +1729,11 @@ struct CodeVirtualization : public ModulePass {
   };
 
   KeyDerivation makeKeyDerivation(uint64_t Key) {
-    constexpr uint64_t Mul = 0xD6E8FEB86659FD93ULL;
     for (;;) {
       KeyDerivation D{RNG(), RNG(), RNG(), 0,
                       static_cast<unsigned>((RNG() % 63) + 1)};
-      uint64_t Mixed = rotl64(((D.Seed ^ D.XorIn) * Mul) + D.AddIn, D.Rot);
+      uint64_t Mixed =
+          rotl64(((D.Seed ^ D.XorIn) * Schedule.KeyMul) + D.AddIn, D.Rot);
       D.XorOut = Mixed ^ Key;
       if (D.Seed != Key && D.XorIn != Key && D.AddIn != Key &&
           D.XorOut != Key)
@@ -1709,7 +1743,6 @@ struct CodeVirtualization : public ModulePass {
 
   Value *buildRuntimeBytecodeKey(IRBuilder<> &B, Module &M, Function &F,
                                  Type *I64, uint64_t Key) {
-    constexpr uint64_t Mul = 0xD6E8FEB86659FD93ULL;
     KeyDerivation D = makeKeyDerivation(Key);
     auto *SeedGlobal = new GlobalVariable(
         M, I64, false, GlobalValue::PrivateLinkage,
@@ -1720,7 +1753,7 @@ struct CodeVirtualization : public ModulePass {
     auto *Seed = B.CreateLoad(I64, SeedGlobal, "vmp.key.seed");
     Seed->setVolatile(true);
     Value *Mixed = B.CreateXor(Seed, ConstantInt::get(I64, D.XorIn));
-    Mixed = B.CreateMul(Mixed, ConstantInt::get(I64, Mul));
+    Mixed = B.CreateMul(Mixed, ConstantInt::get(I64, Schedule.KeyMul));
     Mixed = B.CreateAdd(Mixed, ConstantInt::get(I64, D.AddIn));
     Value *RotL = B.CreateShl(Mixed, ConstantInt::get(I64, D.Rot));
     Value *RotR = B.CreateLShr(Mixed, ConstantInt::get(I64, 64 - D.Rot));
@@ -1732,12 +1765,10 @@ struct CodeVirtualization : public ModulePass {
                            const Twine &Name) {
     V = B.CreateXor(V, B.CreateLShr(V, ConstantInt::get(I64, 33)),
                     Name + ".x1");
-    V = B.CreateMul(V, ConstantInt::get(I64, 0xFF51AFD7ED558CCDULL),
-                    Name + ".m1");
+    V = B.CreateMul(V, ConstantInt::get(I64, Schedule.Mix1), Name + ".m1");
     V = B.CreateXor(V, B.CreateLShr(V, ConstantInt::get(I64, 33)),
                     Name + ".x2");
-    V = B.CreateMul(V, ConstantInt::get(I64, 0xC4CEB9FE1A85EC53ULL),
-                    Name + ".m2");
+    V = B.CreateMul(V, ConstantInt::get(I64, Schedule.Mix2), Name + ".m2");
     return B.CreateXor(V, B.CreateLShr(V, ConstantInt::get(I64, 33)),
                        Name + ".x3");
   }
@@ -1878,21 +1909,22 @@ struct CodeVirtualization : public ModulePass {
         B.CreateAnd(PCFlags, ConstantInt::get(I8, 1)),
         ConstantInt::get(I8, 0));
     Value *Domain = B.CreateSelect(
-        IsOpcodeWord, ConstantInt::get(I64, 0xA5A5A5A5D3C3B2A1ULL),
-        ConstantInt::get(I64, 0x3C6EF372FE94F82AULL));
+        IsOpcodeWord, ConstantInt::get(I64, Schedule.OpcodeDomain),
+        ConstantInt::get(I64, Schedule.OperandDomain));
     Value *Rotation = B.CreateZExt(
         B.CreateLShr(PCFlags, ConstantInt::get(I8, 1)), I64);
     Domain = B.CreateXor(
         Domain,
-        B.CreateMul(Rotation, ConstantInt::get(I64, 0xD1342543DE82EF95ULL)));
+        B.CreateMul(Rotation,
+                    ConstantInt::get(I64, Schedule.RotationDomain)));
     Value *X = B.CreateXor(
         BytecodeKey,
-        B.CreateMul(Index, ConstantInt::get(I64, 0x9E3779B97F4A7C15ULL)));
+        B.CreateMul(Index, ConstantInt::get(I64, Schedule.Step)));
     X = B.CreateXor(X, Domain);
     X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(I64, 30)));
-    X = B.CreateMul(X, ConstantInt::get(I64, 0xBF58476D1CE4E5B9ULL));
+    X = B.CreateMul(X, ConstantInt::get(I64, Schedule.Mix1));
     X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(I64, 27)));
-    X = B.CreateMul(X, ConstantInt::get(I64, 0x94D049BB133111EBULL));
+    X = B.CreateMul(X, ConstantInt::get(I64, Schedule.Mix2));
     return B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(I64, 31)));
   }
 
@@ -1901,19 +1933,18 @@ struct CodeVirtualization : public ModulePass {
   }
 
   uint64_t calleeTableMaskWord(uint64_t Index) const {
-    return bytecodeScheduleWord(CalleeTableKey, Index,
-                                0x6A09E667F3BCC909ULL);
+    return bytecodeScheduleWord(CalleeTableKey, Index, Schedule.CalleeDomain);
   }
 
   Value *calleeTableMaskWord(IRBuilder<> &B, InterpCtx &C, Value *Index) {
     Value *X = B.CreateXor(
         ConstantInt::get(C.I64, CalleeTableKey),
-        B.CreateMul(Index, ConstantInt::get(C.I64, 0x9E3779B97F4A7C15ULL)));
-    X = B.CreateXor(X, ConstantInt::get(C.I64, 0x6A09E667F3BCC909ULL));
+        B.CreateMul(Index, ConstantInt::get(C.I64, Schedule.Step)));
+    X = B.CreateXor(X, ConstantInt::get(C.I64, Schedule.CalleeDomain));
     X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 30)));
-    X = B.CreateMul(X, ConstantInt::get(C.I64, 0xBF58476D1CE4E5B9ULL));
+    X = B.CreateMul(X, ConstantInt::get(C.I64, Schedule.Mix1));
     X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 27)));
-    X = B.CreateMul(X, ConstantInt::get(C.I64, 0x94D049BB133111EBULL));
+    X = B.CreateMul(X, ConstantInt::get(C.I64, Schedule.Mix2));
     return B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 31)));
   }
 
@@ -2487,9 +2518,9 @@ struct CodeVirtualization : public ModulePass {
                      B.CreateBr(C.Bad);
                    }});
     };
-    addFakeHandler(OpFakeArith, "fakearith", 0x9E3779B97F4A7C15ULL);
-    addFakeHandler(OpFakeMem, "fakemem", 0xD1342543DE82EF95ULL);
-    addFakeHandler(OpFakeCall, "fakecall", 0xA0761D6478BD642FULL);
+    addFakeHandler(OpFakeArith, "fakearith", Schedule.Step);
+    addFakeHandler(OpFakeMem, "fakemem", Schedule.RotationDomain);
+    addFakeHandler(OpFakeCall, "fakecall", Schedule.RouteDomain);
 
     H.push_back({OpMemCpy, "memcpy", shapeOf(OpMemCpy),
                  [this, &C](IRBuilder<> &B) {
@@ -2624,7 +2655,7 @@ struct CodeVirtualization : public ModulePass {
     B.CreateStore(ConstantInt::get(I64, 0), HandlerState);
     auto *Tag = B.CreateAlloca(I64, nullptr, "tag");
     auto *TagI = B.CreateAlloca(I64, nullptr, "tag.i");
-    B.CreateStore(ConstantInt::get(I64, 0xCBF29CE484222325ULL), Tag);
+    B.CreateStore(ConstantInt::get(I64, Schedule.HashOffset), Tag);
     B.CreateStore(ConstantInt::get(I64, 0), TagI);
     BasicBlock *TagHdr = BasicBlock::Create(Ctx, "tag.hdr", F);
     BasicBlock *TagBody = BasicBlock::Create(Ctx, "tag.body", F);
@@ -2637,10 +2668,12 @@ struct CodeVirtualization : public ModulePass {
     Value *CurWord = B.CreateLoad(I64, B.CreateGEP(I64, BC, CurTagI));
     Value *CurTag = B.CreateLoad(I64, Tag);
     Value *TagMix =
-        B.CreateAdd(CurWord, B.CreateMul(CurTagI, ConstantInt::get(I64, 0x9E3779B97F4A7C15ULL)));
+        B.CreateAdd(CurWord,
+                    B.CreateMul(CurTagI,
+                                ConstantInt::get(I64, Schedule.Step)));
     Value *NextTag =
         B.CreateMul(B.CreateXor(CurTag, TagMix),
-                    ConstantInt::get(I64, 0x100000001B3ULL));
+                    ConstantInt::get(I64, Schedule.HashPrime));
     B.CreateStore(NextTag, Tag);
     B.CreateStore(B.CreateAdd(CurTagI, ConstantInt::get(I64, 1)), TagI);
     B.CreateBr(TagHdr);
@@ -2664,7 +2697,7 @@ struct CodeVirtualization : public ModulePass {
     auto *OpMapHashI = B.CreateAlloca(I64, nullptr, "opmap.hash.i");
     Value *ExpectedOpMapHashV =
         ConstantInt::get(I64, ExpectedOpMapHash);
-    B.CreateStore(ConstantInt::get(I64, 0xCBF29CE484222325ULL), OpMapHash);
+    B.CreateStore(ConstantInt::get(I64, Schedule.HashOffset), OpMapHash);
     B.CreateStore(ConstantInt::get(I64, 0), OpMapHashI);
     BasicBlock *OpMapHdr = BasicBlock::Create(Ctx, "opmap.hdr", F);
     BasicBlock *OpMapBody = BasicBlock::Create(Ctx, "opmap.body", F);
@@ -2682,10 +2715,10 @@ struct CodeVirtualization : public ModulePass {
     Value *CurOpMapHash = B.CreateLoad(I64, OpMapHash);
     Value *OpMapMix = B.CreateAdd(
         OpMapEntry, B.CreateMul(OpMapHashIVal,
-                                ConstantInt::get(I64, 0x9E3779B97F4A7C15ULL)));
+                                ConstantInt::get(I64, Schedule.Step)));
     Value *NextOpMapHash = B.CreateMul(
         B.CreateXor(CurOpMapHash, OpMapMix),
-        ConstantInt::get(I64, 0x100000001B3ULL));
+        ConstantInt::get(I64, Schedule.HashPrime));
     B.CreateStore(NextOpMapHash, OpMapHash);
     B.CreateStore(B.CreateAdd(OpMapHashIVal, ConstantInt::get(I64, 1)),
                   OpMapHashI);
@@ -2749,8 +2782,8 @@ struct CodeVirtualization : public ModulePass {
                               "handler.target");
       Dests.push_back(CaseBB);
       uint64_t RouteToken =
-          (static_cast<uint64_t>(H.Op) * 0x9E3779B97F4A7C15ULL) ^
-          DispatchKey ^ 0xD1B54A32D192ED03ULL;
+          (static_cast<uint64_t>(H.Op) * Schedule.Step) ^ DispatchKey ^
+          Schedule.RouteDomain;
       HandlerBlocks.push_back({&H, CaseBB, BodyBB, RouteToken});
     }
     auto *IBI = B.CreateIndirectBr(Target, Dests.size());
@@ -2879,18 +2912,18 @@ struct CodeVirtualization : public ModulePass {
 
     // Compute the expected opcode-map hash that the interpreter will
     // re-derive at entry. The hash mirrors the runtime fold: start from
-    // 0xCBF29CE484222325 and for each entry compute
-    //   next = (cur ^ (entry + index * prime)) * 0x100000001B3
+    // a per-build offset and for each entry compute
+    //   next = (cur ^ (entry + index * step)) * per-build prime
     // using 64-bit wrapping arithmetic. The runtime check then catches
     // any patch to a single OpcodeMap entry.
-    uint64_t ExpectedOpMapHash = 0xCBF29CE484222325ULL;
+    uint64_t ExpectedOpMapHash = Schedule.HashOffset;
     for (unsigned I = 0; I < OpcodeDecode.size(); ++I) {
       uint64_t Entry =
           static_cast<uint64_t>(static_cast<int64_t>(OpcodeDecode[I]));
       uint64_t Mix = Entry +
-                     static_cast<uint64_t>(I) * 0x9E3779B97F4A7C15ULL;
+                     static_cast<uint64_t>(I) * Schedule.Step;
       ExpectedOpMapHash =
-          (ExpectedOpMapHash ^ Mix) * 0x100000001B3ULL;
+          (ExpectedOpMapHash ^ Mix) * Schedule.HashPrime;
     }
 
     Function *Interp = createInterpreter(M, F, ExpectedOpMapHash);
@@ -2949,7 +2982,7 @@ struct CodeVirtualization : public ModulePass {
     auto *RekeyI = B.CreateAlloca(I64, nullptr, "vmp.rekey.i");
     auto *RuntimeTag = B.CreateAlloca(I64, nullptr, "vmp.rekey.tag");
     B.CreateStore(Zero, RekeyI);
-    B.CreateStore(ConstantInt::get(I64, 0xCBF29CE484222325ULL), RuntimeTag);
+    B.CreateStore(ConstantInt::get(I64, Schedule.HashOffset), RuntimeTag);
     BasicBlock *RekeyHdr = BasicBlock::Create(Ctx, "vmp.rekey.hdr", &F);
     BasicBlock *RekeyBody = BasicBlock::Create(Ctx, "vmp.rekey.body", &F);
     BasicBlock *RekeyDone = BasicBlock::Create(Ctx, "vmp.rekey.done", &F);
@@ -2972,10 +3005,11 @@ struct CodeVirtualization : public ModulePass {
     Value *CurTag = B.CreateLoad(I64, RuntimeTag);
     Value *TagMix =
         B.CreateAdd(RuntimeWord,
-                    B.CreateMul(CurRekeyI, ConstantInt::get(I64, 0x9E3779B97F4A7C15ULL)));
+                    B.CreateMul(CurRekeyI,
+                                ConstantInt::get(I64, Schedule.Step)));
     Value *NextTag =
         B.CreateMul(B.CreateXor(CurTag, TagMix),
-                    ConstantInt::get(I64, 0x100000001B3ULL));
+                    ConstantInt::get(I64, Schedule.HashPrime));
     B.CreateStore(NextTag, RuntimeTag);
     B.CreateStore(B.CreateAdd(CurRekeyI, ConstantInt::get(I64, 1)), RekeyI);
     B.CreateBr(RekeyHdr);
@@ -3052,9 +3086,7 @@ struct CodeVirtualization : public ModulePass {
     if (auto *Existing = M.getGlobalVariable("__taokari_vmp_thunk_seed"))
       return Existing;
     Type *I64 = Type::getInt64Ty(M.getContext());
-    uint64_t Seed = RNG();
-    if (!Seed)
-      Seed = 0x9E3779B97F4A7C15ULL;
+    uint64_t Seed = nextNonZeroKey();
     auto *GV = new GlobalVariable(M, I64, false, GlobalValue::PrivateLinkage,
                                   ConstantInt::get(I64, Seed),
                                   "__taokari_vmp_thunk_seed");
@@ -3171,9 +3203,7 @@ struct CodeVirtualization : public ModulePass {
     }
     // Store masked per-index callee tokens; OpCall validates them before
     // dispatching to the generated call-thunk case.
-    CalleeTableKey = RNG();
-    if (!CalleeTableKey)
-      CalleeTableKey = 0xD6E8FEB86659FD93ULL;
+    CalleeTableKey = nextNonZeroKey();
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
     SmallVector<Constant *, 8> Entries;
@@ -3196,7 +3226,9 @@ struct CodeVirtualization : public ModulePass {
     CalleeIndex.clear();
     CalleeOrder.clear();
     CalleeTable = nullptr;
+    CalleeTableKey = 0;
     IndirectCallStubCounter = 0;
+    initScheduleConstants();
 
     SmallVector<Function *, 8> Targets;
     for (Function &F : M) {
