@@ -916,11 +916,11 @@ real callee directly so the static call graph still resolves.
 Without these, frequency analysis on handler hits maps every opcode in
 minutes (the most-used handler is almost certainly `OpAdd`/`OpStoreSlot`).
 
-* [ ] Add anti-frequency-analysis padding (emit dummy opcodes/handlers
+* [x] Add anti-frequency-analysis padding (emit dummy opcodes/handlers
       to flatten the handler-hit histogram a tracer records)
-* [ ] Add fake opcodes (opcodes that decrypt to no-ops or to junk
+* [x] Add fake opcodes (opcodes that decrypt to no-ops or to junk
       handlers; inflate the analyst's opcode map)
-* [ ] Add fake handlers (dead switch cases that look real, never fire on
+* [x] Add fake handlers (dead switch cases that look real, never fire on
       well-formed bytecode)
 
 ### Phase G — Hardened-VM testing (bulletproof = tested under attack)
