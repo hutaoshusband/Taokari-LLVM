@@ -2518,9 +2518,28 @@ struct CodeVirtualization : public ModulePass {
                      B.CreateBr(C.Bad);
                    }});
     };
-    addFakeHandler(OpFakeArith, "fakearith", Schedule.Step);
-    addFakeHandler(OpFakeMem, "fakemem", Schedule.RotationDomain);
-    addFakeHandler(OpFakeCall, "fakecall", Schedule.RouteDomain);
+    bool EmitFakeArith = RNG() & 1;
+    bool EmitFakeMem = RNG() & 1;
+    bool EmitFakeCall = RNG() & 1;
+    if (!EmitFakeArith && !EmitFakeMem && !EmitFakeCall) {
+      switch (RNG() % 3) {
+      case 0:
+        EmitFakeArith = true;
+        break;
+      case 1:
+        EmitFakeMem = true;
+        break;
+      default:
+        EmitFakeCall = true;
+        break;
+      }
+    }
+    if (EmitFakeArith)
+      addFakeHandler(OpFakeArith, "fakearith", Schedule.Step);
+    if (EmitFakeMem)
+      addFakeHandler(OpFakeMem, "fakemem", Schedule.RotationDomain);
+    if (EmitFakeCall)
+      addFakeHandler(OpFakeCall, "fakecall", Schedule.RouteDomain);
 
     H.push_back({OpMemCpy, "memcpy", shapeOf(OpMemCpy),
                  [this, &C](IRBuilder<> &B) {
