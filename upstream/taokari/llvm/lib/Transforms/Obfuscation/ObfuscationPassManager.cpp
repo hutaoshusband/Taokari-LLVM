@@ -233,8 +233,7 @@ static cl::opt<std::string> TaokariConfigPath("taokari-cfg",
 static cl::opt<bool> TaokariReport(
     "taokari-report", cl::init(false), cl::NotHidden,
     cl::desc("Print the resolved obfuscation configuration to stderr "
-             "at the start of the pass pipeline (todo.md item: config "
-             "report output)."));
+             "at the start of the pass pipeline."));
 
 static cl::opt<std::string>
     ArkariConfigPath("arkari-cfg", cl::init(std::string{}), cl::NotHidden,

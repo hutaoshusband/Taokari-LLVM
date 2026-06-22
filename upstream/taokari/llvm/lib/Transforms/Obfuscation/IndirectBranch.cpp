@@ -222,8 +222,7 @@ struct IndirectBranch : public FunctionPass {
     createPageTableArgs.ObjectKeys = &BBKeys;
     createPageTableArgs.OutPageTable = &BBPageTable;
     createPageTableArgs.PtrEncKey = PtrEncKey;
-    // L2+ (todo.md "Add fake block entries" / "Add fake encrypted
-    // indices"): pad the module-level page table with decoy targets so
+    // L2+: pad the module-level page table with decoy targets so
     // a static lifter cannot infer the real branch-target count from
     // the table size. Half as many fakes as real targets keeps the
     // overhead bounded.
@@ -337,10 +336,8 @@ struct IndirectBranch : public FunctionPass {
         buildDecrypt.ModuleKey = BBKeys[AddrTBB];
         buildDecrypt.FuncKey = FuncKeys[AddrTBB];
         buildDecrypt.PtrEncKey = PtrEncKey;
-        // L2+ hardening (todo.md IndirectBranch L2: "Add runtime nonce
-        // mixing", "Add MBA for index decrypt", "Add branch target
-        // verification"). Matches what IndirectCall already does at
-        // opt.level() > 1.
+        // L2+: match IndirectCall's nonce mixing, MBA index decrypt,
+        // and branch target verification.
         buildDecrypt.RuntimeSeed = opt.level() > 1 ? RNG() : 0;
         buildDecrypt.UseMBA = opt.level() > 1;
         buildDecrypt.IntegrityCheck = opt.level() > 1;

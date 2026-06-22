@@ -126,10 +126,9 @@ struct MBA : public FunctionPass {
     if (Level < 2)
       return Result;
 
-    // Multiple MBA rounds at higher levels (todo.md "Add multiple MBA
-    // rounds"). Each round folds in a fresh runtime-derived noise
-    // value with a randomly selected identity so the expression tree
-    // deepens and the optimizer must redo its work for every layer.
+    // Higher levels add MBA rounds. Each round folds in a fresh
+    // runtime-derived noise value with a randomly selected identity so
+    // the expression tree deepens and the optimizer must redo its work.
     // Level 2 = 1 round, Level 3 = 2 rounds, Level 4 = 3 rounds.
     const unsigned Rounds = std::min<unsigned>(Level - 1, 3);
     for (unsigned I = 0; I < Rounds; ++I) {

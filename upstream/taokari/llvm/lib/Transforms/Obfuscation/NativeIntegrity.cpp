@@ -27,11 +27,7 @@ extern cl::opt<bool> TaokariMaxProtection;
 
 namespace {
 
-// Per-function native-code integrity prototype (todo.md "Add a function-
-// level integrity check prototype first; verify patching a protected
-// native block trips the tamper path").
-//
-// The pass emits a per-function private constant pool global whose
+// Per-function native-code integrity check. Emits a private pool whose
 // bytes are randomly chosen at build time. At function entry, the
 // function loads every word of the pool, folds it into a running hash
 // with a per-build prime, and compares the result against an expected
@@ -68,8 +64,7 @@ struct NativeIntegrity : public FunctionPass {
     // OR (when Taokari Max Protection is enabled) on every non-trivial
     // function in the module. Max mode is the "protect everything"
     // profile, so it extends the integrity check beyond VM bytecode to
-    // native compiled functions automatically (todo.md item 3: "Add
-    // runtime integrity outside the VM for native Max/CFF code").
+    // native compiled functions automatically.
     const bool MaxMode = TaokariMaxProtection;
     bool Annotated = false;
     for (const auto &Annotation : readAnnotate(&F)) {

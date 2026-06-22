@@ -107,10 +107,9 @@ struct IndirectGlobalVariable : public FunctionPass {
     createPageTableArgs.ObjectKeys = &GVKeys;
     createPageTableArgs.OutPageTable = &GVPageTable;
     createPageTableArgs.PtrEncKey = PtrEncKey;
-    // L2+ (todo.md "Add fake global entries"): pad the page table with
-    // decoy targets so a static lifter cannot infer the real global
-    // count from the table size. Half as many fakes as real globals
-    // keeps the overhead bounded.
+    // L2+: pad the page table with decoy targets so a static lifter
+    // cannot infer the real global count from the table size. Half as
+    // many fakes as real globals keeps the overhead bounded.
     createPageTableArgs.FakeEntries =
         std::max<unsigned>(1, GlobalVariables.size() / 2);
 
@@ -213,9 +212,8 @@ struct IndirectGlobalVariable : public FunctionPass {
         buildDecrypt.ModuleKey = GVKeys[GV];
         buildDecrypt.FuncKey = FuncKeys[GV];
         buildDecrypt.PtrEncKey = PtrEncKey;
-        // L2+ hardening (todo.md IndirectGlobal L2: "Add runtime nonce
-        // mixing", "Add MBA on global pointer decrypt"). Matches
-        // IndirectCall/IndirectBranch.
+        // L2+: match IndirectCall/IndirectBranch nonce mixing and MBA
+        // pointer decrypt.
         buildDecrypt.RuntimeSeed = opt.level() > 1 ? RNG() : 0;
         buildDecrypt.UseMBA = opt.level() > 1;
         buildDecrypt.IntegrityCheck = opt.level() > 1;

@@ -202,8 +202,8 @@ struct BogusControlFlow : public FunctionPass {
                std::mt19937_64 &FuncRNG) {
     auto *Int64 = Type::getInt64Ty(Fake.getContext());
 
-    // L3+ (todo.md "Add fake loops"): wrap the junk chain in a real
-    // back-edge so the fake block reads as a loop to a static analyzer.
+    // L3+: wrap the junk chain in a real back-edge so the fake block
+    // reads as a loop to a static analyzer.
     // The loop runs exactly `Loops` iterations via a counter compared
     // against a runtime volatile-loaded bound; the body is the same
     // xor/mul/add chain as the linear version, so the CFG now carries
@@ -222,10 +222,9 @@ struct BogusControlFlow : public FunctionPass {
     IRBuilder<> IRB(&Fake);
     Value *V =
         IRB.CreateAlignedLoad(Int64, &Nonce, Align(8), true, "bcf.fake.nonce");
-    // L2+ (todo.md "Add fake memory accesses"): a volatile load from a
-    // fresh private global introduces a fake memory dependency that a
-    // dataflow analyser must trace, on top of the junk arithmetic. The
-    // loaded value feeds the junk chain so it cannot be DCE'd.
+    // L2+: add a volatile private-global load so dataflow analysis has
+    // a fake memory dependency to trace. The loaded value feeds the junk
+    // chain so it cannot be DCE'd.
     if (Level >= 2) {
       Module &Mod = *Fake.getModule();
       auto *FakeMemInit = ConstantInt::get(Int64, FuncRNG());

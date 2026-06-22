@@ -1816,11 +1816,8 @@ struct CodeVirtualization : public ModulePass {
     B.SetInsertPoint(Cont);
   }
 
-  // Encrypted push/pop for the VM operand stack (todo.md "VM stack/locals
-  // encryption at rest between handlers"). Values are XOR'd with a per-
-  // interp StackKey before they land in the stack alloca and de-XOR'd on
-  // pop. A memory snapshot between handlers therefore shows only
-  // encrypted junk on the operand stack.
+  // Encrypted push/pop for the VM operand stack. Values are XOR'd with
+  // StackKey before they land in the stack alloca and de-XOR'd on pop.
   void pushEnc(IRBuilder<> &B, InterpCtx &C, Value *V) {
     Value *Idx = B.CreateLoad(C.I64, C.SP);
     Value *Slot = B.CreateGEP(C.I64, C.Stack, Idx);
@@ -1842,9 +1839,8 @@ struct CodeVirtualization : public ModulePass {
     return B.CreateXor(Enc, Key, "stk.plain");
   }
 
-  // PC encryption helpers (todo.md "PC encryption at rest"). The PC
-  // alloca holds PC XOR PcKey; these helpers are the only legal way to
-  // touch the PC. fetchWord, dispatch and init all go through them.
+  // The PC alloca holds PC XOR PcKey; these helpers are the only legal
+  // way to touch it. fetchWord, dispatch and init all go through them.
   Value *pcLoad(IRBuilder<> &B, InterpCtx &C) {
     Value *Enc = B.CreateLoad(C.I64, C.PC, "pc.enc");
     Value *Key = B.CreateAlignedLoad(C.I64, C.PcKey, Align(8), "pc.key.ld");
@@ -2592,8 +2588,7 @@ struct CodeVirtualization : public ModulePass {
     auto *PC = B.CreateAlloca(I64, nullptr, "pc");
     auto *SP = B.CreateAlloca(I64, nullptr, "sp");
     auto *HandlerState = B.CreateAlloca(I64, nullptr, "handler.state");
-    // PC encryption at rest (todo.md "PC encryption at rest in the VMP
-    // interpreter loop"). The PC alloca holds the program counter XOR'd
+    // The PC alloca holds the program counter XOR'd
     // with a per-interp key derived from the runtime bytecode key (an
     // interpreter argument) mixed with a per-build random constant. The
     // runtime mixing defeats constant-folding: a debugger reading the PC
@@ -2606,8 +2601,7 @@ struct CodeVirtualization : public ModulePass {
     auto *PcKey = B.CreateAlloca(I64, nullptr, "pc.key");
     B.CreateStore(
         B.CreateXor(BytecodeKey, ConstantInt::get(I64, PcKeyConst)), PcKey);
-    // Operand-stack encryption key (todo.md "VM stack/locals encryption
-    // at rest between handlers"). The stack alloca holds every pushed
+    // The stack alloca holds every pushed
     // value XOR StackKey, so a memory snapshot between handler dispatches
     // reveals no plaintext operand values. StackKey is derived from the
     // runtime bytecode key mixed with a distinct per-build constant so
@@ -2652,8 +2646,7 @@ struct CodeVirtualization : public ModulePass {
     B.CreateCondBr(B.CreateICmpEQ(B.CreateLoad(I64, Tag), ExpectedTag),
                    OpMapCheck, Bad);
 
-    // Self-verification of the handler-dispatch opcode map (todo.md
-    // "interpreter self-verification for handler table/code patching").
+    // Self-verification of the handler-dispatch opcode map.
     // The interpreter folds every entry of OpcodeMap[0..63] into a
     // running hash with a per-build prime and compares the result
     // against a per-interp expected value baked in as a constant. A
@@ -2791,8 +2784,8 @@ struct CodeVirtualization : public ModulePass {
     // lifter cannot trivially prune. The store is semantically dead from
     // the program's perspective (the global is private and never read by
     // the VM), but it cannot be DCE'd because it has a memory side effect.
-    // This is the todo.md "handler body obfuscation" requirement: apply
-    // safe MBA noise to handler bodies without breaking VM correctness.
+    // This applies safe MBA noise to handler bodies without changing
+    // VM semantics.
     GlobalVariable *HandlerNoiseGV = new GlobalVariable(
         M, I64, false, GlobalValue::PrivateLinkage,
         ConstantInt::get(I64, RNG()),
@@ -2995,9 +2988,8 @@ struct CodeVirtualization : public ModulePass {
     Value *Tampered = B.CreateLoad(I64, TamperFlag);
     B.CreateCondBr(B.CreateICmpNE(Tampered, Zero), Trap, Ok);
     B.SetInsertPoint(Trap);
-    // Per-build tamper-response policy (todo.md "tamper-response policy
-    // so VM/native integrity failures do not always become an obvious
-    // crash"). The pass picks one of four response shapes per function
+    // Per-build tamper-response policy. The pass picks one of four
+    // response shapes per function
     // from the per-module RNG, so two builds of the same source produce
     // different tamper responses and an analyst cannot fingerprint the
     // trap by exit code or by control flow. None of the modes produce an
