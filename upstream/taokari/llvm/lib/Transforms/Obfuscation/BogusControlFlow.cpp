@@ -200,8 +200,20 @@ struct BogusControlFlow : public FunctionPass {
   void addJunk(BasicBlock &Fake, BasicBlock &Real, GlobalVariable &Nonce,
                AllocaInst &JunkSlot, uint32_t Loops, uint32_t Level,
                std::mt19937_64 &FuncRNG) {
-    IRBuilder<> IRB(&Fake);
     auto *Int64 = Type::getInt64Ty(Fake.getContext());
+
+    // L3+ (todo.md "Add fake loops"): wrap the junk chain in a real
+    // back-edge so the fake block reads as a loop to a static analyzer.
+    // The loop runs exactly `Loops` iterations via a counter compared
+    // against a runtime volatile-loaded bound; the body is the same
+    // xor/mul/add chain as the linear version, so the CFG now carries
+    // a fake loop header + latch in addition to the junk math.
+    if (Level >= 3 && Loops > 1) {
+      addJunkLoop(Fake, Real, Nonce, JunkSlot, Loops, FuncRNG);
+      return;
+    }
+
+    IRBuilder<> IRB(&Fake);
     Value *V =
         IRB.CreateAlignedLoad(Int64, &Nonce, Align(8), true, "bcf.fake.nonce");
     for (uint32_t I = 0; I < Loops; ++I) {
@@ -217,6 +229,72 @@ struct BogusControlFlow : public FunctionPass {
     IRB.CreateStore(V, &JunkSlot);
     IRB.CreateAlignedStore(V, &JunkSlot, Align(8), true);
     IRB.CreateBr(&Real);
+  }
+
+  // Build a fake-loop version of the junk chain. Layout:
+  //   Fake:        load nonce; counter = 0; br LoopHdr
+  //   LoopHdr:     if counter < bound br LoopBody else LoopExit
+  //   LoopBody:    xor/mul/add chain; counter++; br LoopHdr
+  //   LoopExit:    store result; br Real
+  // The bound is a fresh volatile-loaded global so the optimizer cannot
+  // unroll the loop away. The loop is semantically dead because the
+  // result only feeds the JunkSlot dead store, but it is a real CFG
+  // loop with a back-edge.
+  void addJunkLoop(BasicBlock &Fake, BasicBlock &Real, GlobalVariable &Nonce,
+                   AllocaInst &JunkSlot, uint32_t Loops,
+                   std::mt19937_64 &FuncRNG) {
+    auto *Int64 = Type::getInt64Ty(Fake.getContext());
+    auto *Int32 = Type::getInt32Ty(Fake.getContext());
+    Module &M = *Fake.getModule();
+    auto *BoundGV = new GlobalVariable(
+        M, Int32, false, GlobalValue::PrivateLinkage,
+        ConstantInt::get(Int32, static_cast<uint32_t>(Loops)),
+        Twine(Fake.getParent()->getName()) + ".bcf.fake.bound");
+    BoundGV->setAlignment(Align(4));
+
+    IRBuilder<> Entry(&Fake);
+    Value *V =
+        Entry.CreateAlignedLoad(Int64, &Nonce, Align(8), true, "bcf.fake.nonce");
+    auto *CounterSlot = Entry.CreateAlloca(Int32, nullptr, "bcf.fake.i");
+    Entry.CreateStore(ConstantInt::get(Int32, 0), CounterSlot);
+    auto *AccSlot = Entry.CreateAlloca(Int64, nullptr, "bcf.fake.acc");
+    Entry.CreateStore(V, AccSlot);
+
+    BasicBlock *LoopHdr =
+        BasicBlock::Create(Fake.getContext(), "bcf.fake.loop.hdr",
+                           Fake.getParent(), &Real);
+    BasicBlock *LoopBody =
+        BasicBlock::Create(Fake.getContext(), "bcf.fake.loop.body",
+                           Fake.getParent(), &Real);
+    BasicBlock *LoopExit =
+        BasicBlock::Create(Fake.getContext(), "bcf.fake.loop.exit",
+                           Fake.getParent(), &Real);
+    Entry.CreateBr(LoopHdr);
+
+    IRBuilder<> Hdr(LoopHdr);
+    Value *CurI = Hdr.CreateLoad(Int32, CounterSlot, "bcf.fake.i.ld");
+    Value *Bound =
+        Hdr.CreateAlignedLoad(Int32, BoundGV, Align(4), true, "bcf.fake.bound.ld");
+    Hdr.CreateCondBr(Hdr.CreateICmpULT(CurI, Bound), LoopBody, LoopExit);
+
+    IRBuilder<> Body(LoopBody);
+    Value *Acc = Body.CreateLoad(Int64, AccSlot, "bcf.fake.acc.ld");
+    Acc = Body.CreateXor(Acc, ConstantInt::get(Int64, FuncRNG()),
+                         "bcf.fake.xor");
+    Acc = Body.CreateMul(Acc, ConstantInt::get(Int64, FuncRNG() | 1),
+                         "bcf.fake.mul");
+    Acc = Body.CreateAdd(Acc, ConstantInt::get(Int64, FuncRNG()),
+                         "bcf.fake.add");
+    Body.CreateStore(Acc, AccSlot);
+    Body.CreateStore(Body.CreateAdd(CurI, ConstantInt::get(Int32, 1)),
+                     CounterSlot);
+    Body.CreateBr(LoopHdr);
+
+    IRBuilder<> Exit(LoopExit);
+    Value *FinalAcc = Exit.CreateLoad(Int64, AccSlot, "bcf.fake.final");
+    Exit.CreateStore(FinalAcc, &JunkSlot);
+    Exit.CreateAlignedStore(FinalAcc, &JunkSlot, Align(8), true);
+    Exit.CreateBr(&Real);
   }
 
   static Function *getOrCreateJunkFunction(Module &M) {

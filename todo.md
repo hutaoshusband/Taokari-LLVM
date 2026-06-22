@@ -207,7 +207,7 @@ This is one of the most important differentiators against plain Arkari.
 ## Level 3 — Fortress BCF
 
 * [ ] Add multi-layer bogus graphs
-* [ ] Add fake loops
+* [x] Add fake loops
 * [ ] Add fake switch structures
 * [ ] Add fake error paths
 * [ ] Add fake cleanup paths
