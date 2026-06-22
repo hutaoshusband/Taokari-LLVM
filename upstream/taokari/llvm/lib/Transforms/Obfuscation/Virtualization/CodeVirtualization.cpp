@@ -2636,15 +2636,33 @@ struct CodeVirtualization : public ModulePass {
     auto RandomSlots = [&](uint64_t Base, uint64_t Spread) {
       return ConstantInt::get(I64, Base + (RNG() % (Spread + 1)));
     };
-    auto *Stack = B.CreateAlloca(I64, RandomSlots(64, 64), "stack");
-    auto *Locals = B.CreateAlloca(I64, RandomSlots(64, 64), "locals");
-    // VM-local frame (L1.5.1 middle way). AllocaInst reserves runs
-    // of consecutive slots here; LoadPtr/StorePtr index into it via the
-    // frame-pointer values pushed by emitValue.
-    auto *Frame = B.CreateAlloca(I64, RandomSlots(64, 64), "frame");
-    // OpCall argument marshaling buffer (L1.5.1). Up to 8 integer
-    // args per call (isVMCompatibleCall gates on arg_size() <= 8).
-    auto *CallArgs = B.CreateAlloca(I64, RandomSlots(8, 8), "callargs");
+    auto *StackSlots = RandomSlots(64, 64);
+    auto *LocalsSlots = RandomSlots(64, 64);
+    auto *FrameSlots = RandomSlots(64, 64);
+    auto *CallArgSlots = RandomSlots(8, 8);
+    AllocaInst *Stack = nullptr;
+    AllocaInst *Locals = nullptr;
+    AllocaInst *Frame = nullptr;
+    AllocaInst *CallArgs = nullptr;
+    SmallVector<unsigned, 4> FrameOrder = {0, 1, 2, 3};
+    for (unsigned I = FrameOrder.size() - 1; I > 0; --I)
+      std::swap(FrameOrder[I], FrameOrder[RNG() % (I + 1)]);
+    for (unsigned Region : FrameOrder) {
+      switch (Region) {
+      case 0:
+        Stack = B.CreateAlloca(I64, StackSlots, "stack");
+        break;
+      case 1:
+        Locals = B.CreateAlloca(I64, LocalsSlots, "locals");
+        break;
+      case 2:
+        Frame = B.CreateAlloca(I64, FrameSlots, "frame");
+        break;
+      case 3:
+        CallArgs = B.CreateAlloca(I64, CallArgSlots, "callargs");
+        break;
+      }
+    }
     auto *PC = B.CreateAlloca(I64, nullptr, "pc");
     auto *SP = B.CreateAlloca(I64, nullptr, "sp");
     auto *HandlerState = B.CreateAlloca(I64, nullptr, "handler.state");

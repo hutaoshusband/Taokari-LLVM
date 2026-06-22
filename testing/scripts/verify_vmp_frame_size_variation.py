@@ -1,4 +1,4 @@
-"""Verifier for randomized VMP interpreter frame-region sizes."""
+"""Verifier for randomized VMP interpreter frame-region layout."""
 from __future__ import annotations
 
 import re
@@ -56,14 +56,15 @@ def interpreter_body(ir_text: str) -> str:
   return m.group(2) if m else ""
 
 
-def frame_sizes(ir_text: str) -> tuple[int, int, int, int]:
+def frame_layout(ir_text: str) -> tuple[tuple[int, int, int, int], tuple[str, ...]]:
   body = interpreter_body(ir_text)
   gate(bool(body), "VMP interpreter body present in IR")
+  matches = re.findall(
+      r"%(stack|locals|frame|callargs)\d*\s*=\s*alloca \[(\d+) x i64\]",
+      body)
   found = {
       name: int(size)
-      for name, size in re.findall(
-          r"%(stack|locals|frame|callargs)\d*\s*=\s*alloca \[(\d+) x i64\]",
-          body)
+      for name, size in matches
   }
   missing = {"stack", "locals", "frame", "callargs"} - set(found)
   if missing:
@@ -71,7 +72,9 @@ def frame_sizes(ir_text: str) -> tuple[int, int, int, int]:
       if "alloca" in line:
         print(f"    {line.strip()}")
   gate(not missing, f"all frame regions have explicit sizes (missing {missing})")
-  return (found["stack"], found["locals"], found["frame"], found["callargs"])
+  sizes = (found["stack"], found["locals"], found["frame"], found["callargs"])
+  order = tuple(name for name, _ in matches)
+  return sizes, order
 
 
 def compile_ir(tmp: Path, index: int) -> str:
@@ -101,19 +104,23 @@ def main() -> int:
 
   tmp = Path(tempfile.mkdtemp(prefix="taokari-vmp-frame-sizes-"))
   try:
-    samples = [frame_sizes(compile_ir(tmp, i)) for i in range(6)]
+    samples = [frame_layout(compile_ir(tmp, i)) for i in range(8)]
   finally:
     shutil.rmtree(tmp, ignore_errors=True)
 
-  gate(len(set(samples)) >= 2,
-       f"frame-region size tuple varies across compiler runs: {samples}")
-  for stack, locals_, frame, callargs in samples:
+  size_samples = [sample[0] for sample in samples]
+  order_samples = [sample[1] for sample in samples]
+  gate(len(set(size_samples)) >= 2,
+       f"frame-region size tuple varies across compiler runs: {size_samples}")
+  gate(len(set(order_samples)) >= 2,
+       f"frame-region order varies across compiler runs: {order_samples}")
+  for stack, locals_, frame, callargs in size_samples:
     gate(64 <= stack <= 128, f"stack size {stack} is within 64..128")
     gate(64 <= locals_ <= 128, f"locals size {locals_} is within 64..128")
     gate(64 <= frame <= 128, f"frame size {frame} is within 64..128")
     gate(8 <= callargs <= 16, f"callargs size {callargs} is within 8..16")
 
-  print("vmp frame size variation verifier: ok")
+  print("vmp frame layout variation verifier: ok")
   return 0
 
 
