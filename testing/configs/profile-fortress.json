@@ -1,0 +1,64 @@
+{
+  "randomSeed": "fortress-fortress-fortress",
+  "fla": {
+    "enable": true,
+    "level": 4,
+    "maxInsts": 6000,
+    "maxBlocks": 300
+  },
+  "bcf": {
+    "enable": true,
+    "level": 3,
+    "probability": 70,
+    "functionProbability": 80,
+    "loopCount": 3
+  },
+  "icall": {
+    "enable": true,
+    "level": 4,
+    "probability": 100,
+    "functionProbability": 100
+  },
+  "indbr": {
+    "enable": true,
+    "level": 4
+  },
+  "indgv": {
+    "enable": true,
+    "level": 4
+  },
+  "mba": {
+    "enable": true,
+    "level": 4,
+    "probability": 80,
+    "functionProbability": 100
+  },
+  "cse": {
+    "enable": true,
+    "level": 3,
+    "minStringLength": 4,
+    "decryptorMba": true,
+    "stringDecryptorFlattening": true,
+    "stringDecryptorIndirectCall": true,
+    "stringShardedPool": true,
+    "stringFakePools": true,
+    "stringPageTableAccess": true,
+    "stringDelayedDecrypt": true
+  },
+  "cie": {
+    "enable": true,
+    "level": 4,
+    "minConstSize": 8
+  },
+  "cfe": {
+    "enable": true,
+    "level": 4,
+    "minConstSize": 8
+  },
+  "meta": {
+    "enable": true,
+    "level": 3,
+    "releaseStrip": true,
+    "randomizeSections": true
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "randomSeed": "balanced-balanced-balanced",
+  "fla": {
+    "enable": true,
+    "level": 2,
+    "maxInsts": 4000,
+    "maxBlocks": 200
+  },
+  "icall": {
+    "enable": true,
+    "level": 2,
+    "probability": 70,
+    "functionProbability": 80
+  },
+  "indbr": {
+    "enable": true,
+    "level": 2
+  },
+  "indgv": {
+    "enable": true,
+    "level": 2
+  },
+  "mba": {
+    "enable": true,
+    "level": 2,
+    "probability": 40,
+    "functionProbability": 100
+  },
+  "cse": {
+    "enable": true,
+    "level": 2,
+    "minStringLength": 5
+  },
+  "cie": {
+    "enable": true,
+    "level": 2,
+    "minConstSize": 16
+  },
+  "cfe": {
+    "enable": true,
+    "level": 2,
+    "minConstSize": 16
+  },
+  "meta": {
+    "enable": true,
+    "level": 2,
+    "releaseStrip": true,
+    "randomizeSections": false
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "randomSeed": "strong-strong-strong-str",
+  "fla": {
+    "enable": true,
+    "level": 3,
+    "maxInsts": 4000,
+    "maxBlocks": 200
+  },
+  "bcf": {
+    "enable": true,
+    "level": 2,
+    "probability": 50,
+    "functionProbability": 70,
+    "loopCount": 2
+  },
+  "icall": {
+    "enable": true,
+    "level": 3,
+    "probability": 90,
+    "functionProbability": 90
+  },
+  "indbr": {
+    "enable": true,
+    "level": 3
+  },
+  "indgv": {
+    "enable": true,
+    "level": 3
+  },
+  "mba": {
+    "enable": true,
+    "level": 3,
+    "probability": 60,
+    "functionProbability": 100
+  },
+  "cse": {
+    "enable": true,
+    "level": 2,
+    "minStringLength": 4,
+    "decryptorMba": true
+  },
+  "cie": {
+    "enable": true,
+    "level": 3,
+    "minConstSize": 8
+  },
+  "cfe": {
+    "enable": true,
+    "level": 3,
+    "minConstSize": 8
+  },
+  "meta": {
+    "enable": true,
+    "level": 3,
+    "releaseStrip": true,
+    "randomizeSections": true
+  }
+}

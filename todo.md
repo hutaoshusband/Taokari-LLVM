@@ -1233,10 +1233,10 @@ Goal: make Taokari controllable instead of “all or nothing”.
 
 ## Level 3 — Profiles
 
-* [ ] Add profile: `dev`
-* [ ] Add profile: `balanced`
-* [ ] Add profile: `strong`
-* [ ] Add profile: `fortress`
+* [x] Add profile: `dev`
+* [x] Add profile: `balanced`
+* [x] Add profile: `strong`
+* [x] Add profile: `fortress`
 * [ ] Add per-pass budget system
 * [ ] Add max binary size growth limit
 * [ ] Add max compile time growth limit

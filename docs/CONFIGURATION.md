@@ -108,12 +108,12 @@ following keys.
 | `reencryptAfterUse`| bool         | `false` | Scrub the plaintext after the consuming call.        |
 | `volatileSeed`     | bool         | `false` | Use a volatile load as the runtime nonce seed.       |
 | `decryptorMba`     | bool         | `false` | L3: rewrite decryptor arithmetic with MBA identities.|
-| `decryptorFlattening` | bool      | `false` | L3: flatten the decryptor body.                      |
-| `decryptorIndirectCall`| bool     | `false` | L3: route decryptor calls through an opaque slot.    |
-| `shardedPool`      | bool         | `false` | L3: split the encrypted pool across multiple globals.|
-| `fakePools`        | bool         | `false` | L3: emit decoy pools alongside the real one.         |
-| `pageTableAccess`  | bool         | `false` | L3: resolve pool base through a page table.          |
-| `delayedDecrypt`   | bool         | `false` | L3: per-use alloca + scrub before function return.   |
+| `stringDecryptorFlattening` | bool | `false` | L3: flatten the decryptor body.                |
+| `stringDecryptorIndirectCall`| bool| `false` | L3: route decryptor calls through an opaque slot.|
+| `stringShardedPool`| bool         | `false` | L3: split the encrypted pool across multiple globals.|
+| `stringFakePools`  | bool         | `false` | L3: emit decoy pools alongside the real one.         |
+| `stringPageTableAccess`| bool     | `false` | L3: resolve pool base through a page table.          |
+| `stringDelayedDecrypt`| bool      | `false` | L3: per-use alloca + scrub before function return.   |
 
 ### Metadata / RTTI
 
