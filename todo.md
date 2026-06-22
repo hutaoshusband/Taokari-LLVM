@@ -1289,7 +1289,7 @@ This is required before Taokari can become serious.
 * [x] Add string leak tests
 * [x] Add symbol leak tests
 * [x] Add CFG complexity metric
-* [ ] Add call graph breakage metric
+* [x] Add call graph breakage metric
 * [x] Add regression dashboard
 * [x] Add release-blocking test mode
 
