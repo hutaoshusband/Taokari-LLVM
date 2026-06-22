@@ -68,11 +68,12 @@ struct StringEncryption : public ModulePass {
 
   struct CSPEntry {
     CSPEntry()
-        : ID(0), Offset(0), DecGV(nullptr), DecStatus(nullptr),
+        : ID(0), Offset(0), EncGapBytes(0), DecGV(nullptr), DecStatus(nullptr),
           PendingStatus(0), DoneStatus(0), IsUTF16(false), PoolIndex(0) {}
 
     unsigned ID;
     unsigned Offset;
+    unsigned EncGapBytes;
     GlobalVariable *DecGV;
     GlobalVariable *DecStatus; // is decrypted or not
     uint32_t PendingStatus;
@@ -488,13 +489,24 @@ void StringEncryption::emitShardedPools(Module &M) {
     Entry->Offset = static_cast<unsigned>(Data.size());
     if (!Entry->IsUTF16) {
       Data.insert(Data.end(), Entry->EncKey.begin(), Entry->EncKey.end());
-      Data.insert(Data.end(), Entry->Data.begin(), Entry->Data.end());
     } else {
       // for UTF-16: write keys as little-endian uint16_t bytes
       for (uint16_t w : Entry->EncKey16) {
         Data.push_back(static_cast<uint8_t>(w & 0xff));
         Data.push_back(static_cast<uint8_t>((w >> 8) & 0xff));
       }
+    }
+
+    Entry->EncGapBytes = 1u + static_cast<unsigned>(RNG() % 16u);
+    if (Entry->IsUTF16 && (Entry->EncGapBytes % 2u) != 0)
+      ++Entry->EncGapBytes;
+    JunkBytes.clear();
+    getRandomBytes(JunkBytes, Entry->EncGapBytes, Entry->EncGapBytes);
+    Data.insert(Data.end(), JunkBytes.begin(), JunkBytes.end());
+
+    if (!Entry->IsUTF16) {
+      Data.insert(Data.end(), Entry->Data.begin(), Entry->Data.end());
+    } else {
       // append Data16 as little-endian bytes
       for (uint16_t w : Entry->Data16) {
         Data.push_back(static_cast<uint8_t>(w & 0xff));
@@ -727,9 +739,8 @@ void StringEncryption::getRandomBytes(std::vector<T> &Bytes, uint32_t MinSize,
 // Shared signature:
 //   void @goron_decrypt_string_iN(
 //       ptr plain_string, ptr data, i32 key_elem_size, i32 data_size,
-//       ptr dec_status, i32 done_status, i32 string_id, i32 build_nonce,
-//       i32 pool_offset)
-// pool_offset selects which shard global `data` came from (L3).
+//       i32 enc_gap_bytes, ptr dec_status, i32 done_status,
+//       i32 string_id, i32 build_nonce)
 Function *StringEncryption::buildSharedDecryptFunction(
     Module *M, bool IsUTF16, unsigned Variant, bool UseDecryptorMBA,
     bool UseFlattening, uint32_t BuildNonce) {
@@ -742,7 +753,7 @@ Function *StringEncryption::buildSharedDecryptFunction(
 
   FunctionType *FuncTy = FunctionType::get(
       Type::getVoidTy(Ctx),
-      {PtrTy, PtrTy, I32Ty, I32Ty, PtrTy, I32Ty, I32Ty, I32Ty}, false);
+      {PtrTy, PtrTy, I32Ty, I32Ty, I32Ty, PtrTy, I32Ty, I32Ty, I32Ty}, false);
   // The base name is kept stable across variants so the L1 verifier (and any
   // external symbol matchers) still find the decryptor; the variant only
   // changes the IR shape, not the symbol name.
@@ -758,6 +769,7 @@ Function *StringEncryption::buildSharedDecryptFunction(
   Argument *Data = ArgIt++;
   Argument *KeyElemSizeArg = ArgIt++;
   Argument *DataSizeArg = ArgIt++;
+  Argument *EncGapBytesArg = ArgIt++;
   Argument *DecStatusArg = ArgIt++;
   Argument *DoneStatusArg = ArgIt++;
   Argument *StringIDArg = ArgIt++;
@@ -773,6 +785,7 @@ Function *StringEncryption::buildSharedDecryptFunction(
   Data->addAttrs(NoCaptureAttrBuilder);
   KeyElemSizeArg->setName("key_elem_size");
   DataSizeArg->setName("data_size");
+  EncGapBytesArg->setName("enc_gap_bytes");
   DecStatusArg->setName("dec_status");
   DecStatusArg->addAttrs(NoCaptureAttrBuilder);
   DoneStatusArg->setName("done_status");
@@ -793,8 +806,9 @@ Function *StringEncryption::buildSharedDecryptFunction(
   // key_elem_size * 2
   Value *KeySizeBytesVal = IsUTF16 ? IRB.CreateShl(KeyElemSizeArg, 1)
                                    : static_cast<Value *>(KeyElemSizeArg);
+  Value *EncOffset = IRB.CreateAdd(KeySizeBytesVal, EncGapBytesArg);
 
-  Value *EncPtr = IRB.CreateInBoundsGEP(IRB.getInt8Ty(), Data, KeySizeBytesVal);
+  Value *EncPtr = IRB.CreateInBoundsGEP(IRB.getInt8Ty(), Data, EncOffset);
   Value *DecStatus = IRB.CreateLoad(I32Ty, DecStatusArg);
   // Variant 0: plain status load. Variant 1: volatile status load (extra
   // memory dependency an analyst must follow). Both compare against
@@ -989,7 +1003,8 @@ Function *StringEncryption::buildSharedScrubFunction(Module *M, bool IsUTF16) {
   PointerType *PtrTy = PointerType::getUnqual(Ctx);
   Type *I32Ty = Type::getInt32Ty(Ctx);
   FunctionType *FuncTy = FunctionType::get(
-      Type::getVoidTy(Ctx), {PtrTy, PtrTy, I32Ty, I32Ty, PtrTy, I32Ty}, false);
+      Type::getVoidTy(Ctx), {PtrTy, PtrTy, I32Ty, I32Ty, I32Ty, PtrTy, I32Ty},
+      false);
   Function *ScrubFunc = Function::Create(
       FuncTy, GlobalValue::PrivateLinkage,
       IsUTF16 ? "goron_scrub_string_i16" : "goron_scrub_string_i8", M);
@@ -1001,6 +1016,7 @@ Function *StringEncryption::buildSharedScrubFunction(Module *M, bool IsUTF16) {
   Argument *Data = ArgIt++;
   Argument *KeyElemSizeArg = ArgIt++;
   Argument *DataSizeArg = ArgIt++;
+  Argument *EncGapBytesArg = ArgIt++;
   Argument *DecStatusArg = ArgIt++;
   Argument *PendingStatusArg = ArgIt;
 
@@ -1008,6 +1024,7 @@ Function *StringEncryption::buildSharedScrubFunction(Module *M, bool IsUTF16) {
   Data->setName("data");
   KeyElemSizeArg->setName("key_elem_size");
   DataSizeArg->setName("data_size");
+  EncGapBytesArg->setName("enc_gap_bytes");
   DecStatusArg->setName("dec_status");
   PendingStatusArg->setName("pending_status");
 
@@ -1018,7 +1035,8 @@ Function *StringEncryption::buildSharedScrubFunction(Module *M, bool IsUTF16) {
   IRB.SetInsertPoint(Enter);
   Value *KeySizeBytesVal = IsUTF16 ? IRB.CreateShl(KeyElemSizeArg, 1)
                                    : static_cast<Value *>(KeyElemSizeArg);
-  Value *EncPtr = IRB.CreateInBoundsGEP(IRB.getInt8Ty(), Data, KeySizeBytesVal);
+  Value *EncOffset = IRB.CreateAdd(KeySizeBytesVal, EncGapBytesArg);
+  Value *EncPtr = IRB.CreateInBoundsGEP(IRB.getInt8Ty(), Data, EncOffset);
   IRB.CreateBr(LoopBody);
 
   IRB.SetInsertPoint(LoopBody);
@@ -1191,7 +1209,8 @@ bool StringEncryption::processConstantStringUse(Function *F) {
     Value *Callee = resolveDecryptorCallee(IRB, DecFunc);
     fixEH(createDecryptorCall(IRB, Callee, DecFunc,
                               {OutBuf, Data, IRB.getInt32(KeyElemSize),
-                               IRB.getInt32(DataSize), StatusPtr,
+                               IRB.getInt32(DataSize),
+                               IRB.getInt32(Entry->EncGapBytes), StatusPtr,
                                IRB.getInt32(Entry->DoneStatus),
                                IRB.getInt32(Entry->ID),
                                IRB.getInt32(BuildNonce)}));
@@ -1233,7 +1252,8 @@ bool StringEncryption::processConstantStringUse(Function *F) {
           Entry->IsUTF16 ? SharedScrubFuncI16 : SharedScrubFuncI8;
       fixEH(IRB.CreateCall(ScrubFunc,
                            {OutBuf, Data, IRB.getInt32(KeyElemSize),
-                            IRB.getInt32(DataSize), Entry->DecStatus,
+                            IRB.getInt32(DataSize),
+                            IRB.getInt32(Entry->EncGapBytes), Entry->DecStatus,
                             IRB.getInt32(Entry->PendingStatus)}));
     }
     // L3 delayed-decrypt: always scrub the temporary buffer (stack or heap)
@@ -1246,7 +1266,8 @@ bool StringEncryption::processConstantStringUse(Function *F) {
       IRB.CreateStore(IRB.getInt32(Entry->PendingStatus), TmpStatus);
       fixEH(IRB.CreateCall(ScrubFunc,
                            {OutBuf, Data, IRB.getInt32(KeyElemSize),
-                            IRB.getInt32(DataSize), TmpStatus,
+                            IRB.getInt32(DataSize),
+                            IRB.getInt32(Entry->EncGapBytes), TmpStatus,
                             IRB.getInt32(Entry->PendingStatus)}));
     }
   };
@@ -1302,7 +1323,8 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                 fixEH(createDecryptorCall(
                     IRB, Callee, DecFunc,
                     {OutBuf, Data, IRB.getInt32(KeyElemSize),
-                     IRB.getInt32(DataSize), Entry->DecStatus,
+                     IRB.getInt32(DataSize), IRB.getInt32(Entry->EncGapBytes),
+                     Entry->DecStatus,
                      IRB.getInt32(Entry->DoneStatus), IRB.getInt32(Entry->ID),
                      IRB.getInt32(BuildNonce)}));
 

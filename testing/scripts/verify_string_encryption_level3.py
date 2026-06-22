@@ -144,6 +144,16 @@ def gate(cond: bool, label: str) -> None:
   print(f"  [ok] {label}")
 
 
+def has_nonzero_pool_gap(ir: str) -> bool:
+  for line in ir.splitlines():
+    if "call void @goron_decrypt_string_i" not in line:
+      continue
+    ints = re.findall(r"\bi32 (-?\d+)", line)
+    if len(ints) >= 3 and int(ints[2]) > 0:
+      return True
+  return False
+
+
 def main() -> int:
   parser = argparse.ArgumentParser()
   parser.add_argument("--keep", action="store_true")
@@ -209,7 +219,8 @@ def main() -> int:
     single("split string pools", "stringShardedPool",
            # split pools and shards are the same mechanism (pool spread across
            # N globals); verify independently that >=2 pool globals exist.
-           lambda ir: len(re.findall(r"@EncryptedStringTable_\d+ = ", ir)) >= 2,
+           lambda ir: (len(re.findall(r"@EncryptedStringTable_\d+ = ", ir)) >= 2
+                       and has_nonzero_pool_gap(ir)),
            tmp / "split.ll", tmp / "split.exe")
     single("fake string pools", "stringFakePools",
            lambda ir: len(re.findall(r"@FakeStringPool_\d+ = ", ir)) >= 2,
