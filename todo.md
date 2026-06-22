@@ -999,10 +999,18 @@ does under tampering, optimizer pressure, or decompiler lifting.
       a bounded budget. (commit 1255b67d3; verifier
       `verify_vmp_max_loop_coverage.py` asserts `-taokari-vmp-padding=15`
       injected in Max mode, override respected, and pad hits > 0 in remarks)
-* [ ] Add verifier that valid VMP bytecode contains padding/fake opcode hits
+* [x] Add verifier that valid VMP bytecode contains padding/fake opcode hits
       and that runtime output still matches native.
-* [ ] Strengthen fake opcodes/fake handlers so they are not only registered
+      (`testing/scripts/verify_vmp_max_loop_coverage.py` asserts padding
+      histogram hits > 0 in the build remarks and that the protected
+      binary still produces correct output.)
+* [x] Strengthen fake opcodes/fake handlers so they are not only registered
       dead cases; make them appear plausible in static and trace views.
+      (`testing/scripts/verify_vmp_fake_opcode_plausibility.py` proves pad
+      handler bodies are dispatch-reachable, contain the same MBA noise
+      chain as real handler bodies (so they look identical to a static or
+      trace view), and the protected binary still produces correct output.
+      The noise was added in the same handler-body obfuscation commit.)
 * [x] Fix StringEncryption's remaining XOR-key weakness: replace single-pass
       inline XOR-looking decode with rolling or stateful per-character mixing.
       (Existing encoder already uses per-build nonce, per-string ID, per-position
@@ -1029,10 +1037,23 @@ does under tampering, optimizer pressure, or decompiler lifting.
       the protected binary still passes semantics. `verify_indirect_call_level3.py`
       updated to require the encrypted pointer globals + `inttoptr`
       reconstruction instead of the old direct callout edge.)
-* [ ] Add optimizer survival checks for runtime-rekeyed VMP bytecode under
+* [x] Add optimizer survival checks for runtime-rekeyed VMP bytecode under
       `-O2`, `-O3`, and LTO.
-* [ ] Add VM bytecode mutation fuzz harness: flip encrypted words/bits and
+      (`testing/scripts/verify_vmp_optimizer_survival.py` compiles a `+vmp`
+      function under `-O2`, `-O3` and `-flto -fuse-ld=lld`, asserts each
+      binary still runs correctly, and asserts the interpreter, the
+      runtime key-seed global and the encrypted bytecode global all
+      survive the optimizer pipeline — i.e. the optimizer did not
+      constant-fold the encrypted stream or recover the runtime key.)
+* [x] Add VM bytecode mutation fuzz harness: flip encrypted words/bits and
       require clean tamper handling, never unsafe memory access.
+      (`testing/scripts/verify_vmp_bytecode_mutation_fuzz.py` rewrites one
+      encrypted word in the IR-level `__taokari_vmp_bc_*` initializer per
+      trial, recompiles, runs the binary, and requires every mutated
+      binary to exit cleanly — no `STATUS_ACCESS_VIOLATION` (0xC0000005)
+      and no livelock hang. Phase A bounds checks (PC < bcLen, SP
+      underflow/overflow, frame/locals index, tag check) route patched
+      streams to the Bad block instead of memory-unsafe access.)
 * [ ] Add decompiler/IDA snapshot proof for the new VMP runtime rekey and
       DirtyBytes guard shape when IDA is available.
 * [ ] Add PC encryption at rest in the VMP interpreter loop.
