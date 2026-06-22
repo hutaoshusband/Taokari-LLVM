@@ -1273,10 +1273,10 @@ This is required before Taokari can become serious.
 * [x] Record binary size
 * [x] Record compile time
 * [x] Record runtime
-* [ ] Record number of transformed functions
-* [ ] Record number of transformed instructions
-* [ ] Record number of obfuscated strings
-* [ ] Record number of obfuscated constants
+* [x] Record number of transformed functions
+* [x] Record number of transformed instructions
+* [x] Record number of obfuscated strings
+* [x] Record number of obfuscated constants
 * [x] Add CSV output
 * [x] Add JSON output
 
