@@ -464,9 +464,9 @@ bool StringEncryption::runOnModule(Module &M) {
 }
 
 void StringEncryption::emitShardedPools(Module &M) {
-  // layout: | junk bytes | key 1 | encrypted string 1 | junk bytes | key 2 |
-  // encrypted string 2 | ...  Each pool is a separate global when sharding is
-  // enabled; otherwise everything lands in one global (the classic L2 shape).
+  // Each pool is a separate global when sharding is enabled; otherwise
+  // everything lands in one global. Per-entry head/tail junk breaks the old
+  // repeated |junk|key|cipher| cadence without changing the decryptor ABI.
   const unsigned PoolCount = UseShardedPool ? 4u : 1u;
   std::vector<std::vector<uint8_t>> PoolBytes(PoolCount);
   std::vector<uint8_t> JunkBytes;
@@ -501,6 +501,10 @@ void StringEncryption::emitShardedPools(Module &M) {
         Data.push_back(static_cast<uint8_t>((w >> 8) & 0xff));
       }
     }
+
+    JunkBytes.clear();
+    getRandomBytes(JunkBytes, 1, 16);
+    Data.insert(Data.end(), JunkBytes.begin(), JunkBytes.end());
   }
 
   LLVMContext &Ctx = M.getContext();

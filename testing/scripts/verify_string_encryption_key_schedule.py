@@ -206,6 +206,13 @@ def main() -> int:
 
   tmp = Path(tempfile.mkdtemp(prefix="taokari-strenc-key-"))
   try:
+    source_text = (
+        ROOT / "upstream" / "taokari" / "llvm" / "lib" / "Transforms"
+        / "Obfuscation" / "StringEncryption.cpp"
+    ).read_text(encoding="utf-8", errors="ignore")
+    gate("getRandomBytes(JunkBytes, 1, 16)" in source_text,
+         "pool entries carry randomized tail junk after ciphertext")
+
     src = tmp / "strenc_key.cpp"
     src.write_text(SOURCE, encoding="utf-8")
     plain = tmp / "plain.exe"
