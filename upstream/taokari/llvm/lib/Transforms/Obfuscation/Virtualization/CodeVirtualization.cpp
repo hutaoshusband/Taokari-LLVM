@@ -253,6 +253,13 @@ struct CodeVirtualization : public ModulePass {
     return "Taokari Code Virtualization";
   }
 
+  uint64_t nextNonZeroKey() {
+    uint64_t Key = 0;
+    while (!Key)
+      Key = RNG();
+    return Key;
+  }
+
   bool isSupportedInt(Type *Ty) const {
     return Ty->isIntegerTy() && Ty->getIntegerBitWidth() <= 64;
   }
@@ -2445,7 +2452,7 @@ struct CodeVirtualization : public ModulePass {
                  [this, &C](IRBuilder<> &B) {
                    Value *Target = fetchWord(B, C);
                    branchIfFalse(B, C, B.CreateICmpULT(Target, C.BCLen));
-                   B.CreateStore(Target, C.PC);
+                   pcStore(B, C, Target);
                    B.CreateBr(C.Dispatch);
                  }});
     H.push_back({OpBrTrue, "brtrue", shapeOf(OpBrTrue),
@@ -2459,7 +2466,7 @@ struct CodeVirtualization : public ModulePass {
                        B.CreateICmpNE(Cond, ConstantInt::get(C.I64, 0)),
                        SetTarget, C.Dispatch);
                    B.SetInsertPoint(SetTarget);
-                   B.CreateStore(Target, C.PC);
+                   pcStore(B, C, Target);
                    B.CreateBr(C.Dispatch);
                  }});
     H.push_back({OpRet, "ret", shapeOf(OpRet),
@@ -2595,9 +2602,7 @@ struct CodeVirtualization : public ModulePass {
     // alloca sees only the encrypted form and must reproduce the key
     // schedule to recover the real PC. fetchWord / dispatch / init all go
     // through pcLoad/pcStore helpers defined below.
-    uint64_t PcKeyConst = RNG();
-    if (!PcKeyConst)
-      PcKeyConst = 0x9E3779B97F4A7C15ULL;
+    uint64_t PcKeyConst = nextNonZeroKey();
     auto *PcKey = B.CreateAlloca(I64, nullptr, "pc.key");
     B.CreateStore(
         B.CreateXor(BytecodeKey, ConstantInt::get(I64, PcKeyConst)), PcKey);
@@ -2606,9 +2611,7 @@ struct CodeVirtualization : public ModulePass {
     // reveals no plaintext operand values. StackKey is derived from the
     // runtime bytecode key mixed with a distinct per-build constant so
     // the optimizer cannot fold it.
-    uint64_t StackKeyConst = RNG();
-    if (!StackKeyConst)
-      StackKeyConst = 0xD1B54A32D192ED03ULL;
+    uint64_t StackKeyConst = nextNonZeroKey();
     auto *StackKey = B.CreateAlloca(I64, nullptr, "stk.key");
     B.CreateStore(
         B.CreateXor(BytecodeKey, ConstantInt::get(I64, StackKeyConst)),
@@ -2728,9 +2731,7 @@ struct CodeVirtualization : public ModulePass {
     branchIfFalse(B, IC,
                   B.CreateICmpNE(Op, ConstantInt::getSigned(I64, -1)));
     SmallVector<Handler, 24> Handlers = buildHandlerTable(IC);
-    uint64_t DispatchKey = RNG();
-    if (!DispatchKey)
-      DispatchKey = 0xA0761D6478BD642FULL;
+    uint64_t DispatchKey = nextNonZeroKey();
     Value *DispatchToken =
         B.CreateXor(Op, ConstantInt::get(I64, DispatchKey));
     Value *Target = BlockAddress::get(F, Bad);
@@ -2826,9 +2827,7 @@ struct CodeVirtualization : public ModulePass {
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
 
-    uint64_t BytecodeKey = RNG();
-    if (!BytecodeKey)
-      BytecodeKey = 0xD1B54A32D192ED03ULL;
+    uint64_t BytecodeKey = nextNonZeroKey();
     SmallVector<int64_t, kOpcodeTableSize> OpcodeEncode;
     SmallVector<int64_t, kOpcodeTableSize> OpcodeDecode;
     if (!buildOpcodeMaps(OpcodeEncode, OpcodeDecode))

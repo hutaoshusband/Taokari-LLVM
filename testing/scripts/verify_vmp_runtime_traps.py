@@ -98,11 +98,11 @@ OPMAP_RE = re.compile(
     re.S,
 )
 CALL_RE = re.compile(
-    r"call i64 @__taokari_vmp_interp_i64_[^(]+\("
-    r"ptr [^,]*@__taokari_vmp_bc_(\w+), i64 \d+, "
-    r"ptr [^,]*@__taokari_vmp_pcmap_\w+, ptr [^,]+, i64 \d+, "
+    r"call i64 @__taokari_vmp_interp_i64_([A-Za-z0-9_]+)_\d+\("
     r"ptr [^,]+, i64 \d+, "
-    r"ptr [^,]+, i64 (-?\d+), ptr [^,]*@__taokari_vmp_opmap_(\w+), "
+    r"ptr [^,]*@__taokari_vmp_pcmap_(\w+), ptr [^,]+, i64 \d+, "
+    r"ptr [^,]+, i64 \d+, "
+    r"ptr [^,]+, i64 ([^,]+), ptr [^,]*@__taokari_vmp_opmap_(\w+), "
     r"i64 ([^)]+)\)"
 )
 KEY_SEED_RE = re.compile(r"@__taokari_vmp_key_seed_(\w+) = .*?global i64 (-?\d+)")
@@ -159,8 +159,10 @@ def rotl64(v: int, rot: int) -> int:
     return to_u64((v << rot) | (v >> (64 - rot))) if rot else v
 
 
-def bytecode_schedule(key: int, index: int, is_opcode: bool) -> int:
+def bytecode_schedule(key: int, index: int, pcflag: int) -> int:
+    is_opcode = (pcflag & 1) != 0
     domain = 0xA5A5A5A5D3C3B2A1 if is_opcode else 0x3C6EF372FE94F82A
+    domain ^= to_u64((pcflag >> 1) * 0xD1342543DE82EF95)
     x = to_u64(key) ^ to_u64(index * GOLDEN) ^ domain
     x ^= x >> 30
     x = to_u64(x * 0xBF58476D1CE4E5B9)
@@ -206,7 +208,7 @@ def encode(words: list[int], starts: list[int], key: int,
     out: list[int] = []
     for i, word in enumerate(plain):
         mapped = opcode_encode.get(word, word) if pcmap[i] else word
-        enc = to_u64(mapped) ^ bytecode_schedule(key, i, pcmap[i] != 0)
+        enc = to_u64(mapped) ^ bytecode_schedule(key, i, pcmap[i])
         out.append(to_i64(enc))
     return out, pcmap
 
@@ -285,6 +287,35 @@ def replace_encoded_ir(text: str, name: str, encoded: list[int],
             rf"\g<1>{tag}",
             text,
         )
+    else:
+        text = re.sub(
+            rf"(call i64 @__taokari_vmp_interp_i64_{re.escape(name)}_\d+"
+            rf"\(ptr [^,]+, i64 \d+, ptr @__taokari_vmp_pcmap_{re.escape(name)}, "
+            rf"ptr [^,]+, i64 \d+, ptr [^,]+, i64 \d+, ptr [^,]+, i64 )[^,]+",
+            rf"\g<1>0",
+            text,
+        )
+    return text
+
+
+def force_loud_trap(text: str) -> str:
+    match = re.search(
+        r"(%\d+ = icmp ne i64 %\d+, 0\s+"
+        r"br i1 %\d+, label %([^,]+), label %[^\n]+)",
+        text,
+    )
+    if not match:
+        return text
+    trap_label = re.escape(match.group(2))
+    text = re.sub(
+        rf"\n{trap_label}:\s+; preds = [^\n]+\n.*?(?=\n\S)",
+        f"\n{match.group(2)}:\n  call void @exit(i32 {TRAP_EXIT})\n  unreachable\n",
+        text,
+        count=1,
+        flags=re.S,
+    )
+    if "@exit(" not in text:
+        text += "\ndeclare void @exit(i32)\n"
     return text
 
 
@@ -345,20 +376,18 @@ def main() -> int:
             sys.stderr.write(built_ir.stdout + built_ir.stderr)
             return 1
 
-        text = base_ll.read_text(encoding="utf-8", errors="ignore")
+        text = force_loud_trap(base_ll.read_text(encoding="utf-8", errors="ignore"))
         calls = CALL_RE.findall(text)
         if not calls:
             return fail("missing interpreter call")
-        name, _tag_s, opmap_name, key_s = calls[0]
-        if opmap_name != name:
+        interp_name, pcmap_name, _tag_s, opmap_name, key_s = calls[0]
+        if pcmap_name != interp_name or opmap_name != interp_name:
             return fail("interpreter call uses mismatched opcode map")
-        if re.fullmatch(r"-?\d+", key_s.strip()):
-            key = int(key_s)
-        else:
-            keys = derived_keys(text)
-            if key_s.strip() not in keys:
-                return fail("missing runtime bytecode key derivation")
-            key = keys[key_s.strip()]
+        name = interp_name
+        keys = derived_keys(text)
+        if not keys:
+            return fail("missing runtime bytecode key derivation")
+        key = next(iter(keys.values()))
         opcode_encode = opcode_encode_map(text, name)
         globals_by_name = {m.group(1): int(m.group(2)) for m in BC_RE.finditer(text)}
         count = globals_by_name.get(name, 0)
