@@ -483,7 +483,7 @@ Main weakness: should become more polymorphic and better tested.
 
 * [x] Add fake global entries
 * [x] Add shuffled global table
-* [ ] Add per-function global cache
+* [x] Add per-function global cache
 * [x] Add runtime nonce mixing
 * [x] Add MBA on global pointer decrypt
 * [ ] Add config for sensitive globals only
