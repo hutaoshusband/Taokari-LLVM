@@ -117,6 +117,11 @@ CASES = [
     # goto-loop. Stresses IndirectBranch page-table routing of BlockAddress
     # targets, including the no-op fallback for out-of-range indices.
     Case("indirect_branch", (case_path("indirect_branch") / "src" / "main.cpp",), "indbr:17:17:20:255:99:45\n"),
+    # Indirect branch + C++ EH compatibility fixture: a throw inside a
+    # goto-dispatched block must propagate to the caller's catch, and
+    # the goto targets must still resolve after IndirectBranch page-table
+    # rewrite. Stresses funclet/EH IR coexisting with indirectbr.
+    Case("indirect_branch_eh", (case_path("indirect_branch_eh") / "src" / "main.cpp",), "indbr-eh:42:42:-1:99:1\n"),
     # Functions & parameter passing fixture: value/reference/pointer params,
     # varying return types (int/double/struct), inline, function pointers,
     # std::function, capturing lambdas, and C varargs. Stresses IndirectCall
