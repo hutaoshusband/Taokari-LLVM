@@ -1211,10 +1211,10 @@ Goal: make Taokari controllable instead of “all or nothing”.
 
 ## Level 1 — Config Documentation
 
-* [ ] Document all current JSON keys
-* [ ] Document all current flags
-* [ ] Document all current levels
-* [ ] Add examples for each pass
+* [x] Document all current JSON keys
+* [x] Document all current flags
+* [x] Document all current levels
+* [x] Add examples for each pass
 * [ ] Add config validation
 * [ ] Add error messages for invalid keys
 * [ ] Add default config file
