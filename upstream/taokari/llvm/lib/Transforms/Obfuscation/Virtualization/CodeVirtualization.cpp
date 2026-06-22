@@ -1573,6 +1573,19 @@ struct CodeVirtualization : public ModulePass {
     return true;
   }
 
+  void addOpcodeMapDecoys(SmallVectorImpl<int64_t> &Decode) {
+    SmallVector<unsigned, kOpcodeTableSize> Empty;
+    for (unsigned I = 0; I < Decode.size(); ++I)
+      if (Decode[I] < 0)
+        Empty.push_back(I);
+    std::shuffle(Empty.begin(), Empty.end(), RNG);
+
+    static constexpr Opcode Pads[] = {OpPad, OpPad2, OpPad3};
+    unsigned Count = std::min<unsigned>(Empty.size(), 1 + (RNG() % 8));
+    for (unsigned I = 0; I < Count; ++I)
+      Decode[Empty[I]] = Pads[RNG() % 3];
+  }
+
   bool mapOpcodeWords(SmallVectorImpl<int64_t> &Words,
                       ArrayRef<int64_t> OpcodeEncode) const {
     size_t I = 0;
@@ -3132,6 +3145,7 @@ struct CodeVirtualization : public ModulePass {
       return false;
     if (!mapOpcodeWords(EncodedWords, OpcodeEncode))
       return false;
+    addOpcodeMapDecoys(OpcodeDecode);
 
     SmallVector<Constant *, 64> Words;
     for (size_t I = 0; I < EncodedWords.size(); ++I) {
