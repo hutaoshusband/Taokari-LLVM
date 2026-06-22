@@ -196,7 +196,7 @@ This is one of the most important differentiators against plain Arkari.
 ## Level 2 — Strong BCF
 
 * [x] Mutate cloned fake blocks
-* [ ] Add fake memory accesses
+* [x] Add fake memory accesses
 * [x] Add fake arithmetic chains
 * [x] Add fake calls to safe internal junk functions
 * [x] Add fake dependency on global nonce

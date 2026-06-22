@@ -222,6 +222,21 @@ struct BogusControlFlow : public FunctionPass {
     IRBuilder<> IRB(&Fake);
     Value *V =
         IRB.CreateAlignedLoad(Int64, &Nonce, Align(8), true, "bcf.fake.nonce");
+    // L2+ (todo.md "Add fake memory accesses"): a volatile load from a
+    // fresh private global introduces a fake memory dependency that a
+    // dataflow analyser must trace, on top of the junk arithmetic. The
+    // loaded value feeds the junk chain so it cannot be DCE'd.
+    if (Level >= 2) {
+      Module &Mod = *Fake.getModule();
+      auto *FakeMemInit = ConstantInt::get(Int64, FuncRNG());
+      auto *FakeMem = new GlobalVariable(
+          Mod, Int64, false, GlobalValue::PrivateLinkage, FakeMemInit,
+          Twine(Fake.getParent()->getName()) + ".bcf.fake.mem");
+      FakeMem->setAlignment(Align(8));
+      Value *FakeLd = IRB.CreateAlignedLoad(Int64, FakeMem, Align(8), true,
+                                            "bcf.fake.mem.ld");
+      V = IRB.CreateXor(V, FakeLd, "bcf.fake.mem.mix");
+    }
     for (uint32_t I = 0; I < Loops; ++I) {
       V = IRB.CreateXor(V, ConstantInt::get(Int64, FuncRNG()), "bcf.fake.xor");
       V = IRB.CreateMul(V, ConstantInt::get(Int64, (FuncRNG() | 1)),
