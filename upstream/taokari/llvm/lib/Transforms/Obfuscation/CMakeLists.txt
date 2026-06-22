@@ -16,6 +16,7 @@ add_llvm_component_library(LLVMObfuscation
   ConstantFPEncryption.cpp
   MicrosoftRTTIEraser.cpp
   MetadataHygiene.cpp
+  NativeIntegrity.cpp
   
   COMPONENT_NAME
   Obfuscation

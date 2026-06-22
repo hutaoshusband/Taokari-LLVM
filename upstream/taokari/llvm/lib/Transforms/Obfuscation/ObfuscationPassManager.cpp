@@ -7,6 +7,7 @@
 #include "llvm/Transforms/Obfuscation/BogusControlFlow.h"
 #include "llvm/Transforms/Obfuscation/CodeVirtualization.h"
 #include "llvm/Transforms/Obfuscation/MBA.h"
+#include "llvm/Transforms/Obfuscation/NativeIntegrity.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 
 #define DEBUG_TYPE "ir-obfuscation"
@@ -415,6 +416,10 @@ struct ObfuscationPassManager : public ModulePass {
     if (EnableMetadataHygiene || Options->metaOpt()->isEnabled()) {
       add(llvm::createMetadataHygienePass(Options.get()));
     }
+    // Native per-function integrity prototype. Opt-in via the
+    // `+nativeint` annotation; the pass is cheap on non-annotated
+    // functions (one annotation lookup and return).
+    add(llvm::createNativeIntegrityPass(Options.get()));
     bool Changed = run(M);
 
     return Changed;

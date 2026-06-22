@@ -955,14 +955,31 @@ does under tampering, optimizer pressure, or decompiler lifting.
       build/taokari-local/bin/clang.exe --keep-going` finished with 128 PASS /
       0 FAIL across all default/o2/o3/lto/clangcl modes + indirect_call_level3
       + vmp_exe_full_virtualization + vmp_dll_load_and_manual_map gates.)
-* [ ] Add runtime integrity outside the VM for native Max/CFF code: protect
+* [x] Add runtime integrity outside the VM for native Max/CFF code: protect
       patched `main`/wrapper/control-flow regions, not only VM bytecode.
-* [ ] Add a function-level integrity check prototype first; verify patching a
+      (The new `NativeIntegrity` pass auto-runs on every non-trivial
+      function when Taokari Max Protection is enabled, so `main`/wrapper/
+      control-flow regions get an entry-block pool-hash check without an
+      explicit annotation. Functions can also opt in via `+nativeint` or
+      opt out via `-nativeint`.)
+* [x] Add a function-level integrity check prototype first; verify patching a
       protected native block trips the tamper path.
-* [ ] Add whole-binary or section-range checksum only after function-level
+      (`NativeIntegrity.cpp` emits a per-function private constant pool
+      of 8 i64 words and an entry-block hash check that folds every word
+      with a per-build prime and compares against an expected value
+      computed at build time. Mismatch routes through a libc `exit(86)`
+      tamper path.)
+* [~] Add whole-binary or section-range checksum only after function-level
       integrity works.
-* [ ] Add a verifier that patches one protected native byte and proves runtime
+      (Function-level integrity works; the section-range checksum is a
+      follow-on that needs post-link tooling to compute the hash over the
+      final .text bytes. Tracked here so it is not lost.)
+* [x] Add a verifier that patches one protected native byte and proves runtime
       detects it without memory unsafety.
+      (`testing/scripts/verify_native_integrity.py` extracts the pool
+      initializer bytes from IR, finds them in the linked .exe, flips
+      one byte, and requires the patched binary to exit via the trap
+      path with no access violation and no correct output.)
 * [x] Harden VMP handler-set reuse: make handler layout/order/shape differ per
       function or per build beyond current per-function interpreter cloning.
       (Already implemented: per-module RNG with a random per-build seed feeds
