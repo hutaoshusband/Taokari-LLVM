@@ -928,7 +928,7 @@ minutes (the most-used handler is almost certainly `OpAdd`/`OpStoreSlot`).
 The L1.5.3 harness covers *correct* IR. It does not cover what the VM
 does under tampering, optimizer pressure, or decompiler lifting.
 
-* [ ] Add bytecode-mutation fuzz harness (flip random words/bits in the
+* [x] Add bytecode-mutation fuzz harness (flip random words/bits in the
       encrypted stream → must trap via Phase A, never memory-unsafe)
 * [x] Add property-based differential test (random IR programs across
       the Phase B ISA → native vs VM, shrinks on mismatch)
@@ -1170,10 +1170,10 @@ polymorphism on an unsafe or cryptographically trivial VM is noise.
 L3 fortress additions beyond the original list — these are what make the
 VM hostile to *automated* reversing, not just manual reading:
 
-* [ ] Add PC encryption (PC is a plain i64 alloca; a debugger reads
+* [x] Add PC encryption (PC is a plain i64 alloca; a debugger reads
       control flow for free — encrypt the PC register at rest between
       fetches)
-* [ ] Add stack/locals encryption at rest between handlers (operand
+* [x] Add stack/locals encryption at rest between handlers (operand
       stack and Locals are plaintext i64 arrays; encrypt in the gaps so
       a memory snapshot does not reveal intermediate values)
 * [ ] Add anti-debug/anti-trace inside the interpreter loop
@@ -1181,7 +1181,7 @@ VM hostile to *automated* reversing, not just manual reading:
       Section 12 Dynamic Protections when available)
 * [ ] Add anti-emulation (env/timing checks so the VM refuses to run
       under a scriptable lifter — the VM must run on real hardware)
-* [ ] Add tamper-response policy (Phase A's tamper flag triggers
+* [x] Add tamper-response policy (Phase A's tamper flag triggers
       silent-wrong-results, slow-decay, or trap depending on config —
       never an obvious crash that tells the analyst they hit a check)
 * [x] Add VM self-verification (interpreter hashes its own handler
