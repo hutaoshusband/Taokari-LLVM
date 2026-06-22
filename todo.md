@@ -1341,25 +1341,25 @@ Taokari should survive future LLVM changes instead of being trapped in one legac
 
 Purpose: fast compile, easy debugging.
 
-* [ ] Metadata strip only
-* [ ] Light string encryption
-* [ ] Light constant encryption
-* [ ] No flattening
-* [ ] No BCF
-* [ ] No MBA
-* [ ] No dynamic checks
+* [x] Metadata strip only
+* [x] Light string encryption
+* [x] Light constant encryption
+* [x] No flattening
+* [x] No BCF
+* [x] No MBA
+* [x] No dynamic checks
 
 ## Profile: Balanced
 
 Purpose: good protection without insane overhead.
 
-* [ ] Flatten selected functions
-* [ ] String encryption L2
-* [ ] Constant encryption L2
-* [ ] Indirect calls L1/L2
-* [ ] Metadata strip L2
-* [ ] Light MBA
-* [ ] Light BCF
+* [x] Flatten selected functions
+* [x] String encryption L2
+* [x] Constant encryption L2
+* [x] Indirect calls L1/L2
+* [x] Metadata strip L2
+* [x] Light MBA
+* [x] Light BCF
 
 ## Profile: Strong
 
