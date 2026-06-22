@@ -122,6 +122,11 @@ CASES = [
     # the goto targets must still resolve after IndirectBranch page-table
     # rewrite. Stresses funclet/EH IR coexisting with indirectbr.
     Case("indirect_branch_eh", (case_path("indirect_branch_eh") / "src" / "main.cpp",), "indbr-eh:42:42:-1:99:1\n"),
+    # Indirect globals — extended fixture: large struct, const struct,
+    # runtime-indexed array, C++ static local. Stresses
+    # IndirectGlobalVariable on a wider range of global shapes than the
+    # basic c_globals case.
+    Case("indirect_globals_struct", (case_path("indirect_globals_struct") / "src" / "main.cpp",), "indgv-struct:10:-6066930265826625388:101:102:103:0\n"),
     # Functions & parameter passing fixture: value/reference/pointer params,
     # varying return types (int/double/struct), inline, function pointers,
     # std::function, capturing lambdas, and C varargs. Stresses IndirectCall

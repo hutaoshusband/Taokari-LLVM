@@ -475,9 +475,9 @@ Main weakness: should become more polymorphic and better tested.
 * [x] Dedup cache exists
 * [ ] Add tests for const globals
 * [ ] Add tests for mutable globals
-* [ ] Add tests for large structs
-* [ ] Add tests for arrays
-* [ ] Add tests for C++ static locals
+* [x] Add tests for large structs
+* [x] Add tests for arrays
+* [x] Add tests for C++ static locals
 
 ## Level 2 — Stronger Global Access
 
