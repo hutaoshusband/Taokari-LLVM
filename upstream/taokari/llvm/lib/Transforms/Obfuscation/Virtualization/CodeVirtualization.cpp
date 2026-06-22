@@ -2633,15 +2633,18 @@ struct CodeVirtualization : public ModulePass {
     BasicBlock *Dispatch = BasicBlock::Create(Ctx, "dispatch", F);
     BasicBlock *Bad = BasicBlock::Create(Ctx, "bad", F);
     IRBuilder<> B(Entry);
-    auto *Stack = B.CreateAlloca(I64, ConstantInt::get(I64, 64), "stack");
-    auto *Locals = B.CreateAlloca(I64, ConstantInt::get(I64, 64), "locals");
+    auto RandomSlots = [&](uint64_t Base, uint64_t Spread) {
+      return ConstantInt::get(I64, Base + (RNG() % (Spread + 1)));
+    };
+    auto *Stack = B.CreateAlloca(I64, RandomSlots(64, 64), "stack");
+    auto *Locals = B.CreateAlloca(I64, RandomSlots(64, 64), "locals");
     // VM-local frame (L1.5.1 middle way). AllocaInst reserves runs
     // of consecutive slots here; LoadPtr/StorePtr index into it via the
     // frame-pointer values pushed by emitValue.
-    auto *Frame = B.CreateAlloca(I64, ConstantInt::get(I64, 64), "frame");
+    auto *Frame = B.CreateAlloca(I64, RandomSlots(64, 64), "frame");
     // OpCall argument marshaling buffer (L1.5.1). Up to 8 integer
     // args per call (isVMCompatibleCall gates on arg_size() <= 8).
-    auto *CallArgs = B.CreateAlloca(I64, ConstantInt::get(I64, 8), "callargs");
+    auto *CallArgs = B.CreateAlloca(I64, RandomSlots(8, 8), "callargs");
     auto *PC = B.CreateAlloca(I64, nullptr, "pc");
     auto *SP = B.CreateAlloca(I64, nullptr, "sp");
     auto *HandlerState = B.CreateAlloca(I64, nullptr, "handler.state");
