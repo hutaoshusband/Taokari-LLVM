@@ -946,6 +946,56 @@ does under tampering, optimizer pressure, or decompiler lifting.
 * [ ] Add bytecode size budget (cap blowup; refuse if `P.Words.size()`
       exceeds a configurable fraction of native code size)
 
+### Reverse-engineering report follow-up
+
+* [ ] Poll the still-running full harness process (`PID 35844`) and record
+      the final result; if it fails, fix only the failing seam and rerun the
+      smallest reproducer first.
+* [ ] Add runtime integrity outside the VM for native Max/CFF code: protect
+      patched `main`/wrapper/control-flow regions, not only VM bytecode.
+* [ ] Add a function-level integrity check prototype first; verify patching a
+      protected native block trips the tamper path.
+* [ ] Add whole-binary or section-range checksum only after function-level
+      integrity works.
+* [ ] Add a verifier that patches one protected native byte and proves runtime
+      detects it without memory unsafety.
+* [ ] Harden VMP handler-set reuse: make handler layout/order/shape differ per
+      function or per build beyond current per-function interpreter cloning.
+* [ ] Add verifier that two VMP functions in one binary do not share the same
+      handler-table signature.
+* [ ] Add handler body obfuscation for VMP interpreters: apply safe BCF/MBA or
+      MIR noise to handler bodies without breaking VM correctness.
+* [ ] Add fake handler execution noise that cannot be removed by simple DBI
+      "never executed" profiling.
+* [ ] Emit anti-frequency-analysis padding opcodes by default in Max VMP, with
+      a bounded budget.
+* [ ] Add verifier that valid VMP bytecode contains padding/fake opcode hits
+      and that runtime output still matches native.
+* [ ] Strengthen fake opcodes/fake handlers so they are not only registered
+      dead cases; make them appear plausible in static and trace views.
+* [ ] Fix StringEncryption's remaining XOR-key weakness: replace single-pass
+      inline XOR-looking decode with rolling or stateful per-character mixing.
+* [ ] Add verifier that the string literal/key schedule is not recoverable as
+      adjacent encrypted bytes plus inline XOR key.
+* [ ] Harden IndirectCall thunks that still collapse to trivial `jmp target`
+      patterns in native output.
+* [ ] Add verifier that protected indirect-call thunks do not expose direct
+      static jump targets.
+* [ ] Add optimizer survival checks for runtime-rekeyed VMP bytecode under
+      `-O2`, `-O3`, and LTO.
+* [ ] Add VM bytecode mutation fuzz harness: flip encrypted words/bits and
+      require clean tamper handling, never unsafe memory access.
+* [ ] Add decompiler/IDA snapshot proof for the new VMP runtime rekey and
+      DirtyBytes guard shape when IDA is available.
+* [ ] Add PC encryption at rest in the VMP interpreter loop.
+* [ ] Add VM stack/locals encryption at rest between handlers.
+* [ ] Add interpreter self-verification for handler table/code patching.
+* [ ] Add tamper-response policy so VM/native integrity failures do not always
+      become an obvious crash.
+* [ ] Keep next work one seam per commit: implement, rebuild
+      `build\taokari-local\bin\clang.exe`, run focused verifier, run regression
+      harness, clean temp/cache files, commit locally, do not push.
+
 **Definition of done for L2:**
 Every Phase A bound fires as a clean trap (never memory unsafety) under
 a bytecode-mutation fuzzer. Real C/C++ pointer-heavy functions pass the
