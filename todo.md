@@ -1241,7 +1241,7 @@ Goal: make Taokari controllable instead of “all or nothing”.
 * [ ] Add max binary size growth limit
 * [ ] Add max compile time growth limit
 * [ ] Add max runtime overhead target
-* [ ] Add config report output
+* [x] Add config report output
 * [ ] Add final build summary
 
 **Definition of done for L3:**

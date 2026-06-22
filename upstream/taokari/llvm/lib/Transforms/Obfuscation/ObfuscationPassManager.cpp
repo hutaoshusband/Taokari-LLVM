@@ -4,6 +4,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Obfuscation/BogusControlFlow.h"
 #include "llvm/Transforms/Obfuscation/CodeVirtualization.h"
 #include "llvm/Transforms/Obfuscation/MBA.h"
@@ -229,6 +230,12 @@ static cl::opt<std::string> TaokariConfigPath("taokari-cfg",
                                               cl::NotHidden,
                                               cl::desc("Taokari config path."));
 
+static cl::opt<bool> TaokariReport(
+    "taokari-report", cl::init(false), cl::NotHidden,
+    cl::desc("Print the resolved obfuscation configuration to stderr "
+             "at the start of the pass pipeline (todo.md item: config "
+             "report output)."));
+
 static cl::opt<std::string>
     ArkariConfigPath("arkari-cfg", cl::init(std::string{}), cl::NotHidden,
                      cl::desc("Arkari config path compatibility alias."));
@@ -386,6 +393,25 @@ struct ObfuscationPassManager : public ModulePass {
     this->Options = Options;
     unsigned pointerSize = M.getDataLayout().getTypeAllocSize(
         PointerType::getUnqual(M.getContext()));
+
+    if (TaokariReport) {
+      auto PrintOpt = [](const char *Name, const std::shared_ptr<ObfOpt> &O) {
+        errs() << "taokari-report: " << Name
+               << " enable=" << (O->isEnabled() ? "true" : "false")
+               << " level=" << O->level() << "\n";
+      };
+      PrintOpt("indbr", Options->indBrOpt());
+      PrintOpt("icall", Options->iCallOpt());
+      PrintOpt("indgv", Options->indGvOpt());
+      PrintOpt("fla", Options->flaOpt());
+      PrintOpt("cse", Options->cseOpt());
+      PrintOpt("cie", Options->cieOpt());
+      PrintOpt("cfe", Options->cfeOpt());
+      PrintOpt("bcf", Options->bcfOpt());
+      PrintOpt("mba", Options->mbaOpt());
+      PrintOpt("meta", Options->metaOpt());
+      PrintOpt("vmp", Options->vmpOpt());
+    }
 
     // VMP runs before hardening passes so the interpreter IR can be flattened,
     // dirtied and encrypted by the normal Taokari stack.
