@@ -158,13 +158,13 @@ test is non-vacuous and that the unfoldable family is what closes the gap.
 ## Level 3 — Predicate Engine
 
 * [ ] Add predicate family registry
-* [ ] Add random predicate selection
+* [x] Add random predicate selection
 * [ ] Add predicate nesting
 * [ ] Add per-pass predicate style selection
 * [ ] Add solver-resistance test cases
-* [ ] Add SimplifyCFG survival tests
-* [ ] Add InstCombine survival tests
-* [ ] Add `opt -O2` survival tests
+* [x] Add SimplifyCFG survival tests
+* [x] Add InstCombine survival tests
+* [x] Add `opt -O2` survival tests
 * [ ] Use predicates in flattening
 * [ ] Use predicates in bogus control flow
 * [ ] Use predicates in anti-debug gates
