@@ -1286,8 +1286,8 @@ This is required before Taokari can become serious.
 * [x] Run `opt -O3` survival tests
 * [x] Run LTO survival tests
 * [ ] Add decompiler snapshot tests
-* [ ] Add string leak tests
-* [ ] Add symbol leak tests
+* [x] Add string leak tests
+* [x] Add symbol leak tests
 * [ ] Add CFG complexity metric
 * [ ] Add call graph breakage metric
 * [ ] Add regression dashboard
