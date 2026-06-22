@@ -452,7 +452,7 @@ Main weakness: no AArch64 parity test and limited fake target noise.
 * [ ] Add bogus branch destinations
 * [ ] Add trap destinations
 * [ ] Add fake recovery paths
-* [ ] Add branch-table integrity checks
+* [x] Add branch-table integrity checks
 * [ ] Add dispatcher integration
 * [x] Add cross-pass tests with flattening
 * [x] Add cross-pass tests with BCF
