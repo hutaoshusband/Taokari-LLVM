@@ -263,9 +263,9 @@ Example identities:
 * [ ] Add polymorphic MBA templates
 * [ ] Add per-function MBA style
 * [ ] Add MBA on dispatch state updates
-* [ ] Add MBA on constant decryptors
-* [ ] Add MBA on string decryptors
-* [ ] Add MBA on page-table decryptors
+* [x] Add MBA on constant decryptors
+* [x] Add MBA on string decryptors
+* [x] Add MBA on page-table decryptors
 * [ ] Add solver-resistance samples
 * [ ] Add overhead budget system
 * [ ] Add hot-loop avoidance
