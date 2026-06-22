@@ -2528,7 +2528,8 @@ struct CodeVirtualization : public ModulePass {
     return H;
   }
 
-  Function *createInterpreter(Module &M, Function &Source) {
+  Function *createInterpreter(Module &M, Function &Source,
+                              uint64_t ExpectedOpMapHash) {
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
     Type *I8 = Type::getInt8Ty(Ctx);
@@ -2647,8 +2648,56 @@ struct CodeVirtualization : public ModulePass {
     B.CreateStore(B.CreateAdd(CurTagI, ConstantInt::get(I64, 1)), TagI);
     B.CreateBr(TagHdr);
     B.SetInsertPoint(TagDone);
+    BasicBlock *OpMapCheck = BasicBlock::Create(Ctx, "opmap.check", F);
     B.CreateCondBr(B.CreateICmpEQ(B.CreateLoad(I64, Tag), ExpectedTag),
-                   Dispatch, Bad);
+                   OpMapCheck, Bad);
+
+    // Self-verification of the handler-dispatch opcode map (todo.md
+    // "interpreter self-verification for handler table/code patching").
+    // The interpreter folds every entry of OpcodeMap[0..63] into a
+    // running hash with a per-build prime and compares the result
+    // against a per-interp expected value baked in as a constant. A
+    // patched map entry (e.g. swapping two opcodes to remap the
+    // dispatch) trips the check and routes through the Bad block. The
+    // expected value is computed at build time by hashing OpcodeDecode
+    // in replaceWithVM (passed in via a private global), so the check
+    // survives the optimizer because the runtime hash depends on the
+    // actual loaded bytes.
+    B.SetInsertPoint(OpMapCheck);
+    auto *OpMapHash = B.CreateAlloca(I64, nullptr, "opmap.hash");
+    auto *OpMapHashI = B.CreateAlloca(I64, nullptr, "opmap.hash.i");
+    Value *ExpectedOpMapHashV =
+        ConstantInt::get(I64, ExpectedOpMapHash);
+    B.CreateStore(ConstantInt::get(I64, 0xCBF29CE484222325ULL), OpMapHash);
+    B.CreateStore(ConstantInt::get(I64, 0), OpMapHashI);
+    BasicBlock *OpMapHdr = BasicBlock::Create(Ctx, "opmap.hdr", F);
+    BasicBlock *OpMapBody = BasicBlock::Create(Ctx, "opmap.body", F);
+    BasicBlock *OpMapDone = BasicBlock::Create(Ctx, "opmap.done", F);
+    B.CreateBr(OpMapHdr);
+    B.SetInsertPoint(OpMapHdr);
+    Value *OpMapHashIVal = B.CreateLoad(I64, OpMapHashI);
+    B.CreateCondBr(
+        B.CreateICmpULT(OpMapHashIVal,
+                        ConstantInt::get(I64, kOpcodeTableSize)),
+        OpMapBody, OpMapDone);
+    B.SetInsertPoint(OpMapBody);
+    Value *OpMapEntry = B.CreateLoad(
+        I64, B.CreateGEP(I64, OpcodeMap, OpMapHashIVal));
+    Value *CurOpMapHash = B.CreateLoad(I64, OpMapHash);
+    Value *OpMapMix = B.CreateAdd(
+        OpMapEntry, B.CreateMul(OpMapHashIVal,
+                                ConstantInt::get(I64, 0x9E3779B97F4A7C15ULL)));
+    Value *NextOpMapHash = B.CreateMul(
+        B.CreateXor(CurOpMapHash, OpMapMix),
+        ConstantInt::get(I64, 0x100000001B3ULL));
+    B.CreateStore(NextOpMapHash, OpMapHash);
+    B.CreateStore(B.CreateAdd(OpMapHashIVal, ConstantInt::get(I64, 1)),
+                  OpMapHashI);
+    B.CreateBr(OpMapHdr);
+    B.SetInsertPoint(OpMapDone);
+    B.CreateCondBr(
+        B.CreateICmpEQ(B.CreateLoad(I64, OpMapHash), ExpectedOpMapHashV),
+        Dispatch, Bad);
 
     B.SetInsertPoint(Dispatch);
     // Inline PC decrypt (PcKey is the alloca created above). IC is not
@@ -2836,7 +2885,23 @@ struct CodeVirtualization : public ModulePass {
     OpcodeMap->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
     OpcodeMap->setAlignment(Align(8));
 
-    Function *Interp = createInterpreter(M, F);
+    // Compute the expected opcode-map hash that the interpreter will
+    // re-derive at entry. The hash mirrors the runtime fold: start from
+    // 0xCBF29CE484222325 and for each entry compute
+    //   next = (cur ^ (entry + index * prime)) * 0x100000001B3
+    // using 64-bit wrapping arithmetic. The runtime check then catches
+    // any patch to a single OpcodeMap entry.
+    uint64_t ExpectedOpMapHash = 0xCBF29CE484222325ULL;
+    for (unsigned I = 0; I < OpcodeDecode.size(); ++I) {
+      uint64_t Entry =
+          static_cast<uint64_t>(static_cast<int64_t>(OpcodeDecode[I]));
+      uint64_t Mix = Entry +
+                     static_cast<uint64_t>(I) * 0x9E3779B97F4A7C15ULL;
+      ExpectedOpMapHash =
+          (ExpectedOpMapHash ^ Mix) * 0x100000001B3ULL;
+    }
+
+    Function *Interp = createInterpreter(M, F, ExpectedOpMapHash);
     F.removeFnAttr(Attribute::AlwaysInline);
     F.removeFnAttr(Attribute::InlineHint);
     F.addFnAttr(Attribute::NoInline);

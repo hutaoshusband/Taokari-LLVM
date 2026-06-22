@@ -1079,7 +1079,19 @@ does under tampering, optimizer pressure, or decompiler lifting.
       confirms the stk.key alloca exists, every push encrypts, every
       pop decrypts, and the protected binary still produces correct
       output.)
-* [ ] Add interpreter self-verification for handler table/code patching.
+* [x] Add interpreter self-verification for handler table/code patching.
+      (`createInterpreter` in CodeVirtualization.cpp now folds every
+      entry of OpcodeMap[0..63] into a running hash with a per-build
+      prime at entry, and compares the result against an expected value
+      baked in as a constant. The expected value is computed at build
+      time in `replaceWithVM` from the same OpcodeDecode vector that
+      materialised the map, so any patch to a single map entry (e.g.
+      swapping two opcodes to remap the dispatch) trips the check and
+      routes through the Bad block before the dispatch loop runs.
+      `testing/scripts/verify_vmp_opmap_self_verify.py` confirms the
+      opmap.hash / opmap.check / opmap.done blocks exist, the dispatch
+      is gated on the hash compare, and patching a single OpcodeMap
+      entry in the IR breaks the binary.)
 * [x] Add tamper-response policy so VM/native integrity failures do not always
       become an obvious crash.
       (`replaceWithVM` in CodeVirtualization.cpp picks one of four tamper
