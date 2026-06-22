@@ -60,6 +60,12 @@ static constexpr uint32_t DefaultMaxInsts = 5000;
 static constexpr uint32_t DefaultMaxBlocks = 200;
 static constexpr uint32_t DefaultMaxAllocas = 64;
 
+static uint32_t varyDefaultLimit(std::mt19937_64 &RNG, uint32_t Base) {
+  const uint32_t Min = Base - Base / 4;
+  const uint32_t Max = Base + Base / 4;
+  return std::uniform_int_distribution<uint32_t>(Min, Max)(RNG);
+}
+
 // Stats
 STATISTIC(Flattened, "Functions flattened");
 
@@ -74,6 +80,9 @@ struct Flattening : public FunctionPass {
 
   ObfuscationOptions *ArgsOptions;
   std::mt19937_64 RNG;
+  uint32_t BuildMaxInsts = DefaultMaxInsts;
+  uint32_t BuildMaxBlocks = DefaultMaxBlocks;
+  uint32_t BuildMaxAllocas = DefaultMaxAllocas;
 
   Flattening(unsigned pointerSize, ObfuscationOptions *argsOptions)
       : FunctionPass(ID) {
@@ -87,6 +96,9 @@ struct Flattening : public FunctionPass {
     }
 
     RNG = std::mt19937_64(seed);
+    BuildMaxInsts = varyDefaultLimit(RNG, DefaultMaxInsts);
+    BuildMaxBlocks = varyDefaultLimit(RNG, DefaultMaxBlocks);
+    BuildMaxAllocas = varyDefaultLimit(RNG, DefaultMaxAllocas);
   }
 
   bool runOnFunction(Function &F) override;
@@ -124,11 +136,11 @@ bool Flattening::flatten(Function *f) {
   SmallVector<BasicBlock *, 32> origBB;
   const auto flaOpt = ArgsOptions->flaOpt();
   const uint32_t maxInsts =
-      flaOpt->maxInsts() ? flaOpt->maxInsts() : DefaultMaxInsts;
+      flaOpt->maxInsts() ? flaOpt->maxInsts() : BuildMaxInsts;
   const uint32_t maxBlocks =
-      flaOpt->maxBlocks() ? flaOpt->maxBlocks() : DefaultMaxBlocks;
+      flaOpt->maxBlocks() ? flaOpt->maxBlocks() : BuildMaxBlocks;
   const uint32_t maxAllocas =
-      flaOpt->maxAllocas() ? flaOpt->maxAllocas() : DefaultMaxAllocas;
+      flaOpt->maxAllocas() ? flaOpt->maxAllocas() : BuildMaxAllocas;
   const uint32_t flaLevel = flaOpt->level();
   const bool fortressMode = flaLevel >= 3;
 
