@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
 SOURCE = ROOT / "testing" / "cases" / "flattening_stress" / "src" / "main.cpp"
+FLATTENING_SOURCE = ROOT / "upstream" / "taokari" / "llvm" / "lib" / "Transforms" / "Obfuscation" / "Flattening.cpp"
 VSDEVCMD = Path(r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat")
 EXPECTED = "flattening-stress:2287845297:2439064602\n"
 FLAGS = [
@@ -44,6 +45,14 @@ def check(result: subprocess.CompletedProcess[str], label: str) -> None:
         raise SystemExit(f"{label} failed\n{result.stdout}{result.stderr}")
 
 
+def check_source_shapes() -> None:
+    source = FLATTENING_SOURCE.read_text(encoding="utf-8", errors="ignore")
+    assert "fortressMode ? RNG() % 5 : RNG() % 3" in source, "FLA XOR family was not widened"
+    assert "auto dispatchLayout = RNG() % 4" in source, "FLA dispatch layout family was not widened"
+    assert "fortressMode ? RNG() % 7 : RNG() % 4" in source, "FLA next-key family was not widened"
+    assert "switchDispatchGateB" in source, "FLA fourth dispatch layout is missing"
+
+
 def compile_and_check(out: Path, name: str, extra_flags: list[str], want_indirectbr: bool) -> None:
     ll = out / f"{name}.ll"
     exe = out / f"{name}.exe"
@@ -75,6 +84,7 @@ def main() -> int:
     if not CLANG.exists():
         print(f"missing clang: {CLANG}", file=sys.stderr)
         return 2
+    check_source_shapes()
     if args.artifacts_dir:
         out = args.artifacts_dir
         out.mkdir(parents=True, exist_ok=True)

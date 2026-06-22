@@ -263,7 +263,7 @@ bool Flattening::flatten(Function *f) {
 
   auto buildXorExpr = [&](IRBuilder<> &Builder, Value *LHS, Value *RHS,
                           const Twine &Name) -> Value * {
-    switch (fortressMode ? RNG() % 3 : RNG() % 2) {
+    switch (fortressMode ? RNG() % 5 : RNG() % 3) {
     case 1: {
       Value *orV = Builder.CreateOr(LHS, RHS);
       Value *andV = Builder.CreateAnd(LHS, RHS);
@@ -274,6 +274,16 @@ bool Flattening::flatten(Function *f) {
       return Builder.CreateSub(
           Builder.CreateAdd(LHS, RHS),
           Builder.CreateShl(andV, ConstantInt::get(IntTy, 1)), Name);
+    }
+    case 3: {
+      Value *lhsOnly = Builder.CreateAnd(LHS, Builder.CreateNot(RHS));
+      Value *rhsOnly = Builder.CreateAnd(Builder.CreateNot(LHS), RHS);
+      return Builder.CreateOr(lhsOnly, rhsOnly, Name);
+    }
+    case 4: {
+      Value *orV = Builder.CreateOr(LHS, RHS);
+      Value *andV = Builder.CreateAnd(LHS, RHS);
+      return Builder.CreateSub(orV, andV, Name);
     }
     default:
       return Builder.CreateXor(LHS, RHS, Name);
@@ -390,7 +400,7 @@ bool Flattening::flatten(Function *f) {
 
   BasicBlock *switchBlock = bbLoopEntry;
   if (fortressMode) {
-    auto dispatchLayout = RNG() % 3;
+    auto dispatchLayout = RNG() % 4;
     switchBlock =
         BasicBlock::Create(f->getContext(), "switchDispatch", f, bbLoopEnd);
 
@@ -407,7 +417,7 @@ bool Flattening::flatten(Function *f) {
           IRB, switchCondition, ConstantInt::get(IntTy, 0), "dispatchGate.mix");
       switchCondition = gateMix;
       IRB.CreateBr(switchBlock);
-    } else {
+    } else if (dispatchLayout == 2) {
       auto nestedOuter = BasicBlock::Create(
           f->getContext(), "switchNestedDispatch", f, bbLoopEnd);
       IRB.SetInsertPoint(bbLoopEntry);
@@ -416,6 +426,22 @@ bool Flattening::flatten(Function *f) {
       auto *outerSwitch = SwitchInst::Create(buildOpaqueEven(IRB, "nestedKey"),
                                              swFakeCaseGate, 1, nestedOuter);
       outerSwitch->addCase(ConstantInt::get(IntTy, 0), switchBlock);
+    } else {
+      auto dispatchGateA = BasicBlock::Create(
+          f->getContext(), "switchDispatchGateA", f, bbLoopEnd);
+      auto dispatchGateB = BasicBlock::Create(
+          f->getContext(), "switchDispatchGateB", f, bbLoopEnd);
+      IRB.SetInsertPoint(bbLoopEntry);
+      IRB.CreateCondBr(buildOpaqueTrue(IRB, "dispatchGateA.pred"),
+                       dispatchGateA, swFakeCaseGate);
+      IRB.SetInsertPoint(dispatchGateA);
+      IRB.CreateCondBr(buildOpaqueTrue(IRB, "dispatchGateB.pred"),
+                       dispatchGateB, swFakeCaseGate);
+      IRB.SetInsertPoint(dispatchGateB);
+      switchCondition = buildXorExpr(
+          IRB, switchCondition, ConstantInt::get(IntTy, 0),
+          "dispatchGateB.mix");
+      IRB.CreateBr(switchBlock);
     }
   }
 
@@ -622,7 +648,7 @@ bool Flattening::flatten(Function *f) {
 
     auto writeNextEncoded = [&](Value *NextCaseVal) {
       Value *nextXor = randStateKey();
-      switch (fortressMode ? RNG() % 5 : RNG() % 3) {
+      switch (fortressMode ? RNG() % 7 : RNG() % 4) {
       case 1:
         nextXor = IRB.CreateNot(nextXor, "nextXor.not");
         break;
@@ -634,6 +660,15 @@ bool Flattening::flatten(Function *f) {
         break;
       case 4:
         nextXor = IRB.CreateSub(randConst(), nextXor, "nextXor.submix");
+        break;
+      case 5:
+        nextXor = buildXorExpr(IRB, IRB.CreateAdd(nextXor, randConst(),
+                                                  "nextXor.addmask"),
+                               randConst(), "nextXor.xormix");
+        break;
+      case 6:
+        nextXor = IRB.CreateAdd(IRB.CreateNot(nextXor, "nextXor.notmix"),
+                                randConst(), "nextXor.notaddmix");
         break;
       default:
         break;
