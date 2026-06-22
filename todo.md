@@ -269,7 +269,7 @@ Example identities:
 * [ ] Add solver-resistance samples
 * [ ] Add overhead budget system
 * [ ] Add hot-loop avoidance
-* [ ] Add performance profile tests
+* [x] Add performance profile tests
 
 **Definition of done for L3:**
 MBA should not just make expressions longer.
