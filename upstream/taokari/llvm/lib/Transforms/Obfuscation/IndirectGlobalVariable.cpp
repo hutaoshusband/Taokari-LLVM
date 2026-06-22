@@ -107,11 +107,10 @@ struct IndirectGlobalVariable : public FunctionPass {
     createPageTableArgs.ObjectKeys = &GVKeys;
     createPageTableArgs.OutPageTable = &GVPageTable;
     createPageTableArgs.PtrEncKey = PtrEncKey;
-    // L2+: pad the page table with decoy targets so a static lifter
-    // cannot infer the real global count from the table size. Half as
-    // many fakes as real globals keeps the overhead bounded.
-    createPageTableArgs.FakeEntries =
-        std::max<unsigned>(1, GlobalVariables.size() / 2);
+    // L2+: pad with a per-build decoy count so table size does not expose
+    // a fixed real-global ratio.
+    createPageTableArgs.FakeEntries = chooseFakeEntryCount(
+        RNG, static_cast<unsigned>(GlobalVariables.size()));
 
     createPageTable(createPageTableArgs);
     return false;

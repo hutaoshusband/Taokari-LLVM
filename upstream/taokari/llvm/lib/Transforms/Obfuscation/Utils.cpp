@@ -94,6 +94,14 @@ AllocaInst *createConstantSeedCache(Function &F, std::mt19937_64 &rng,
   return Slot;
 }
 
+unsigned chooseFakeEntryCount(std::mt19937_64 &rng, unsigned realEntries) {
+  if (!realEntries)
+    return 0;
+  unsigned minFakes = std::max(1u, realEntries / 4);
+  unsigned maxFakes = std::max(minFakes, realEntries);
+  return std::uniform_int_distribution<unsigned>(minFakes, maxFakes)(rng);
+}
+
 // Shamefully borrowed from ../Scalar/RegToMem.cpp :(
 bool valueEscapes(Instruction *Inst) {
   BasicBlock *BB = Inst->getParent();

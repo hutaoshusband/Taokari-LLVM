@@ -283,7 +283,7 @@ struct IndirectCall : public FunctionPass {
     createPageTableArgs.PtrEncKey = PtrEncKey;
     if (ArgsOptions->iCallOpt()->level() > 1) {
       createPageTableArgs.FakeEntries =
-          std::max<unsigned>(1, Callees.size() / 2);
+          chooseFakeEntryCount(RNG, static_cast<unsigned>(Callees.size()));
       createPageTableArgs.TwoShare = true;
       createPageTableArgs.OutObjectShareTable = &CalleeObjectShareTable;
     }
@@ -353,7 +353,8 @@ struct IndirectCall : public FunctionPass {
       createPageTableArgs.PtrEncKey = PtrEncKey;
       if (opt.level() > 1)
         createPageTableArgs.FakeEntries =
-            std::max<unsigned>(1, FuncCallees.size() / 2);
+            chooseFakeEntryCount(RNG,
+                                 static_cast<unsigned>(FuncCallees.size()));
 
       enhancedPageTable(createPageTableArgs, &FuncCalleeIndex);
     }
