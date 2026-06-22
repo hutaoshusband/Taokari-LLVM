@@ -58,6 +58,8 @@ bool expandConstantExpr(Function &F);
 AllocaInst *createConstantSeedCache(Function &F, std::mt19937_64 &rng,
                                     bool volatileSeed);
 unsigned chooseFakeEntryCount(std::mt19937_64 &rng, unsigned realEntries);
+unsigned choosePageTableDepth(std::mt19937_64 &rng, unsigned level);
+unsigned chooseModulePageTableDepth(std::mt19937_64 &rng);
 void createPageTable(const CreatePageTableArgs &args);
 void enhancedPageTable(const CreatePageTableArgs &args,
                        DenseMap<Constant *, unsigned> *FuncIndexMap);

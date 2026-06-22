@@ -98,7 +98,7 @@ struct IndirectGlobalVariable : public FunctionPass {
     PtrEncKey = RNG();
 
     CreatePageTableArgs createPageTableArgs;
-    createPageTableArgs.CountLoop = 1;
+    createPageTableArgs.CountLoop = chooseModulePageTableDepth(RNG);
     createPageTableArgs.GVNamePrefix = M.getName().str() + "_IndirectGVs";
     createPageTableArgs.RNG = &RNG;
     createPageTableArgs.M = &M;
@@ -143,10 +143,12 @@ struct IndirectGlobalVariable : public FunctionPass {
 
     SmallVector<GlobalVariable *, 8> FuncGVPageTable;
     DenseMap<Constant *, unsigned>   FuncGVIndex;
+    unsigned                         FuncPageDepth = 0;
 
     if (opt.level()) {
+      FuncPageDepth = choosePageTableDepth(RNG, opt.level());
       CreatePageTableArgs createPageTableArgs;
-      createPageTableArgs.CountLoop = opt.level();
+      createPageTableArgs.CountLoop = FuncPageDepth;
       createPageTableArgs.GVNamePrefix =
           M.getName().str() + Fn.getName().str() + "_IndirectGVs";
       createPageTableArgs.RNG = &RNG;
@@ -200,7 +202,7 @@ struct IndirectGlobalVariable : public FunctionPass {
       for (auto &KV : GVDedupCache) {
         auto *           GV = KV.first;
         BuildDecryptArgs buildDecrypt;
-        buildDecrypt.FuncLoopCount = opt.level();
+        buildDecrypt.FuncLoopCount = FuncPageDepth;
         buildDecrypt.NextIndex = opt.level() ? FuncGVIndex[GV] : GVIndex[GV];
         buildDecrypt.NextIndexValue = nullptr;
         buildDecrypt.Fn = &Fn;
@@ -251,7 +253,7 @@ struct IndirectGlobalVariable : public FunctionPass {
                 GV->getType(), CacheIt->second, Align{1}, true);
           } else {
             BuildDecryptArgs buildDecrypt;
-            buildDecrypt.FuncLoopCount = opt.level();
+            buildDecrypt.FuncLoopCount = FuncPageDepth;
             buildDecrypt.NextIndex =
                 opt.level() ? FuncGVIndex[GV] : GVIndex[GV];
             buildDecrypt.NextIndexValue = nullptr;

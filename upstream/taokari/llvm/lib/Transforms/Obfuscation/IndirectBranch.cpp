@@ -213,7 +213,7 @@ struct IndirectBranch : public FunctionPass {
     PtrEncKey = RNG();
 
     CreatePageTableArgs createPageTableArgs;
-    createPageTableArgs.CountLoop = 1;
+    createPageTableArgs.CountLoop = chooseModulePageTableDepth(RNG);
     createPageTableArgs.GVNamePrefix = M.getName().str() + "_IndirectBr";
     createPageTableArgs.RNG = &RNG;
     createPageTableArgs.M = &M;
@@ -274,10 +274,12 @@ struct IndirectBranch : public FunctionPass {
 
     SmallVector<GlobalVariable *, 8> FuncBBPageTable;
     DenseMap<Constant *, unsigned>   FuncBBIndex;
+    unsigned                         FuncPageDepth = 0;
 
     if (opt.level()) {
+      FuncPageDepth = choosePageTableDepth(RNG, opt.level());
       CreatePageTableArgs createPageTableArgs;
-      createPageTableArgs.CountLoop = opt.level();
+      createPageTableArgs.CountLoop = FuncPageDepth;
       createPageTableArgs.GVNamePrefix =
           M.getName().str() + Fn.getName().str() + "_IndirectBr";
       createPageTableArgs.M = &M;
@@ -322,7 +324,7 @@ struct IndirectBranch : public FunctionPass {
         auto NextIndex = IRB.CreateSelect(Cond, TIndex, FIndex);
 
         BuildDecryptArgs buildDecrypt;
-        buildDecrypt.FuncLoopCount = opt.level();
+        buildDecrypt.FuncLoopCount = FuncPageDepth;
         buildDecrypt.NextIndex = 0;
         buildDecrypt.NextIndexValue = NextIndex;
         buildDecrypt.Fn = &Fn;

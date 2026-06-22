@@ -272,7 +272,7 @@ struct IndirectCall : public FunctionPass {
     PtrEncKey = RNG();
 
     CreatePageTableArgs createPageTableArgs;
-    createPageTableArgs.CountLoop = 1;
+    createPageTableArgs.CountLoop = chooseModulePageTableDepth(RNG);
     createPageTableArgs.GVNamePrefix = M.getName().str() + "_IndirectCallee";
     createPageTableArgs.RNG = &RNG;
     createPageTableArgs.M = &M;
@@ -338,10 +338,12 @@ struct IndirectCall : public FunctionPass {
 
     SmallVector<GlobalVariable *, 8> FuncCalleePageTable;
     DenseMap<Constant *, unsigned>   FuncCalleeIndex;
+    unsigned                         FuncPageDepth = 0;
 
     if (opt.level()) {
+      FuncPageDepth = choosePageTableDepth(RNG, opt.level());
       CreatePageTableArgs createPageTableArgs;
-      createPageTableArgs.CountLoop = opt.level();
+      createPageTableArgs.CountLoop = FuncPageDepth;
       createPageTableArgs.GVNamePrefix =
           M.getName().str() + Fn.getName().str() + "_IndirectCallee";
       createPageTableArgs.RNG = &RNG;
@@ -395,7 +397,7 @@ struct IndirectCall : public FunctionPass {
         Function *       Callee = KV.first;
         Function *       TableCallee = fortressCallee(M, Callee);
         BuildDecryptArgs buildDecrypt;
-        buildDecrypt.FuncLoopCount = opt.level();
+        buildDecrypt.FuncLoopCount = FuncPageDepth;
         buildDecrypt.NextIndex = opt.level()
                                    ? FuncCalleeIndex[TableCallee]
                                    : CalleeIndex[TableCallee];
@@ -438,7 +440,7 @@ struct IndirectCall : public FunctionPass {
       } else {
         Function *TableCallee = fortressCallee(M, Callee);
         BuildDecryptArgs buildDecrypt;
-        buildDecrypt.FuncLoopCount = opt.level();
+        buildDecrypt.FuncLoopCount = FuncPageDepth;
         buildDecrypt.NextIndex = opt.level()
                                    ? FuncCalleeIndex[TableCallee]
                                    : CalleeIndex[TableCallee];

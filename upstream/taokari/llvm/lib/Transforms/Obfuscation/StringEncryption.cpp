@@ -526,7 +526,7 @@ void StringEncryption::emitShardedPools(Module &M) {
       PoolPageKeys[C] = RNG();
     PoolPtrEncKey = RNG();
     CreatePageTableArgs Args{};
-    Args.CountLoop = 1;
+    Args.CountLoop = chooseModulePageTableDepth(RNG);
     Args.GVNamePrefix = M.getName().str() + "_StringPools";
     Args.RNG = &RNG;
     Args.M = &M;
