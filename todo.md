@@ -1163,7 +1163,7 @@ polymorphism on an unsafe or cryptographically trivial VM is noise.
       land here as trace-resistance rather than histogram flattening)
 * [ ] Add VM devirtualization test samples (canonical samples an analyst
       would feed to a devirt tool — must fail to lift cleanly)
-* [ ] Add heavy warning for overhead (Fortress VM is expensive; the pass
+* [x] Add heavy warning for overhead (Fortress VM is expensive; the pass
       must refuse silently slowing a release build without an explicit
       opt-in)
 
