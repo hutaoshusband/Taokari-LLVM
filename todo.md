@@ -183,26 +183,26 @@ This is one of the most important differentiators against plain Arkari.
 
 ## Level 1 — Classic BCF
 
-* [ ] Add `BogusControlFlow.cpp`
-* [ ] Clone selected basic blocks
-* [ ] Insert opaque branch before real block
-* [ ] Add fake block path
-* [ ] Add junk math inside fake block
-* [ ] Add dead stores inside fake block
-* [ ] Add config probability
-* [ ] Add config loop count
-* [ ] Add annotation: `bcf`
+* [x] Add `BogusControlFlow.cpp`
+* [x] Clone selected basic blocks
+* [x] Insert opaque branch before real block
+* [x] Add fake block path
+* [x] Add junk math inside fake block
+* [x] Add dead stores inside fake block
+* [x] Add config probability
+* [x] Add config loop count
+* [x] Add annotation: `bcf`
 
 ## Level 2 — Strong BCF
 
-* [ ] Mutate cloned fake blocks
+* [x] Mutate cloned fake blocks
 * [ ] Add fake memory accesses
-* [ ] Add fake arithmetic chains
-* [ ] Add fake calls to safe internal junk functions
-* [ ] Add fake dependency on global nonce
-* [ ] Add per-function BCF seed
-* [ ] Add BCF after flattening option
-* [ ] Add BCF before flattening option
+* [x] Add fake arithmetic chains
+* [x] Add fake calls to safe internal junk functions
+* [x] Add fake dependency on global nonce
+* [x] Add per-function BCF seed
+* [x] Add BCF after flattening option
+* [x] Add BCF before flattening option
 
 ## Level 3 — Fortress BCF
 
