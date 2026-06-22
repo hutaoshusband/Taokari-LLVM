@@ -102,6 +102,25 @@ unsigned chooseFakeEntryCount(std::mt19937_64 &rng, unsigned realEntries) {
   return std::uniform_int_distribution<unsigned>(minFakes, maxFakes)(rng);
 }
 
+static void emitIntegrityTrap(IRBuilder<> &IRB, Module *M,
+                              const BuildDecryptArgs &args) {
+  uint64_t Salt = args.RuntimeSeed ^ args.ModuleKey ^ (args.FuncKey << 7) ^
+                  (args.PtrEncKey >> 3);
+  switch (Salt % 3) {
+  case 0:
+    IRB.CreateCall(Intrinsic::getOrInsertDeclaration(M, Intrinsic::trap));
+    break;
+  case 1:
+    IRB.CreateCall(Intrinsic::getOrInsertDeclaration(M, Intrinsic::debugtrap));
+    break;
+  default:
+    IRB.CreateCall(
+        Intrinsic::getOrInsertDeclaration(M, Intrinsic::ubsantrap),
+        ConstantInt::get(IRB.getInt8Ty(), Salt & 0xffu));
+    break;
+  }
+}
+
 // Shamefully borrowed from ../Scalar/RegToMem.cpp :(
 bool valueEscapes(Instruction *Inst) {
   BasicBlock *BB = Inst->getParent();
@@ -516,7 +535,7 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
     auto *ThenTerm = SplitBlockAndInsertIfThen(BadIndex, args.InsertBefore,
                                                /*Unreachable=*/true);
     IRBuilder<> TrapB(ThenTerm);
-    TrapB.CreateCall(Intrinsic::getOrInsertDeclaration(M, Intrinsic::trap));
+    emitIntegrityTrap(TrapB, M, args);
     IRB.SetInsertPoint(args.InsertBefore);
   };
 
