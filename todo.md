@@ -433,7 +433,7 @@ Main weakness: no AArch64 parity test and limited fake target noise.
 * [x] Add EH compatibility tests
 * [x] Add AArch64 smoke test
 * [x] Add x64 Windows test
-* [ ] Audit block address edge cases
+* [x] Audit block address edge cases
 
 ## Level 2 — Stronger Branch Tables
 
