@@ -1803,6 +1803,7 @@ struct CodeVirtualization : public ModulePass {
     Value *ExpectedTag;
     Value *OpcodeMap;
     Value *BytecodeKey;
+    Value *PcKey;
     BasicBlock *Dispatch;
     BasicBlock *Bad;
     bool LittleEndian;
@@ -1812,6 +1813,21 @@ struct CodeVirtualization : public ModulePass {
     BasicBlock *Cont = BasicBlock::Create(*C.Ctx, "guard.ok", C.F);
     B.CreateCondBr(Ok, Cont, C.Bad);
     B.SetInsertPoint(Cont);
+  }
+
+  // PC encryption helpers (todo.md "PC encryption at rest"). The PC
+  // alloca holds PC XOR PcKey; these helpers are the only legal way to
+  // touch the PC. fetchWord, dispatch and init all go through them.
+  Value *pcLoad(IRBuilder<> &B, InterpCtx &C) {
+    Value *Enc = B.CreateLoad(C.I64, C.PC, "pc.enc");
+    Value *Key = B.CreateAlignedLoad(C.I64, C.PcKey, Align(8), "pc.key.ld");
+    return B.CreateXor(Enc, Key, "pc.plain");
+  }
+
+  void pcStore(IRBuilder<> &B, InterpCtx &C, Value *Plain) {
+    Value *Key = B.CreateAlignedLoad(C.I64, C.PcKey, Align(8), "pc.key.ld");
+    Value *Enc = B.CreateXor(Plain, Key, "pc.enc.new");
+    B.CreateStore(Enc, C.PC);
   }
 
   Value *checkedWidth(IRBuilder<> &B, InterpCtx &C, Value *PackedTyImm) {
@@ -1872,10 +1888,10 @@ struct CodeVirtualization : public ModulePass {
   }
 
   Value *fetchWord(IRBuilder<> &B, InterpCtx &C) {
-    Value *Cur = B.CreateLoad(C.I64, C.PC);
+    Value *Cur = pcLoad(B, C);
     branchIfFalse(B, C, B.CreateICmpULT(Cur, C.BCLen));
     Value *Enc = B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.BC, Cur));
-    B.CreateStore(B.CreateAdd(Cur, ConstantInt::get(C.I64, 1)), C.PC);
+    pcStore(B, C, B.CreateAdd(Cur, ConstantInt::get(C.I64, 1)));
     return B.CreateXor(Enc, bytecodeScheduleWord(B, C, Cur));
   }
 
@@ -2548,7 +2564,24 @@ struct CodeVirtualization : public ModulePass {
     auto *PC = B.CreateAlloca(I64, nullptr, "pc");
     auto *SP = B.CreateAlloca(I64, nullptr, "sp");
     auto *HandlerState = B.CreateAlloca(I64, nullptr, "handler.state");
-    B.CreateStore(ConstantInt::get(I64, 0), PC);
+    // PC encryption at rest (todo.md "PC encryption at rest in the VMP
+    // interpreter loop"). The PC alloca holds the program counter XOR'd
+    // with a per-interp key derived from the runtime bytecode key (an
+    // interpreter argument) mixed with a per-build random constant. The
+    // runtime mixing defeats constant-folding: a debugger reading the PC
+    // alloca sees only the encrypted form and must reproduce the key
+    // schedule to recover the real PC. fetchWord / dispatch / init all go
+    // through pcLoad/pcStore helpers defined below.
+    uint64_t PcKeyConst = RNG();
+    if (!PcKeyConst)
+      PcKeyConst = 0x9E3779B97F4A7C15ULL;
+    auto *PcKey = B.CreateAlloca(I64, nullptr, "pc.key");
+    B.CreateStore(
+        B.CreateXor(BytecodeKey, ConstantInt::get(I64, PcKeyConst)), PcKey);
+    B.CreateStore(
+        B.CreateXor(ConstantInt::get(I64, 0),
+                    B.CreateAlignedLoad(I64, PcKey, Align(8))),
+        PC);
     B.CreateStore(ConstantInt::get(I64, 0), SP);
     B.CreateStore(ConstantInt::get(I64, 0), HandlerState);
     auto *Tag = B.CreateAlloca(I64, nullptr, "tag");
@@ -2578,7 +2611,12 @@ struct CodeVirtualization : public ModulePass {
                    Dispatch, Bad);
 
     B.SetInsertPoint(Dispatch);
-    Value *OpPC = B.CreateLoad(I64, PC);
+    // Inline PC decrypt (PcKey is the alloca created above). IC is not
+    // constructed yet at this point in the IR, so we touch PcKey/PC
+    // directly rather than via pcLoad.
+    Value *OpPCEnc = B.CreateLoad(I64, PC, "pc.enc.ld");
+    Value *OpPCKey = B.CreateAlignedLoad(I64, PcKey, Align(8), "pc.key.ld");
+    Value *OpPC = B.CreateXor(OpPCEnc, OpPCKey, "pc.plain");
     // PC bounds check (L1.5.4). If PC has run past the bytecode,
     // fault to Bad rather than reading out of bounds. Matters once L2
     // encrypts the bytecode and a corrupted PC could otherwise escape.
@@ -2599,7 +2637,7 @@ struct CodeVirtualization : public ModulePass {
                  SP,    Stack,   Locals, Frame,  CallArgs,
                  CalleeTable, static_cast<unsigned>(CalleeOrder.size()),
                  Args,  ArgLen,  TamperFlag, ExpectedTag, OpcodeMap, BytecodeKey,
-                 Dispatch, Bad, M.getDataLayout().isLittleEndian()};
+                 PcKey, Dispatch, Bad, M.getDataLayout().isLittleEndian()};
     Value *MappedOp = fetchWord(B, IC);
     branchIfFalse(B, IC,
                   B.CreateICmpULT(MappedOp,

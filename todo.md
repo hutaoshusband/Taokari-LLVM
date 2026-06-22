@@ -1056,7 +1056,18 @@ does under tampering, optimizer pressure, or decompiler lifting.
       streams to the Bad block instead of memory-unsafe access.)
 * [ ] Add decompiler/IDA snapshot proof for the new VMP runtime rekey and
       DirtyBytes guard shape when IDA is available.
-* [ ] Add PC encryption at rest in the VMP interpreter loop.
+* [x] Add PC encryption at rest in the VMP interpreter loop.
+      (`createInterpreter` in CodeVirtualization.cpp now derives a
+      per-interpreter PcKey from the runtime bytecode key mixed with a
+      per-build random constant, and stores PC XOR PcKey in the PC
+      alloca. fetchWord, dispatch and init all go through pcLoad/pcStore
+      helpers that decrypt on load and encrypt on store. A debugger
+      reading the PC alloca sees only the encrypted form and must
+      reproduce the key schedule to recover the real PC.
+      `testing/scripts/verify_vmp_pc_encryption.py` confirms the
+      pc.key alloca exists, every PC load is paired with an XOR against
+      pc.key, every PC store writes the encrypted form, and the
+      protected binary still produces correct output.)
 * [ ] Add VM stack/locals encryption at rest between handlers.
 * [ ] Add interpreter self-verification for handler table/code patching.
 * [x] Add tamper-response policy so VM/native integrity failures do not always
