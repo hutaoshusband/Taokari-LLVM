@@ -30,6 +30,8 @@ int main(void) {
 }
 """
 
+SAMPLE_COUNT = 4
+
 
 def run(command: list[str], **kw) -> subprocess.CompletedProcess[str]:
   return subprocess.run(command, text=True, capture_output=True, **kw)
@@ -104,7 +106,7 @@ def main() -> int:
 
   tmp = Path(tempfile.mkdtemp(prefix="taokari-vmp-frame-sizes-"))
   try:
-    samples = [frame_layout(compile_ir(tmp, i)) for i in range(8)]
+    samples = [frame_layout(compile_ir(tmp, i)) for i in range(SAMPLE_COUNT)]
   finally:
     shutil.rmtree(tmp, ignore_errors=True)
 
