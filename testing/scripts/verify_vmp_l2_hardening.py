@@ -33,7 +33,7 @@ CALL_RE = re.compile(
 )
 BC_ARG_RE = re.compile(r"ptr nonnull @__taokari_vmp_bc_(\w+)")
 CALL_TAIL_RE = re.compile(
-    r"i64 (-?\d+), ptr (?:nonnull )?@__taokari_vmp_opmap_(\w+), i64 ([^,]+)$"
+    r"i64 ([^,]+), ptr (?:nonnull )?@__taokari_vmp_opmap_(\w+), i64 ([^,]+)$"
 )
 KEY_SEED_RE = re.compile(r"@__taokari_vmp_key_seed_(\w+) = .*?global i64 (-?\d+)")
 I64_RE = re.compile(r"i64 (-?\d+)")
@@ -73,6 +73,16 @@ def check_ir(text: str) -> int:
         if constant not in text:
             return fail("bytecode stream schedule constants missing")
 
+    for marker in (
+        "vmp.runtime.bytecode.key",
+        "vmp.bc.runtime",
+        "vmp.rekey.hdr",
+        "vmp.rekey.word",
+        "vmp.salt.stack",
+    ):
+        if marker not in text:
+            return fail(f"runtime bytecode rekey marker missing: {marker}")
+
     globals_by_name: dict[str, list[int]] = {}
     for name, _count, body in GLOBAL_RE.findall(text):
         words = [int(v) for v in I64_RE.findall(body)]
@@ -94,14 +104,13 @@ def check_ir(text: str) -> int:
     interp_names: list[str] = []
     for interp_name, args in CALL_RE.findall(text):
         interp_names.append(interp_name)
-        bc_match = BC_ARG_RE.search(args)
         tail_match = CALL_TAIL_RE.search(args)
-        if not bc_match or not tail_match:
+        if BC_ARG_RE.search(args):
+            return fail("interpreter still consumes static bytecode directly")
+        if not tail_match:
             continue
         _tag, opmap_name, key_arg = tail_match.groups()
-        if bc_match.group(1) != opmap_name:
-            return fail(f"{bc_match.group(1)} uses mismatched opcode map")
-        calls.append((bc_match.group(1), key_arg.strip()))
+        calls.append((opmap_name, key_arg.strip()))
     if len(calls) < 6:
         return fail("missing hardened interpreter calls")
     if len(set(interp_names)) != len(calls):
@@ -191,7 +200,7 @@ def main() -> int:
             ll = tmpdir / f"l2{opt}.ll"
             exe = tmpdir / f"l2{opt}.exe"
             flags = [
-                str(CLANG), str(src), opt,
+                str(CLANG), str(src), opt, "-fno-discard-value-names",
                 "-mllvm", "-taokari", "-mllvm", "-taokari-vmp",
             ]
             ir = run([*flags, "-S", "-emit-llvm", "-o", str(ll)],

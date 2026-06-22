@@ -1721,9 +1721,36 @@ struct CodeVirtualization : public ModulePass {
                        ConstantInt::get(I64, D.XorOut), "vmp.bytecode.key");
   }
 
-  uint64_t mixBytecodeTag(uint64_t Tag, uint64_t Word, uint64_t Index) const {
-    Tag ^= Word + (Index * 0x9E3779B97F4A7C15ULL);
-    return Tag * 0x100000001B3ULL;
+  Value *mixRuntimeEntropy(IRBuilder<> &B, Type *I64, Value *V,
+                           const Twine &Name) {
+    V = B.CreateXor(V, B.CreateLShr(V, ConstantInt::get(I64, 33)),
+                    Name + ".x1");
+    V = B.CreateMul(V, ConstantInt::get(I64, 0xFF51AFD7ED558CCDULL),
+                    Name + ".m1");
+    V = B.CreateXor(V, B.CreateLShr(V, ConstantInt::get(I64, 33)),
+                    Name + ".x2");
+    V = B.CreateMul(V, ConstantInt::get(I64, 0xC4CEB9FE1A85EC53ULL),
+                    Name + ".m2");
+    return B.CreateXor(V, B.CreateLShr(V, ConstantInt::get(I64, 33)),
+                       Name + ".x3");
+  }
+
+  Value *buildRuntimeBytecodeSalt(IRBuilder<> &B, Function &F, Value *BCPtr,
+                                  Value *ArgsPtr, Value *TamperFlag,
+                                  Type *I64) {
+    uint64_t Domain = RNG();
+    if (!Domain)
+      Domain = 0xA24BAED4963EE407ULL;
+    Value *Salt = ConstantInt::get(I64, Domain);
+    auto FoldPtr = [&](Value *Ptr, const Twine &Name) {
+      Value *Addr = B.CreatePtrToInt(Ptr, I64, Name + ".addr");
+      Salt = mixRuntimeEntropy(B, I64, B.CreateXor(Salt, Addr), Name + ".mix");
+    };
+    FoldPtr(&F, "vmp.salt.fn");
+    FoldPtr(BCPtr, "vmp.salt.bc");
+    FoldPtr(ArgsPtr, "vmp.salt.args");
+    FoldPtr(TamperFlag, "vmp.salt.stack");
+    return Salt;
   }
 
   Value *loadWord(IRBuilder<> &B, Type *I64, Value *BC, Value *PC,
@@ -1797,29 +1824,34 @@ struct CodeVirtualization : public ModulePass {
     return Width;
   }
 
-  Value *bytecodeScheduleWord(IRBuilder<> &B, InterpCtx &C, Value *Index) {
-    Type *I8 = Type::getInt8Ty(*C.Ctx);
-    Value *PCFlags = B.CreateLoad(I8, B.CreateGEP(I8, C.PCMap, Index));
+  Value *bytecodeScheduleWord(IRBuilder<> &B, Type *I64, Value *PCMap,
+                              Value *BytecodeKey, Value *Index) {
+    Type *I8 = Type::getInt8Ty(I64->getContext());
+    Value *PCFlags = B.CreateLoad(I8, B.CreateGEP(I8, PCMap, Index));
     Value *IsOpcodeWord = B.CreateICmpNE(
         B.CreateAnd(PCFlags, ConstantInt::get(I8, 1)),
         ConstantInt::get(I8, 0));
     Value *Domain = B.CreateSelect(
-        IsOpcodeWord, ConstantInt::get(C.I64, 0xA5A5A5A5D3C3B2A1ULL),
-        ConstantInt::get(C.I64, 0x3C6EF372FE94F82AULL));
+        IsOpcodeWord, ConstantInt::get(I64, 0xA5A5A5A5D3C3B2A1ULL),
+        ConstantInt::get(I64, 0x3C6EF372FE94F82AULL));
     Value *Rotation = B.CreateZExt(
-        B.CreateLShr(PCFlags, ConstantInt::get(I8, 1)), C.I64);
+        B.CreateLShr(PCFlags, ConstantInt::get(I8, 1)), I64);
     Domain = B.CreateXor(
         Domain,
-        B.CreateMul(Rotation, ConstantInt::get(C.I64, 0xD1342543DE82EF95ULL)));
+        B.CreateMul(Rotation, ConstantInt::get(I64, 0xD1342543DE82EF95ULL)));
     Value *X = B.CreateXor(
-        C.BytecodeKey,
-        B.CreateMul(Index, ConstantInt::get(C.I64, 0x9E3779B97F4A7C15ULL)));
+        BytecodeKey,
+        B.CreateMul(Index, ConstantInt::get(I64, 0x9E3779B97F4A7C15ULL)));
     X = B.CreateXor(X, Domain);
-    X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 30)));
-    X = B.CreateMul(X, ConstantInt::get(C.I64, 0xBF58476D1CE4E5B9ULL));
-    X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 27)));
-    X = B.CreateMul(X, ConstantInt::get(C.I64, 0x94D049BB133111EBULL));
-    return B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 31)));
+    X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(I64, 30)));
+    X = B.CreateMul(X, ConstantInt::get(I64, 0xBF58476D1CE4E5B9ULL));
+    X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(I64, 27)));
+    X = B.CreateMul(X, ConstantInt::get(I64, 0x94D049BB133111EBULL));
+    return B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(I64, 31)));
+  }
+
+  Value *bytecodeScheduleWord(IRBuilder<> &B, InterpCtx &C, Value *Index) {
+    return bytecodeScheduleWord(B, C.I64, C.PCMap, C.BytecodeKey, Index);
   }
 
   uint64_t calleeTableMaskWord(uint64_t Index) const {
@@ -2658,11 +2690,9 @@ struct CodeVirtualization : public ModulePass {
       return false;
 
     SmallVector<Constant *, 64> Words;
-    uint64_t BytecodeTag = 0xCBF29CE484222325ULL;
     for (size_t I = 0; I < EncodedWords.size(); ++I) {
       int64_t Word =
           encryptBytecodeWord(EncodedWords[I], I, BytecodeKey, PCFlags[I]);
-      BytecodeTag = mixBytecodeTag(BytecodeTag, static_cast<uint64_t>(Word), I);
       Words.push_back(ConstantInt::get(I64, static_cast<uint64_t>(Word), true));
     }
     auto *ArrayTy = ArrayType::get(I64, Words.size());
@@ -2741,12 +2771,52 @@ struct CodeVirtualization : public ModulePass {
     // pass the bytecode word count as the bcLen argument so the
     // interpreter can bound-check PC (L1.5.4).
     Value *BCLen = ConstantInt::get(I64, Words.size());
-    Value *RuntimeKey = buildRuntimeBytecodeKey(B, M, F, I64, BytecodeKey);
+    Value *BaseKey = buildRuntimeBytecodeKey(B, M, F, I64, BytecodeKey);
+    Value *RuntimeSalt =
+        buildRuntimeBytecodeSalt(B, F, BCPtr, ArgsPtr, TamperFlag, I64);
+    Value *RuntimeKey =
+        B.CreateXor(BaseKey, RuntimeSalt, "vmp.runtime.bytecode.key");
+    auto *RuntimeBC = B.CreateAlloca(ArrayTy, nullptr, "vmp.bc.runtime");
+    Value *RuntimeBCPtr =
+        B.CreateGEP(ArrayTy, RuntimeBC, {Zero, Zero}, "vmp.bc.runtime.ptr");
+    auto *RekeyI = B.CreateAlloca(I64, nullptr, "vmp.rekey.i");
+    auto *RuntimeTag = B.CreateAlloca(I64, nullptr, "vmp.rekey.tag");
+    B.CreateStore(Zero, RekeyI);
+    B.CreateStore(ConstantInt::get(I64, 0xCBF29CE484222325ULL), RuntimeTag);
+    BasicBlock *RekeyHdr = BasicBlock::Create(Ctx, "vmp.rekey.hdr", &F);
+    BasicBlock *RekeyBody = BasicBlock::Create(Ctx, "vmp.rekey.body", &F);
+    BasicBlock *RekeyDone = BasicBlock::Create(Ctx, "vmp.rekey.done", &F);
+    B.CreateBr(RekeyHdr);
+    B.SetInsertPoint(RekeyHdr);
+    Value *CurRekeyI = B.CreateLoad(I64, RekeyI);
+    B.CreateCondBr(B.CreateICmpULT(CurRekeyI, BCLen), RekeyBody, RekeyDone);
+    B.SetInsertPoint(RekeyBody);
+    Value *StaticWord =
+        B.CreateLoad(I64, B.CreateGEP(I64, BCPtr, CurRekeyI),
+                     "vmp.rekey.static");
+    Value *PlainWord =
+        B.CreateXor(StaticWord,
+                    bytecodeScheduleWord(B, I64, PCMapPtr, BaseKey, CurRekeyI),
+                    "vmp.rekey.plain");
+    Value *RuntimeWord = B.CreateXor(
+        PlainWord, bytecodeScheduleWord(B, I64, PCMapPtr, RuntimeKey, CurRekeyI),
+        "vmp.rekey.word");
+    B.CreateStore(RuntimeWord, B.CreateGEP(I64, RuntimeBCPtr, CurRekeyI));
+    Value *CurTag = B.CreateLoad(I64, RuntimeTag);
+    Value *TagMix =
+        B.CreateAdd(RuntimeWord,
+                    B.CreateMul(CurRekeyI, ConstantInt::get(I64, 0x9E3779B97F4A7C15ULL)));
+    Value *NextTag =
+        B.CreateMul(B.CreateXor(CurTag, TagMix),
+                    ConstantInt::get(I64, 0x100000001B3ULL));
+    B.CreateStore(NextTag, RuntimeTag);
+    B.CreateStore(B.CreateAdd(CurRekeyI, ConstantInt::get(I64, 1)), RekeyI);
+    B.CreateBr(RekeyHdr);
+    B.SetInsertPoint(RekeyDone);
     Value *Result = B.CreateCall(
-        Interp, {BCPtr, BCLen, PCMapPtr, PtrTablePtr, PtrCount, ArgsPtr,
+        Interp, {RuntimeBCPtr, BCLen, PCMapPtr, PtrTablePtr, PtrCount, ArgsPtr,
                  ConstantInt::get(I64, F.arg_size()), TamperFlag,
-                 ConstantInt::get(I64, BytecodeTag), OpcodeMapPtr,
-                 RuntimeKey});
+                 B.CreateLoad(I64, RuntimeTag), OpcodeMapPtr, RuntimeKey});
     Value *Tampered = B.CreateLoad(I64, TamperFlag);
     B.CreateCondBr(B.CreateICmpNE(Tampered, Zero), Trap, Ok);
     B.SetInsertPoint(Trap);
