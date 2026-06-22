@@ -165,8 +165,8 @@ test is non-vacuous and that the unfoldable family is what closes the gap.
 * [x] Add SimplifyCFG survival tests
 * [x] Add InstCombine survival tests
 * [x] Add `opt -O2` survival tests
-* [ ] Use predicates in flattening
-* [ ] Use predicates in bogus control flow
+* [x] Use predicates in flattening
+* [x] Use predicates in bogus control flow
 * [ ] Use predicates in anti-debug gates
 
 **Definition of done for L3:**
