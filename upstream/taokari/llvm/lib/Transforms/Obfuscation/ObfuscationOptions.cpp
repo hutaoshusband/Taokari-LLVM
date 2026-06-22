@@ -1,5 +1,6 @@
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Module.h"
@@ -294,6 +295,38 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
                        &ObfOpt::setStringPageTableAccess);
       readStringL3Bool("stringDelayedDecrypt",
                        &ObfOpt::setStringDelayedDecrypt);
+
+      // Validate keys: warn on unknown keys inside this pass's config
+      // object so typos surface instead of silently being ignored. The
+      // set is the union of all keys read above across every pass; a
+      // pass that does not consume a given key simply ignores the
+      // warning target.
+      static const StringSet<> KnownKeys = {
+          "enable",          "level",
+          "maxInsts",        "maxBlocks",
+          "maxAllocas",      "probability",
+          "functionProbability",
+          "loopCount",       "minConstSize",
+          "minStringLength", "skipStrings",
+          "localStackDecrypt",
+          "heapDecrypt",     "reencryptAfterUse",
+          "volatileSeed",    "decryptorMba",
+          "releaseStrip",    "randomizeSections",
+          "exportAllowlist",
+          "stringDecryptorMBA",
+          "stringDecryptorFlattening",
+          "stringDecryptorIndirectCall",
+          "stringShardedPool",
+          "stringFakePools",
+          "stringPageTableAccess",
+          "stringDelayedDecrypt"};
+      for (const auto &KV : *optObj) {
+        if (!KnownKeys.contains(KV.getFirst())) {
+          llvm::errs() << "warning: unknown taokari config key: "
+                       << obfOpt->attributeName() << "."
+                       << KV.getFirst().str() << '\n';
+        }
+      }
     };
 
     std::string key = obj.getFirst().str();

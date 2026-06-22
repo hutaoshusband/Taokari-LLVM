@@ -1215,8 +1215,8 @@ Goal: make Taokari controllable instead of “all or nothing”.
 * [x] Document all current flags
 * [x] Document all current levels
 * [x] Add examples for each pass
-* [ ] Add config validation
-* [ ] Add error messages for invalid keys
+* [x] Add config validation
+* [x] Add error messages for invalid keys
 * [ ] Add default config file
 
 ## Level 2 — Per-Function Control
