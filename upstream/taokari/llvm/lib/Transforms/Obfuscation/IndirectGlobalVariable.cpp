@@ -213,6 +213,12 @@ struct IndirectGlobalVariable : public FunctionPass {
         buildDecrypt.ModuleKey = GVKeys[GV];
         buildDecrypt.FuncKey = FuncKeys[GV];
         buildDecrypt.PtrEncKey = PtrEncKey;
+        // L2+ hardening (todo.md IndirectGlobal L2: "Add runtime nonce
+        // mixing", "Add MBA on global pointer decrypt"). Matches
+        // IndirectCall/IndirectBranch.
+        buildDecrypt.RuntimeSeed = opt.level() > 1 ? RNG() : 0;
+        buildDecrypt.UseMBA = opt.level() > 1;
+        buildDecrypt.IntegrityCheck = opt.level() > 1;
         buildDecrypt.PtrAuthKey = T.isAArch64() ? 2 : -1;
         buildDecrypt.PtrAuthDisc = 0;
         auto        GVPtr = buildPageTableDecryptIR(buildDecrypt);

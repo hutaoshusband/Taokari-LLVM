@@ -484,8 +484,8 @@ Main weakness: should become more polymorphic and better tested.
 * [x] Add fake global entries
 * [ ] Add shuffled global table
 * [ ] Add per-function global cache
-* [ ] Add runtime nonce mixing
-* [ ] Add MBA on global pointer decrypt
+* [x] Add runtime nonce mixing
+* [x] Add MBA on global pointer decrypt
 * [ ] Add config for sensitive globals only
 * [ ] Add annotation: `indgv`
 
