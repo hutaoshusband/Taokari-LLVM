@@ -1154,12 +1154,12 @@ polymorphism on an unsafe or cryptographically trivial VM is noise.
       arithmetic so the handler body itself is not a clean lift)
 * [ ] Add handler BCF (apply Section 3 BCF to each handler so the
       handler CFG is not trivially readable)
-* [ ] Add fake opcodes (promote from L2 Phase F once the runtime
+* [x] Add fake opcodes (promote from L2 Phase F once the runtime
       tolerates them, or land directly here as fortress-tier)
-* [ ] Add fake handlers (same)
+* [x] Add fake handlers (same)
 * [ ] Add bytecode integrity checks (promote from L2 Phase C, or land
       here as cross-function/rolling integrity rather than entry-only)
-* [ ] Add anti-frequency-analysis padding (promote from L2 Phase F, or
+* [x] Add anti-frequency-analysis padding (promote from L2 Phase F, or
       land here as trace-resistance rather than histogram flattening)
 * [ ] Add VM devirtualization test samples (canonical samples an analyst
       would feed to a devirt tool — must fail to lift cleanly)
