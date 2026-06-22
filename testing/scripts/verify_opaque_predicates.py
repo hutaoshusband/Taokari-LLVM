@@ -118,6 +118,15 @@ def main() -> int:
     print(f"missing llvm-config: {LLVM_CONFIG}", file=sys.stderr)
     return 2
 
+  opq_source = (
+      ROOT / "upstream" / "taokari" / "llvm" / "lib" / "Transforms" /
+      "Obfuscation" / "OpaquePredicate.cpp"
+  ).read_text(encoding="utf-8", errors="ignore")
+  if ("makeNeighborProductLowBit" not in opq_source or
+      "RNG() % 3" not in opq_source):
+    print("missing L1 opaque predicate family variety", file=sys.stderr)
+    return 1
+
   include_dir = run([str(LLVM_CONFIG), "--includedir"]).stdout.strip()
   libs = words(run([str(LLVM_CONFIG), "--libs", "core", "support", "obfuscation"]).stdout)
   system_libs = [

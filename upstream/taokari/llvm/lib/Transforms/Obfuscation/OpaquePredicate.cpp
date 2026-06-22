@@ -56,6 +56,14 @@ Value *makePartition(IRBuilder<> &IRB, Value *Seed, ConstantInt *Mask,
   return IRB.CreateOr(Left, Right, Name + ".part");
 }
 
+Value *makeNeighborProductLowBit(IRBuilder<> &IRB, Value *Seed,
+                                 const Twine &Name) {
+  auto *IntTy = cast<IntegerType>(Seed->getType());
+  Value *Prev = IRB.CreateSub(Seed, ConstantInt::get(IntTy, 1), Name + ".prev");
+  Value *Prod = IRB.CreateMul(Seed, Prev, Name + ".prod");
+  return IRB.CreateAnd(Prod, ConstantInt::get(IntTy, 1), Name + ".bit");
+}
+
 /// Fit a pointer-width integer value into the requested (possibly narrower or
 /// wider) integer type. NoFold builder keeps the cast as a real instruction
 /// so the optimizer cannot immediately fold it back to a constant.
@@ -213,10 +221,17 @@ Value *makeSeedFromFlags(Function &F, IRBuilder<> &IRB, IntegerType *IntTy,
 Value *taokari::makeTruePredicate(IRBuilder<> &IRB, Value *Seed,
                                   std::mt19937_64 &RNG, const Twine &Name) {
   auto *IntTy = cast<IntegerType>(Seed->getType());
-  if (RNG() & 1)
+  switch (RNG() % 3) {
+  case 0:
     return IRB.CreateICmpEQ(
         makeEvenLowBit(IRB, Seed, randomInt(IntTy, RNG), Name),
         ConstantInt::get(IntTy, 0), Name);
+  case 1:
+    return IRB.CreateICmpEQ(makeNeighborProductLowBit(IRB, Seed, Name),
+                            ConstantInt::get(IntTy, 0), Name);
+  default:
+    break;
+  }
 
   auto *Mask = randomNonZeroInt(IntTy, RNG);
   return IRB.CreateICmpEQ(makePartition(IRB, Seed, Mask, Name), Mask, Name);
@@ -225,10 +240,17 @@ Value *taokari::makeTruePredicate(IRBuilder<> &IRB, Value *Seed,
 Value *taokari::makeFalsePredicate(IRBuilder<> &IRB, Value *Seed,
                                    std::mt19937_64 &RNG, const Twine &Name) {
   auto *IntTy = cast<IntegerType>(Seed->getType());
-  if (RNG() & 1)
+  switch (RNG() % 3) {
+  case 0:
     return IRB.CreateICmpNE(
         makeEvenLowBit(IRB, Seed, randomInt(IntTy, RNG), Name),
         ConstantInt::get(IntTy, 0), Name);
+  case 1:
+    return IRB.CreateICmpNE(makeNeighborProductLowBit(IRB, Seed, Name),
+                            ConstantInt::get(IntTy, 0), Name);
+  default:
+    break;
+  }
 
   auto *Mask = randomNonZeroInt(IntTy, RNG);
   return IRB.CreateICmpNE(makePartition(IRB, Seed, Mask, Name), Mask, Name);

@@ -144,11 +144,8 @@ struct BogusControlFlow : public FunctionPass {
       }
       Value *Seed = taokari::makeContextSeed(
           F, GuardIR, Int64, FuncRNG, SeedKind, "bcf.seed");
-      Opaque = (FuncRNG() & 1)
-                   ? taokari::makeTruePredicate(GuardIR, Seed, FuncRNG,
-                                                "bcf.opaque")
-                   : taokari::makeUnfoldableTruePredicate(
-                         GuardIR, Seed, FuncRNG, "bcf.opaque");
+      Opaque = taokari::makeUnfoldableTruePredicate(GuardIR, Seed, FuncRNG,
+                                                    "bcf.opaque");
     } else {
       auto *Load =
           GuardIR.CreateAlignedLoad(Int64, Nonce, Align(8), true, "bcf.nonce");
