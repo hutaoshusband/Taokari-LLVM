@@ -948,9 +948,13 @@ does under tampering, optimizer pressure, or decompiler lifting.
 
 ### Reverse-engineering report follow-up
 
-* [ ] Poll the still-running full harness process (`PID 35844`) and record
+* [x] Poll the still-running full harness process (`PID 35844`) and record
       the final result; if it fails, fix only the failing seam and rerun the
-      smallest reproducer first.
+      smallest reproducer first. (Original detached run lost its stdout; the
+      rerun `python testing/run_obfuscation_tests.py --clang
+      build/taokari-local/bin/clang.exe --keep-going` finished with 128 PASS /
+      0 FAIL across all default/o2/o3/lto/clangcl modes + indirect_call_level3
+      + vmp_exe_full_virtualization + vmp_dll_load_and_manual_map gates.)
 * [ ] Add runtime integrity outside the VM for native Max/CFF code: protect
       patched `main`/wrapper/control-flow regions, not only VM bytecode.
 * [ ] Add a function-level integrity check prototype first; verify patching a
