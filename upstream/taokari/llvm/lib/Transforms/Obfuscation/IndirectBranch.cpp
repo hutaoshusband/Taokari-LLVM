@@ -337,6 +337,13 @@ struct IndirectBranch : public FunctionPass {
         buildDecrypt.ModuleKey = BBKeys[AddrTBB];
         buildDecrypt.FuncKey = FuncKeys[AddrTBB];
         buildDecrypt.PtrEncKey = PtrEncKey;
+        // L2+ hardening (todo.md IndirectBranch L2: "Add runtime nonce
+        // mixing", "Add MBA for index decrypt", "Add branch target
+        // verification"). Matches what IndirectCall already does at
+        // opt.level() > 1.
+        buildDecrypt.RuntimeSeed = opt.level() > 1 ? RNG() : 0;
+        buildDecrypt.UseMBA = opt.level() > 1;
+        buildDecrypt.IntegrityCheck = opt.level() > 1;
         Triple T(M.getTargetTriple());
         buildDecrypt.PtrAuthKey = T.isAArch64() ? 0 : -1;
         buildDecrypt.PtrAuthDisc = 0;

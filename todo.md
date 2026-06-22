@@ -440,9 +440,9 @@ Main weakness: no AArch64 parity test and limited fake target noise.
 * [x] Add fake block entries
 * [x] Add fake encrypted indices
 * [ ] Add shuffled target tables
-* [ ] Add runtime nonce mixing
-* [ ] Add MBA for index decrypt
-* [ ] Add branch target verification
+* [x] Add runtime nonce mixing
+* [x] Add MBA for index decrypt
+* [x] Add branch target verification
 * [ ] Add config probability
 
 ## Level 3 — Fortress Indirect Branches
