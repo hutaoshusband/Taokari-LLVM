@@ -82,7 +82,8 @@ def main() -> int:
         "load volatile i64",
         "taokari.const.seed.mix",
         "taokari.const.seed.unmix",
-        "taokari.const.decrypt.mba.add",
+        "taokari.const.decrypt.share",
+        ".mba.add",
         "!noobf",
     ]
     missing = [needle for needle in required if needle not in text]

@@ -831,28 +831,49 @@ Value *encryptConstant(Constant *plainConstant, Instruction *insertBefore,
     markNoObf(Load);
   }
   if (level) {
+    SmallVector<Value *, 3> DecodeMasks;
     if (level > 2) {
       Value *NegKey = IRB.CreateNeg(XorKey);
       markNoObf(NegKey);
-      Load = IRB.CreateXor(Load, NegKey);
-      markNoObf(Load);
+      DecodeMasks.push_back(NegKey);
     }
     if (level > 1) {
       Value *AddKey = IRB.CreateAdd(XorKey, Key);
       markNoObf(AddKey);
-      Load = IRB.CreateXor(Load, AddKey);
+      DecodeMasks.push_back(AddKey);
+    }
+    DecodeMasks.push_back(XorKey);
+    std::shuffle(DecodeMasks.begin(), DecodeMasks.end(), rng);
+    for (auto *Mask : DecodeMasks) {
+      Load = IRB.CreateXor(Load, Mask, "taokari.const.mask.step");
       markNoObf(Load);
     }
-    Load = IRB.CreateXor(Load, XorKey);
-    markNoObf(Load);
   }
   if (SeedCache) {
     Load = IRB.CreateXor(Load, loadSeed("taokari.const.seed.b"),
                          "taokari.const.seed.unmix");
     markNoObf(Load);
   }
-  Load = decryptorMBA ? buildMBAAdd(IRB, Load, Key, "taokari.const.decrypt")
-                      : IRB.CreateAdd(Load, Key);
+  auto addKeyPart = [&](Value *Base, Value *Part,
+                        const Twine &Name) -> Value * {
+    Value *Next = decryptorMBA ? buildMBAAdd(IRB, Base, Part, Name)
+                               : IRB.CreateAdd(Base, Part, Name);
+    markNoObf(Next);
+    return Next;
+  };
+  if (level > 1) {
+    auto *Share = ConstantInt::get(Key->getType(), rng());
+    auto *Rest = ConstantExpr::getSub(Key, Share);
+    if (rng() & 1) {
+      Load = addKeyPart(Load, Share, "taokari.const.decrypt.share.a");
+      Load = addKeyPart(Load, Rest, "taokari.const.decrypt.share.b");
+    } else {
+      Load = addKeyPart(Load, Rest, "taokari.const.decrypt.share.b");
+      Load = addKeyPart(Load, Share, "taokari.const.decrypt.share.a");
+    }
+  } else {
+    Load = addKeyPart(Load, Key, "taokari.const.decrypt");
+  }
   markNoObf(Load);
   Value *Cast = IRB.CreateBitCast(Load, OriginValTy);
   markNoObf(Cast);
