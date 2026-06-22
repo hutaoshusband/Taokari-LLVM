@@ -58,6 +58,11 @@ static CallInst *createDecryptorCall(IRBuilder<> &IRB, Value *Callee,
   return IRB.CreateCall(DecFunc->getFunctionType(), Callee, Args);
 }
 
+static uint32_t deriveStringMix(uint32_t BuildNonce, unsigned Shift,
+                                uint32_t Mask) {
+  return ((BuildNonce >> Shift) & Mask) | 1u;
+}
+
 struct StringEncryption : public ModulePass {
   static char ID;
 
@@ -628,8 +633,9 @@ uint8_t StringEncryption::mixKey8(uint8_t Key, uint32_t KeyIndex,
                                   const CSPEntry *Entry) const {
   uint32_t Mixed = Key;
   Mixed ^= (BuildNonce >> ((Position & 3) * 8)) & 0xffu;
-  Mixed ^= ((Entry->ID + 1u) * 0x5du) & 0xffu;
-  Mixed ^= ((Position + 1u) * 0x3bu + KeyIndex * 0x11u) & 0xffu;
+  Mixed ^= ((Entry->ID + 1u) * deriveStringMix(BuildNonce, 0, 0xffu)) & 0xffu;
+  Mixed ^= ((Position + 1u) * deriveStringMix(BuildNonce, 8, 0xffu) +
+            KeyIndex * deriveStringMix(BuildNonce, 16, 0xffu)) & 0xffu;
   return static_cast<uint8_t>(Mixed);
 }
 
@@ -638,8 +644,10 @@ uint16_t StringEncryption::mixKey16(uint16_t Key, uint32_t KeyIndex,
                                     const CSPEntry *Entry) const {
   uint32_t Mixed = Key;
   Mixed ^= (BuildNonce >> ((Position & 1) * 16)) & 0xffffu;
-  Mixed ^= ((Entry->ID + 1u) * 0x45d9u) & 0xffffu;
-  Mixed ^= ((Position + 1u) * 0x9e37u + KeyIndex * 0x0101u) & 0xffffu;
+  Mixed ^= ((Entry->ID + 1u) * deriveStringMix(BuildNonce, 0, 0xffffu)) &
+           0xffffu;
+  Mixed ^= ((Position + 1u) * deriveStringMix(BuildNonce, 16, 0xffffu) +
+            KeyIndex * deriveStringMix(BuildNonce, 8, 0xffffu)) & 0xffffu;
   return static_cast<uint16_t>(Mixed);
 }
 
@@ -819,14 +827,21 @@ Function *StringEncryption::buildSharedDecryptFunction(
   Value *NoncePart = IRB.CreateLShr(BuildNonceArg, Shift);
   Value *Mask = IRB.getInt32(IsUTF16 ? 0xffff : 0xff);
   NoncePart = IRB.CreateAnd(NoncePart, Mask);
+
+  auto BuildMix = [&](unsigned ShiftBits) -> Value * {
+    Value *Part = IRB.CreateLShr(BuildNonceArg, IRB.getInt32(ShiftBits));
+    Part = IRB.CreateAnd(Part, Mask);
+    return IRB.CreateOr(Part, IRB.getInt32(1));
+  };
+  const unsigned PositionMixShift = IsUTF16 ? 16 : 8;
+  const unsigned KeyIndexMixShift = IsUTF16 ? 8 : 16;
   Value *StringPart = IRB.CreateMul(IRB.CreateAdd(StringIDArg, IRB.getInt32(1)),
-                                    IRB.getInt32(IsUTF16 ? 0x45d9 : 0x5d));
+                                    BuildMix(0));
   StringPart = IRB.CreateAnd(StringPart, Mask);
   Value *PositionPart =
       IRB.CreateMul(IRB.CreateAdd(LoopCounter, IRB.getInt32(1)),
-                    IRB.getInt32(IsUTF16 ? 0x9e37 : 0x3b));
-  Value *KeyIndexPart =
-      IRB.CreateMul(KeyIdx, IRB.getInt32(IsUTF16 ? 0x0101 : 0x11));
+                    BuildMix(PositionMixShift));
+  Value *KeyIndexPart = IRB.CreateMul(KeyIdx, BuildMix(KeyIndexMixShift));
   PositionPart = IRB.CreateAnd(IRB.CreateAdd(PositionPart, KeyIndexPart), Mask);
   Value *MixedKey = IRB.CreateXor(KeyCharZext, NoncePart);
   MixedKey = IRB.CreateXor(MixedKey, StringPart);
@@ -1426,9 +1441,10 @@ void StringEncryption::flattenDecryptor(Function &F, uint32_t BuildNonce) {
   Switch->addCase(IRB.getInt32(1), Succ1);
   // Add a couple of junk cases pointing at the trap to bulk out the table
   // without changing reachability. Mask junk values out of the real range.
-  unsigned JunkSeed = (BuildNonce >> 8) ^ 0x9e3779b9u;
+  unsigned JunkSeed = (BuildNonce >> 8) ^ (BuildNonce << 7) ^ (BuildNonce | 1u);
   for (unsigned I = 0; I < 3; ++I) {
-    unsigned Junk = 2u + ((JunkSeed + I * 0x100u) & 0x7fffffu);
+    unsigned Junk = 2u + ((JunkSeed + I * deriveStringMix(BuildNonce, 16, 0xffu)) &
+                          0x7fffffu);
     if (Junk <= 1)
       continue;
     Switch->addCase(IRB.getInt32(Junk), Trap);

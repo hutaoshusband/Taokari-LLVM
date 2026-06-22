@@ -150,10 +150,11 @@ def check_ir(ir: str, *, require_global_status: bool = True) -> None:
   i16_body = re.search(r"define private void @goron_decrypt_string_i16\b[\s\S]*?\n}", ir)
   if not i8_body or not i16_body:
     raise SystemExit("missing i8/i16 decryptor body")
-  if not all(needle in i8_body.group(0) for needle in ["lshr", "59", "17"]):
-    raise SystemExit("i8 decryptor lacks nonce/position key mixing")
-  if not all(needle in i16_body.group(0) for needle in ["lshr", "40503", "257"]):
-      raise SystemExit("i16 decryptor lacks nonce/position key mixing")
+  for label, body in {"i8": i8_body.group(0), "i16": i16_body.group(0)}.items():
+    if body.count("lshr") < 3 or body.count(" or ") < 3:
+      raise SystemExit(f"{label} decryptor lacks nonce-derived key mixing")
+    if re.search(r"mul i32 [^\n,]+, (?:93|59|17|17881|40503|257)\b", body):
+      raise SystemExit(f"{label} decryptor kept fixed key-mix literal")
 
 
 def check_optional_ir(ir: str, mode: str) -> None:
