@@ -249,14 +249,14 @@ Example identities:
 
 ## Level 2 — Optimizer-Resistant MBA
 
-* [ ] Add multiple MBA rounds
-* [ ] Add random identity selection
+* [x] Add multiple MBA rounds
+* [x] Add random identity selection
 * [ ] Add opaque constants inside MBA
-* [ ] Add runtime nonce mixing
+* [x] Add runtime nonce mixing
 * [ ] Add optional `optnone` helper wrappers
-* [ ] Add InstCombine survival tests
-* [ ] Add Reassociate survival tests
-* [ ] Add GVN survival tests
+* [x] Add InstCombine survival tests
+* [x] Add Reassociate survival tests
+* [x] Add GVN survival tests
 
 ## Level 3 — Fortress MBA
 
