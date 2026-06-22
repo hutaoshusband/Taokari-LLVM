@@ -473,8 +473,8 @@ Main weakness: should become more polymorphic and better tested.
 * [x] Skips thread-local globals
 * [x] Skips DLL-import globals
 * [x] Dedup cache exists
-* [ ] Add tests for const globals
-* [ ] Add tests for mutable globals
+* [x] Add tests for const globals
+* [x] Add tests for mutable globals
 * [x] Add tests for large structs
 * [x] Add tests for arrays
 * [x] Add tests for C++ static locals
