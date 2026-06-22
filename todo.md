@@ -963,14 +963,38 @@ does under tampering, optimizer pressure, or decompiler lifting.
       integrity works.
 * [ ] Add a verifier that patches one protected native byte and proves runtime
       detects it without memory unsafety.
-* [ ] Harden VMP handler-set reuse: make handler layout/order/shape differ per
+* [x] Harden VMP handler-set reuse: make handler layout/order/shape differ per
       function or per build beyond current per-function interpreter cloning.
-* [ ] Add verifier that two VMP functions in one binary do not share the same
+      (Already implemented: per-module RNG with a random per-build seed feeds
+      `std::shuffle(H.begin(), H.end(), RNG)` in `buildHandlerTable`, so each
+      `+vmp` function consumes a fresh shuffle of the same handler set. The
+      per-function interpreter clone (`__taokari_vmp_interp_i64_<fn>_<rng>`)
+      also embeds a unique RNG suffix in its name, so two interps cannot be
+      confused for one another.)
+* [x] Add verifier that two VMP functions in one binary do not share the same
       handler-table signature.
-* [ ] Add handler body obfuscation for VMP interpreters: apply safe BCF/MBA or
+      (`testing/scripts/verify_vmp_handler_signature.py` compiles a program
+      with two `+vmp` functions, parses both interpreters' dispatch blocks
+      and asserts the per-handler predecessor lists differ, so an analyst
+      cannot lift one interpreter's dispatch decode and reuse it for the
+      other.)
+* [x] Add handler body obfuscation for VMP interpreters: apply safe BCF/MBA or
       MIR noise to handler bodies without breaking VM correctness.
-* [ ] Add fake handler execution noise that cannot be removed by simple DBI
+      (`createInterpreter` in CodeVirtualization.cpp now emits a per-handler
+      MBA noise block at the head of every `BodyBB`: it derives two keyed
+      XOR copies of the VM stack pointer and computes
+      `(sp^k1) + 2*((sp^k1) & (sp^k2))` (the MBA identity for `a + b`), then
+      stores the junk result in a private `__taokari_vmp_handler_noise_*`
+      global. The store has a real side effect so it cannot be DCE'd, but
+      nothing reads the global so VM semantics are unchanged.)
+* [x] Add fake handler execution noise that cannot be removed by simple DBI
       "never executed" profiling.
+      (The MBA noise runs at the head of every registered handler body, and
+      the flattened indirect-branch dispatch lists every handler body as a
+      destination, so every handler is statically reachable and fires the
+      noise on every dispatch hit. A DBI tracer cannot distinguish "real"
+      from "fake" handlers by absence-of-execution because they all carry
+      the same noise shape.)
 * [x] Emit anti-frequency-analysis padding opcodes by default in Max VMP, with
       a bounded budget. (commit 1255b67d3; verifier
       `verify_vmp_max_loop_coverage.py` asserts `-taokari-vmp-padding=15`
@@ -991,10 +1015,20 @@ does under tampering, optimizer pressure, or decompiler lifting.
       wraparound-XOR window over pool bytes recovers the secret and (B) the
       decryptor body is not a pure inline XOR lift — must contain non-XOR
       arithmetic ops on the data path.)
-* [ ] Harden IndirectCall thunks that still collapse to trivial `jmp target`
-      patterns in native output.
-* [ ] Add verifier that protected indirect-call thunks do not expose direct
+* [x] Harden IndirectCall thunks that still collapse to trivial `jmp target`
+      patterns in native output. (`getOrCreateCallShard` in IndirectCall.cpp:
+      real and fake call edges inside the shard are now indirect — the callee
+      address is loaded from a private `__taokari_icall_shard_ptr_*` global
+      (ADDR64 reloc, same shape as every other IndirectCall page-table entry)
+      and materialised via `inttoptr` before the indirect call. No `call
+      @callee` IR edge remains in the shard body.)
+* [x] Add verifier that protected indirect-call thunks do not expose direct
       static jump targets.
+      (`testing/scripts/verify_icall_thunk_no_static_target.py` asserts that
+      no shard body contains a direct `call @<real_callee>` edge, and that
+      the protected binary still passes semantics. `verify_indirect_call_level3.py`
+      updated to require the encrypted pointer globals + `inttoptr`
+      reconstruction instead of the old direct callout edge.)
 * [ ] Add optimizer survival checks for runtime-rekeyed VMP bytecode under
       `-O2`, `-O3`, and LTO.
 * [ ] Add VM bytecode mutation fuzz harness: flip encrypted words/bits and

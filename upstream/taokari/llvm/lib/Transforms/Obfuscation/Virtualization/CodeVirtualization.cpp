@@ -2658,8 +2658,40 @@ struct CodeVirtualization : public ModulePass {
     for (BasicBlock *Dest : BodyDests)
       HandlerIBI->addDestination(Dest);
 
+    // Per-interpreter junk sink. Every handler body writes a MBA-shaped
+    // value derived from its own stack pointer into this global, so each
+    // handler body carries visible non-trivial arithmetic that a static
+    // lifter cannot trivially prune. The store is semantically dead from
+    // the program's perspective (the global is private and never read by
+    // the VM), but it cannot be DCE'd because it has a memory side effect.
+    // This is the todo.md "handler body obfuscation" requirement: apply
+    // safe MBA noise to handler bodies without breaking VM correctness.
+    GlobalVariable *HandlerNoiseGV = new GlobalVariable(
+        M, I64, false, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64, RNG()),
+        ("__taokari_vmp_handler_noise_" + Source.getName() + "_" +
+         Twine::utohexstr(RNG())).str());
+    HandlerNoiseGV->setAlignment(Align(8));
+
     for (auto [H, CaseBB, BodyBB, RouteToken] : HandlerBlocks) {
       B.SetInsertPoint(BodyBB);
+      // MBA noise on the live SP runs at the start of the body, before
+      // the handler's real work. (sp ^ k1) + 2 * ((sp ^ k1) & (sp ^ k2))
+      // is the MBA identity for a+b applied to two keyed copies of sp.
+      // Resulting value is junk (k1, k2 are per-handler random) but the
+      // arithmetic shape looks real to a decompiler. Written to the
+      // private noise global so the store is not removable; the handler
+      // semantics are untouched because nothing reads the global.
+      uint64_t K1 = RNG();
+      uint64_t K2 = RNG();
+      Value *Sp = B.CreateLoad(I64, SP, "h.sp");
+      Value *A = B.CreateXor(Sp, ConstantInt::get(I64, K1), "h.a");
+      Value *Bv = B.CreateXor(Sp, ConstantInt::get(I64, K2), "h.b");
+      Value *And = B.CreateAnd(A, Bv, "h.and");
+      Value *Shl = B.CreateShl(And, ConstantInt::get(I64, 1), "h.shl");
+      Value *Xor = B.CreateXor(A, Bv, "h.xor");
+      Value *Sum = B.CreateAdd(Xor, Shl, "h.sum");
+      B.CreateStore(Sum, HandlerNoiseGV);
       H->Emit(B);
     }
 
