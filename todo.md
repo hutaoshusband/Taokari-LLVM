@@ -439,7 +439,7 @@ Main weakness: no AArch64 parity test and limited fake target noise.
 
 * [x] Add fake block entries
 * [x] Add fake encrypted indices
-* [ ] Add shuffled target tables
+* [x] Add shuffled target tables
 * [x] Add runtime nonce mixing
 * [x] Add MBA for index decrypt
 * [x] Add branch target verification
@@ -482,7 +482,7 @@ Main weakness: should become more polymorphic and better tested.
 ## Level 2 — Stronger Global Access
 
 * [x] Add fake global entries
-* [ ] Add shuffled global table
+* [x] Add shuffled global table
 * [ ] Add per-function global cache
 * [x] Add runtime nonce mixing
 * [x] Add MBA on global pointer decrypt
