@@ -1014,7 +1014,7 @@ does under tampering, optimizer pressure, or decompiler lifting.
       the same noise shape.)
 * [x] Emit anti-frequency-analysis padding opcodes by default in Max VMP, with
       a bounded budget. (commit 1255b67d3; verifier
-      `verify_vmp_max_loop_coverage.py` asserts `-taokari-vmp-padding=15`
+      `verify_vmp_max_loop_coverage.py` asserts `-taokari-vmp-padding=5`
       injected in Max mode, override respected, and pad hits > 0 in remarks)
 * [x] Add verifier that valid VMP bytecode contains padding/fake opcode hits
       and that runtime output still matches native.

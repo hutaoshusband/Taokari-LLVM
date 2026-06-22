@@ -7551,7 +7551,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       !hasMllvmOptionPrefix(Args, "-taokari-vmp-padding=") &&
       !hasMllvmOptionPrefix(Args, "--taokari-vmp-padding=")) {
     CmdArgs.push_back("-mllvm");
-    CmdArgs.push_back("-taokari-vmp-padding=15");
+    CmdArgs.push_back("-taokari-vmp-padding=5");
   }
 
   StringRef VecWidth = parseMPreferVectorWidthOption(D.getDiags(), Args);
