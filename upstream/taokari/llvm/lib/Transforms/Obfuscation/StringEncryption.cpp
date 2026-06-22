@@ -28,7 +28,7 @@ using namespace llvm;
 // avoid pulling NoFolder into the public Utils.h header.
 namespace llvm {
 Value *buildMBAAdd(IRBuilder<NoFolder> &IRB, Value *A, Value *B,
-                   const Twine &Name);
+                   const Twine &Name, uint64_t Salt);
 } // namespace llvm
 
 // Number of distinct decryptor loop shapes the polymorphic decryptor builder

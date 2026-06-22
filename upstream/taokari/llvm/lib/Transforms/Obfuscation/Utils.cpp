@@ -43,21 +43,46 @@ static GlobalVariable *getOrCreatePageRuntimeSeed(Module &M, IntegerType *IntTy,
 }
 
 namespace llvm {
-// Mixed-boolean-arithmetic rewrite of integer addition: a + b is materialised
-// as (a^b) + 2*(a&b). Lives in the llvm namespace so ConstantInt/FP and String
-// decryptors can share one definition via a forward declaration.
+// Mixed-boolean-arithmetic rewrites of integer addition. Lives in the llvm
+// namespace so ConstantInt/FP and String decryptors can share one definition
+// via a forward declaration.
 Value *buildMBAAdd(IRBuilder<NoFolder> &IRB, Value *A, Value *B,
-                   const Twine &Name) {
-  Value *Xor = IRB.CreateXor(A, B, Name + ".mba.xor");
-  markNoObf(Xor);
-  Value *And = IRB.CreateAnd(A, B, Name + ".mba.and");
-  markNoObf(And);
-  Value *Carry = IRB.CreateShl(And, ConstantInt::get(A->getType(), 1),
-                               Name + ".mba.carry");
-  markNoObf(Carry);
-  Value *Add = IRB.CreateAdd(Xor, Carry, Name + ".mba.add");
-  markNoObf(Add);
-  return Add;
+                   const Twine &Name, uint64_t Salt) {
+  switch (Salt % 3) {
+  case 0: {
+    Value *Left = IRB.CreateXor(A, B, Name + ".mba.xor");
+    markNoObf(Left);
+    Value *And = IRB.CreateAnd(A, B, Name + ".mba.and");
+    markNoObf(And);
+    Value *Right = IRB.CreateShl(And, ConstantInt::get(A->getType(), 1),
+                                 Name + ".mba.carry");
+    markNoObf(Right);
+    Value *Add = IRB.CreateAdd(Left, Right, Name + ".mba.add");
+    markNoObf(Add);
+    return Add;
+  }
+  case 1: {
+    Value *Sum = IRB.CreateAdd(A, B, Name + ".mba.sum");
+    markNoObf(Sum);
+    auto *Mask = ConstantInt::get(A->getType(), Salt | 1u);
+    Value *Xor = IRB.CreateXor(Sum, Mask, Name + ".mba.xor");
+    markNoObf(Xor);
+    Value *Add = IRB.CreateXor(Xor, Mask, Name + ".mba.add");
+    markNoObf(Add);
+    return Add;
+  }
+  default: {
+    Value *NotB = IRB.CreateNot(B, Name + ".mba.not");
+    markNoObf(NotB);
+    Value *Sub = IRB.CreateSub(A, NotB, Name + ".mba.sub");
+    markNoObf(Sub);
+    Value *Add =
+        IRB.CreateSub(Sub, ConstantInt::get(A->getType(), 1), Name + ".mba.add");
+    markNoObf(Add);
+    return Add;
+  }
+  }
+  llvm_unreachable("unknown MBA add shape");
 }
 } // namespace llvm
 
@@ -749,7 +774,10 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
                                       ConstantInt::get(
                                           IntTy, -APInt(IntTy->getBitWidth(),
                                                         args.PtrEncKey)),
-                                      "taokari.ptr.decrypt")
+                                      "taokari.ptr.decrypt",
+                                      args.RuntimeSeed ^ args.ModuleKey ^
+                                          args.FuncKey ^ args.PtrEncKey ^
+                                          args.NextIndex)
                         : IRB.CreateSub(EncInt, PtrKey);
     markNoObf(DecInt);
     Value *DecPtr = IRB.CreateIntToPtr(DecInt, args.LoadTy);
@@ -856,7 +884,7 @@ Value *encryptConstant(Constant *plainConstant, Instruction *insertBefore,
   }
   auto addKeyPart = [&](Value *Base, Value *Part,
                         const Twine &Name) -> Value * {
-    Value *Next = decryptorMBA ? buildMBAAdd(IRB, Base, Part, Name)
+    Value *Next = decryptorMBA ? buildMBAAdd(IRB, Base, Part, Name, rng())
                                : IRB.CreateAdd(Base, Part, Name);
     markNoObf(Next);
     return Next;
