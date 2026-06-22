@@ -1446,15 +1446,15 @@ Purpose: maximum practical protection for sensitive functions only.
 
 * [ ] Runtime checks L1
 * [ ] Distributed checks L2
-* [ ] Function integrity L3
+* [x] Function integrity L3
 * [ ] Post-link patching
 
 ## Milestone 8 — Optional VM
 
-* [ ] VM prototype
-* [ ] Bytecode encryption
-* [ ] Per-function ISA
-* [ ] Handler obfuscation
+* [x] VM prototype
+* [x] Bytecode encryption
+* [x] Per-function ISA
+* [x] Handler obfuscation
 
 ---
 
