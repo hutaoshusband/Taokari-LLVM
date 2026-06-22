@@ -315,7 +315,7 @@ Main weakness: pure constant-expression transformations can sometimes be folded 
 * [ ] Add indirect constant references
 * [ ] Add constant access through helper shards
 * [x] Add LTO survival tests
-* [ ] Add binary diff tests
+* [x] Add binary diff tests
 
 **Definition of done for L3:**
 Important constants should not appear plainly in IR, binary disassembly or decompiler output.
