@@ -80,6 +80,8 @@ def main() -> int:
 
   source_text = SOURCE_PATH.read_text(encoding="utf-8", errors="ignore")
   gate("InterpParam::Dummy" in source_text, "dummy parameter role exists")
+  gate("InterpParam::BCTail" in source_text and "InterpParam::BCSplit" in source_text,
+       "bytecode pointer is split in the interpreter ABI")
   gate("std::swap(ParamLayout" in source_text,
        "real interpreter parameters are shuffled")
   gate("ParamLayout.insert" in source_text,
@@ -92,13 +94,14 @@ def main() -> int:
     shutil.rmtree(tmp, ignore_errors=True)
 
   counts = [len(params) for params in samples]
-  gate(all(12 <= count <= 15 for count in counts),
+  gate(all(14 <= count <= 17 for count in counts),
        f"interpreter arity includes 1..4 dummy args: {counts}")
   dummy_positions: list[tuple[int, ...]] = []
   real_orders: list[tuple[str, ...]] = []
   old_order = (
-      "bc", "bclen", "pc.map", "ptr.table", "ptr.count", "args", "arg.len",
-      "tamper", "bytecode.tag", "opcode.map", "bytecode.key")
+      "bc.a", "bc.b", "bc.split", "bclen", "pc.map", "ptr.table",
+      "ptr.count", "args", "arg.len", "tamper", "bytecode.tag",
+      "opcode.map", "bytecode.key")
   for params in samples:
     names = tuple(param_name(param) for param in params)
     positions = tuple(
@@ -106,8 +109,11 @@ def main() -> int:
     dummy_positions.append(positions)
     real_order = tuple(name for name in names if not name.startswith("vmp.dummy"))
     real_orders.append(real_order)
+    gate("bc" not in names, "old single bytecode pointer name is absent")
+    for split_name in ("bc.a", "bc.b", "bc.split"):
+      gate(split_name in names, f"{split_name} is present in interpreter ABI")
     gate(positions, f"dummy arg present at position(s) {positions}")
-    gate(len(positions) == len(params) - 11,
+    gate(len(positions) == len(params) - 13,
          f"dummy count matches arity delta for {len(params)} args")
     gate(real_order != old_order,
          f"real interpreter parameter order differs from old ABI: {real_order}")

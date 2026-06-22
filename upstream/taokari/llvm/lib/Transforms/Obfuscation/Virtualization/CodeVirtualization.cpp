@@ -256,6 +256,8 @@ struct CodeVirtualization : public ModulePass {
 
   enum class InterpParam {
     BC,
+    BCTail,
+    BCSplit,
     BCLen,
     PCMap,
     PtrTable,
@@ -1843,6 +1845,8 @@ struct CodeVirtualization : public ModulePass {
     Function *F;
     LLVMContext *Ctx;
     Value *BC;
+    Value *BCTail;
+    Value *BCSplit;
     Value *BCLen;
     Value *PCMap;
     Value *PtrTable;
@@ -1952,6 +1956,15 @@ struct CodeVirtualization : public ModulePass {
     return bytecodeScheduleWord(B, C.I64, C.PCMap, C.BytecodeKey, Index);
   }
 
+  Value *loadBytecodeWord(IRBuilder<> &B, InterpCtx &C, Value *Index) {
+    Value *UseHead = B.CreateICmpULT(Index, C.BCSplit);
+    Value *TailIndex = B.CreateSub(Index, C.BCSplit);
+    Value *HeadPtr = B.CreateGEP(C.I64, C.BC, Index, "bc.a.ptr");
+    Value *TailPtr = B.CreateGEP(C.I64, C.BCTail, TailIndex, "bc.b.ptr");
+    Value *Ptr = B.CreateSelect(UseHead, HeadPtr, TailPtr, "bc.ptr");
+    return B.CreateLoad(C.I64, Ptr, "bc.word");
+  }
+
   uint64_t calleeTableMaskWord(uint64_t Index) const {
     return bytecodeScheduleWord(CalleeTableKey, Index, Schedule.CalleeDomain);
   }
@@ -1971,7 +1984,7 @@ struct CodeVirtualization : public ModulePass {
   Value *fetchWord(IRBuilder<> &B, InterpCtx &C) {
     Value *Cur = pcLoad(B, C);
     branchIfFalse(B, C, B.CreateICmpULT(Cur, C.BCLen));
-    Value *Enc = B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.BC, Cur));
+    Value *Enc = loadBytecodeWord(B, C, Cur);
     pcStore(B, C, B.CreateAdd(Cur, ConstantInt::get(C.I64, 1)));
     return B.CreateXor(Enc, bytecodeScheduleWord(B, C, Cur));
   }
@@ -2614,10 +2627,11 @@ struct CodeVirtualization : public ModulePass {
     // fetch so a corrupted PC (relevant once L2 encrypts the bytecode) faults
     // to the Bad block instead of reading out of bounds.
     SmallVector<InterpParam, 16> ParamLayout = {
-        InterpParam::BC,       InterpParam::BCLen,    InterpParam::PCMap,
-        InterpParam::PtrTable, InterpParam::PtrCount, InterpParam::Args,
-        InterpParam::ArgLen,   InterpParam::Tamper,   InterpParam::Tag,
-        InterpParam::OpcodeMap, InterpParam::Key};
+        InterpParam::BC,       InterpParam::BCTail,   InterpParam::BCSplit,
+        InterpParam::BCLen,    InterpParam::PCMap,    InterpParam::PtrTable,
+        InterpParam::PtrCount, InterpParam::Args,     InterpParam::ArgLen,
+        InterpParam::Tamper,   InterpParam::Tag,      InterpParam::OpcodeMap,
+        InterpParam::Key};
     for (unsigned I = ParamLayout.size() - 1; I > 0; --I)
       std::swap(ParamLayout[I], ParamLayout[RNG() % (I + 1)]);
     unsigned DummyCount = 1 + static_cast<unsigned>(RNG() % 4);
@@ -2629,6 +2643,7 @@ struct CodeVirtualization : public ModulePass {
     for (InterpParam P : ParamLayout) {
       switch (P) {
       case InterpParam::BC:
+      case InterpParam::BCTail:
       case InterpParam::PCMap:
       case InterpParam::PtrTable:
       case InterpParam::Args:
@@ -2637,6 +2652,7 @@ struct CodeVirtualization : public ModulePass {
         ParamTypes.push_back(Ptr);
         break;
       case InterpParam::BCLen:
+      case InterpParam::BCSplit:
       case InterpParam::PtrCount:
       case InterpParam::ArgLen:
       case InterpParam::Tag:
@@ -2656,6 +2672,8 @@ struct CodeVirtualization : public ModulePass {
     F->addFnAttr(Attribute::NoInline);
 
     Value *BC = nullptr;
+    Value *BCTail = nullptr;
+    Value *BCSplit = nullptr;
     Value *BCLen = nullptr;
     Value *PCMap = nullptr;
     Value *PtrTable = nullptr;
@@ -2671,7 +2689,15 @@ struct CodeVirtualization : public ModulePass {
       switch (ParamLayout[I]) {
       case InterpParam::BC:
         BC = Arg;
-        BC->setName("bc");
+        BC->setName("bc.a");
+        break;
+      case InterpParam::BCTail:
+        BCTail = Arg;
+        BCTail->setName("bc.b");
+        break;
+      case InterpParam::BCSplit:
+        BCSplit = Arg;
+        BCSplit->setName("bc.split");
         break;
       case InterpParam::BCLen:
         BCLen = Arg;
@@ -2795,7 +2821,14 @@ struct CodeVirtualization : public ModulePass {
     Value *CurTagI = B.CreateLoad(I64, TagI);
     B.CreateCondBr(B.CreateICmpULT(CurTagI, BCLen), TagBody, TagDone);
     B.SetInsertPoint(TagBody);
-    Value *CurWord = B.CreateLoad(I64, B.CreateGEP(I64, BC, CurTagI));
+    InterpCtx TagCtx{I64,   F,       &Ctx, BC,      BCTail, BCSplit, BCLen,
+                     PCMap, PtrTable, PtrCount, PC, SP,     Stack,   Locals,
+                     Frame, CallArgs, CalleeTable,
+                     static_cast<unsigned>(CalleeOrder.size()), Args, ArgLen,
+                     TamperFlag, ExpectedTag, OpcodeMap, BytecodeKey, PcKey,
+                     StackKey, Dispatch, Bad,
+                     M.getDataLayout().isLittleEndian()};
+    Value *CurWord = loadBytecodeWord(B, TagCtx, CurTagI);
     Value *CurTag = B.CreateLoad(I64, Tag);
     Value *TagMix =
         B.CreateAdd(CurWord,
@@ -2881,11 +2914,12 @@ struct CodeVirtualization : public ModulePass {
     B.SetInsertPoint(Fetch);
     // Build handler table, then emit one switch case per entry.
     // The table is the source of truth; the switch is generated from it.
-    InterpCtx IC{I64,   F,       &Ctx, BC,       BCLen, PCMap, PtrTable, PtrCount, PC,
-                 SP,    Stack,   Locals, Frame,  CallArgs,
-                 CalleeTable, static_cast<unsigned>(CalleeOrder.size()),
-                 Args,  ArgLen,  TamperFlag, ExpectedTag, OpcodeMap, BytecodeKey,
-                 PcKey, StackKey, Dispatch, Bad, M.getDataLayout().isLittleEndian()};
+    InterpCtx IC{I64,   F,       &Ctx, BC,      BCTail, BCSplit, BCLen,
+                 PCMap, PtrTable, PtrCount, PC, SP,     Stack,   Locals,
+                 Frame, CallArgs, CalleeTable,
+                 static_cast<unsigned>(CalleeOrder.size()), Args, ArgLen,
+                 TamperFlag, ExpectedTag, OpcodeMap, BytecodeKey, PcKey,
+                 StackKey, Dispatch, Bad, M.getDataLayout().isLittleEndian()};
     Value *MappedOp = fetchWord(B, IC);
     branchIfFalse(B, IC,
                   B.CreateICmpULT(MappedOp,
@@ -3109,6 +3143,12 @@ struct CodeVirtualization : public ModulePass {
     auto *RuntimeBC = B.CreateAlloca(ArrayTy, nullptr, "vmp.bc.runtime");
     Value *RuntimeBCPtr =
         B.CreateGEP(ArrayTy, RuntimeBC, {Zero, Zero}, "vmp.bc.runtime.ptr");
+    uint64_t BytecodeSplit =
+        Words.size() > 1 ? 1 + (RNG() % (Words.size() - 1)) : 1;
+    Value *RuntimeBCTail =
+        B.CreateGEP(I64, RuntimeBCPtr, ConstantInt::get(I64, BytecodeSplit),
+                    "vmp.bc.runtime.tail");
+    Value *RuntimeBCSplit = ConstantInt::get(I64, BytecodeSplit);
     auto *RekeyI = B.CreateAlloca(I64, nullptr, "vmp.rekey.i");
     auto *RuntimeTag = B.CreateAlloca(I64, nullptr, "vmp.rekey.tag");
     B.CreateStore(Zero, RekeyI);
@@ -3150,6 +3190,12 @@ struct CodeVirtualization : public ModulePass {
       switch (P) {
       case InterpParam::BC:
         InterpArgs.push_back(RuntimeBCPtr);
+        break;
+      case InterpParam::BCTail:
+        InterpArgs.push_back(RuntimeBCTail);
+        break;
+      case InterpParam::BCSplit:
+        InterpArgs.push_back(RuntimeBCSplit);
         break;
       case InterpParam::BCLen:
         InterpArgs.push_back(BCLen);
