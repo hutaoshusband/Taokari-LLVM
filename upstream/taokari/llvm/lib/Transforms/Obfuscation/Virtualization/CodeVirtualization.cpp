@@ -254,6 +254,26 @@ struct CodeVirtualization : public ModulePass {
     uint64_t KeyMul = 0;
   } Schedule;
 
+  enum class InterpParam {
+    BC,
+    BCLen,
+    PCMap,
+    PtrTable,
+    PtrCount,
+    Args,
+    ArgLen,
+    Tamper,
+    Tag,
+    OpcodeMap,
+    Key,
+    Dummy
+  };
+
+  struct InterpreterInstance {
+    Function *Fn;
+    SmallVector<InterpParam, 16> Params;
+  };
+
   CodeVirtualization(ObfuscationOptions *ArgsOptions) : ModulePass(ID) {
     this->ArgsOptions = ArgsOptions;
     uint64_t Seed = 0;
@@ -2581,22 +2601,50 @@ struct CodeVirtualization : public ModulePass {
     return H;
   }
 
-  Function *createInterpreter(Module &M, Function &Source,
-                              uint64_t ExpectedOpMapHash) {
+  InterpreterInstance createInterpreter(Module &M, Function &Source,
+                                        uint64_t ExpectedOpMapHash) {
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
     Type *I8 = Type::getInt8Ty(Ctx);
     Type *Ptr = PointerType::getUnqual(Ctx);
-    // signature is i64(i64* bc, i64 bcLen, i8* pcMap, ptr* ptrs,
-    // i64 ptrCount, i64* args, i64 argLen, i64* tamper, i64 tag,
-    // i64* opcodeMap, i64 key). bcLen is the
+    // The real argument order is fixed inside ParamLayout, but dummy i64
+    // slots are inserted at random positions so the visible interpreter
+    // signature no longer has a stable arity or type layout. bcLen is the
     // bytecode word count; the dispatch loop checks PC < bcLen before each
     // fetch so a corrupted PC (relevant once L2 encrypts the bytecode) faults
     // to the Bad block instead of reading out of bounds.
-    auto *FTy =
-        FunctionType::get(
-            I64, {Ptr, I64, Ptr, Ptr, I64, Ptr, I64, Ptr, I64, Ptr, I64},
-            false);
+    SmallVector<InterpParam, 16> ParamLayout = {
+        InterpParam::BC,       InterpParam::BCLen,    InterpParam::PCMap,
+        InterpParam::PtrTable, InterpParam::PtrCount, InterpParam::Args,
+        InterpParam::ArgLen,   InterpParam::Tamper,   InterpParam::Tag,
+        InterpParam::OpcodeMap, InterpParam::Key};
+    unsigned DummyCount = 1 + static_cast<unsigned>(RNG() % 4);
+    for (unsigned I = 0; I < DummyCount; ++I) {
+      unsigned Pos = static_cast<unsigned>(RNG() % (ParamLayout.size() + 1));
+      ParamLayout.insert(ParamLayout.begin() + Pos, InterpParam::Dummy);
+    }
+    SmallVector<Type *, 16> ParamTypes;
+    for (InterpParam P : ParamLayout) {
+      switch (P) {
+      case InterpParam::BC:
+      case InterpParam::PCMap:
+      case InterpParam::PtrTable:
+      case InterpParam::Args:
+      case InterpParam::Tamper:
+      case InterpParam::OpcodeMap:
+        ParamTypes.push_back(Ptr);
+        break;
+      case InterpParam::BCLen:
+      case InterpParam::PtrCount:
+      case InterpParam::ArgLen:
+      case InterpParam::Tag:
+      case InterpParam::Key:
+      case InterpParam::Dummy:
+        ParamTypes.push_back(I64);
+        break;
+      }
+    }
+    auto *FTy = FunctionType::get(I64, ParamTypes, false);
     std::string InterpName =
         ("__taokari_vmp_interp_i64_" + Source.getName()).str();
     InterpName += "_";
@@ -2605,29 +2653,69 @@ struct CodeVirtualization : public ModulePass {
     F->addFnAttr(Attribute::NoUnwind);
     F->addFnAttr(Attribute::NoInline);
 
-    auto ArgIt = F->arg_begin();
-    Value *BC = &*ArgIt++;
-    BC->setName("bc");
-    Value *BCLen = &*ArgIt++;
-    BCLen->setName("bclen");
-    Value *PCMap = &*ArgIt++;
-    PCMap->setName("pc.map");
-    Value *PtrTable = &*ArgIt++;
-    PtrTable->setName("ptr.table");
-    Value *PtrCount = &*ArgIt++;
-    PtrCount->setName("ptr.count");
-    Value *Args = &*ArgIt++;
-    Args->setName("args");
-    Value *ArgLen = &*ArgIt++;
-    ArgLen->setName("arg.len");
-    Value *TamperFlag = &*ArgIt++;
-    TamperFlag->setName("tamper");
-    Value *ExpectedTag = &*ArgIt++;
-    ExpectedTag->setName("bytecode.tag");
-    Value *OpcodeMap = &*ArgIt++;
-    OpcodeMap->setName("opcode.map");
-    Value *BytecodeKey = &*ArgIt++;
-    BytecodeKey->setName("bytecode.key");
+    Value *BC = nullptr;
+    Value *BCLen = nullptr;
+    Value *PCMap = nullptr;
+    Value *PtrTable = nullptr;
+    Value *PtrCount = nullptr;
+    Value *Args = nullptr;
+    Value *ArgLen = nullptr;
+    Value *TamperFlag = nullptr;
+    Value *ExpectedTag = nullptr;
+    Value *OpcodeMap = nullptr;
+    Value *BytecodeKey = nullptr;
+    for (unsigned I = 0; I < ParamLayout.size(); ++I) {
+      Argument *Arg = F->getArg(I);
+      switch (ParamLayout[I]) {
+      case InterpParam::BC:
+        BC = Arg;
+        BC->setName("bc");
+        break;
+      case InterpParam::BCLen:
+        BCLen = Arg;
+        BCLen->setName("bclen");
+        break;
+      case InterpParam::PCMap:
+        PCMap = Arg;
+        PCMap->setName("pc.map");
+        break;
+      case InterpParam::PtrTable:
+        PtrTable = Arg;
+        PtrTable->setName("ptr.table");
+        break;
+      case InterpParam::PtrCount:
+        PtrCount = Arg;
+        PtrCount->setName("ptr.count");
+        break;
+      case InterpParam::Args:
+        Args = Arg;
+        Args->setName("args");
+        break;
+      case InterpParam::ArgLen:
+        ArgLen = Arg;
+        ArgLen->setName("arg.len");
+        break;
+      case InterpParam::Tamper:
+        TamperFlag = Arg;
+        TamperFlag->setName("tamper");
+        break;
+      case InterpParam::Tag:
+        ExpectedTag = Arg;
+        ExpectedTag->setName("bytecode.tag");
+        break;
+      case InterpParam::OpcodeMap:
+        OpcodeMap = Arg;
+        OpcodeMap->setName("opcode.map");
+        break;
+      case InterpParam::Key:
+        BytecodeKey = Arg;
+        BytecodeKey->setName("bytecode.key");
+        break;
+      case InterpParam::Dummy:
+        Arg->setName("vmp.dummy");
+        break;
+      }
+    }
 
     BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", F);
     BasicBlock *Dispatch = BasicBlock::Create(Ctx, "dispatch", F);
@@ -2892,7 +2980,7 @@ struct CodeVirtualization : public ModulePass {
     B.SetInsertPoint(Bad);
     B.CreateStore(ConstantInt::get(I64, 1), TamperFlag);
     B.CreateRet(ConstantInt::get(I64, 0));
-    return F;
+    return {F, ParamLayout};
   }
 
   bool replaceWithVM(Function &F, BytecodeProgram &P) {
@@ -2966,7 +3054,7 @@ struct CodeVirtualization : public ModulePass {
           (ExpectedOpMapHash ^ Mix) * Schedule.HashPrime;
     }
 
-    Function *Interp = createInterpreter(M, F, ExpectedOpMapHash);
+    InterpreterInstance Interp = createInterpreter(M, F, ExpectedOpMapHash);
     F.removeFnAttr(Attribute::AlwaysInline);
     F.removeFnAttr(Attribute::InlineHint);
     F.addFnAttr(Attribute::NoInline);
@@ -3054,10 +3142,49 @@ struct CodeVirtualization : public ModulePass {
     B.CreateStore(B.CreateAdd(CurRekeyI, ConstantInt::get(I64, 1)), RekeyI);
     B.CreateBr(RekeyHdr);
     B.SetInsertPoint(RekeyDone);
-    Value *Result = B.CreateCall(
-        Interp, {RuntimeBCPtr, BCLen, PCMapPtr, PtrTablePtr, PtrCount, ArgsPtr,
-                 ConstantInt::get(I64, F.arg_size()), TamperFlag,
-                 B.CreateLoad(I64, RuntimeTag), OpcodeMapPtr, RuntimeKey});
+    Value *RuntimeTagValue = B.CreateLoad(I64, RuntimeTag);
+    SmallVector<Value *, 16> InterpArgs;
+    for (InterpParam P : Interp.Params) {
+      switch (P) {
+      case InterpParam::BC:
+        InterpArgs.push_back(RuntimeBCPtr);
+        break;
+      case InterpParam::BCLen:
+        InterpArgs.push_back(BCLen);
+        break;
+      case InterpParam::PCMap:
+        InterpArgs.push_back(PCMapPtr);
+        break;
+      case InterpParam::PtrTable:
+        InterpArgs.push_back(PtrTablePtr);
+        break;
+      case InterpParam::PtrCount:
+        InterpArgs.push_back(PtrCount);
+        break;
+      case InterpParam::Args:
+        InterpArgs.push_back(ArgsPtr);
+        break;
+      case InterpParam::ArgLen:
+        InterpArgs.push_back(ConstantInt::get(I64, F.arg_size()));
+        break;
+      case InterpParam::Tamper:
+        InterpArgs.push_back(TamperFlag);
+        break;
+      case InterpParam::Tag:
+        InterpArgs.push_back(RuntimeTagValue);
+        break;
+      case InterpParam::OpcodeMap:
+        InterpArgs.push_back(OpcodeMapPtr);
+        break;
+      case InterpParam::Key:
+        InterpArgs.push_back(RuntimeKey);
+        break;
+      case InterpParam::Dummy:
+        InterpArgs.push_back(ConstantInt::get(I64, RNG()));
+        break;
+      }
+    }
+    Value *Result = B.CreateCall(Interp.Fn, InterpArgs);
     Value *Tampered = B.CreateLoad(I64, TamperFlag);
     B.CreateCondBr(B.CreateICmpNE(Tampered, Zero), Trap, Ok);
     B.SetInsertPoint(Trap);
