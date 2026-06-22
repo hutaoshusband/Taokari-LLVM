@@ -71,6 +71,23 @@ def main() -> int:
         print(f"missing clang: {CLANG}", file=sys.stderr)
         return 2
 
+    source_text = (
+        ROOT / "upstream" / "taokari" / "llvm" / "lib" / "Transforms" /
+        "Obfuscation" / "BogusControlFlow.cpp"
+    ).read_text(encoding="utf-8", errors="ignore")
+    seed_choices = [
+        "OpaqueSeedKind::Pointer",
+        "OpaqueSeedKind::StackAddress",
+        "OpaqueSeedKind::Global",
+        "OpaqueSeedKind::Environment",
+        "OpaqueSeedKind::RuntimeNonce",
+    ]
+    missing_choices = [choice for choice in seed_choices
+                       if choice not in source_text]
+    if "FuncRNG() % 5" not in source_text or missing_choices:
+        print("BCF seed-source variety missing", file=sys.stderr)
+        return 1
+
     with tempfile.TemporaryDirectory(prefix="taokari-bcf-") as tmp_name:
         tmp = Path(tmp_name)
         src = tmp / "bcf.c"
@@ -91,12 +108,20 @@ def main() -> int:
             "__taokari_bcf_junk",
             "bcf.fake.call",
             "bcf.fake.nonce",
-            "bcf.seed.vload",
             "bcf.opaque",
         ]
         missing = [needle for needle in required if needle not in text]
         if missing:
             print(f"missing BCF IR markers: {', '.join(missing)}", file=sys.stderr)
+            return 1
+        seed_markers = (
+            "bcf.seed.vload",
+            "bcf.seed.p2i",
+            "bcf.seed.fp",
+            "bcf.seed.env",
+        )
+        if not any(marker in text for marker in seed_markers):
+            print("missing BCF seed-source marker", file=sys.stderr)
             return 1
 
         cfg = tmp / "bcf.json"

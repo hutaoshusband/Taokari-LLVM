@@ -125,9 +125,25 @@ struct BogusControlFlow : public FunctionPass {
     IRBuilder<> GuardIR(Guard);
     Value *Opaque = nullptr;
     if (Level >= 2) {
+      taokari::OpaqueSeedKind SeedKind = taokari::OpaqueSeedKind::Global;
+      switch (FuncRNG() % 5) {
+      case 0:
+        SeedKind = taokari::OpaqueSeedKind::Pointer;
+        break;
+      case 1:
+        SeedKind = taokari::OpaqueSeedKind::StackAddress;
+        break;
+      case 2:
+        SeedKind = taokari::OpaqueSeedKind::Environment;
+        break;
+      case 3:
+        SeedKind = taokari::OpaqueSeedKind::RuntimeNonce;
+        break;
+      default:
+        break;
+      }
       Value *Seed = taokari::makeContextSeed(
-          F, GuardIR, Int64, FuncRNG, taokari::OpaqueSeedKind::Global,
-          "bcf.seed");
+          F, GuardIR, Int64, FuncRNG, SeedKind, "bcf.seed");
       Opaque = (FuncRNG() & 1)
                    ? taokari::makeTruePredicate(GuardIR, Seed, FuncRNG,
                                                 "bcf.opaque")
