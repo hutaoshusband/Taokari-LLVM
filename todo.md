@@ -261,7 +261,7 @@ Example identities:
 ## Level 3 — Fortress MBA
 
 * [ ] Add polymorphic MBA templates
-* [ ] Add per-function MBA style
+* [x] Add per-function MBA style
 * [ ] Add MBA on dispatch state updates
 * [x] Add MBA on constant decryptors
 * [x] Add MBA on string decryptors
