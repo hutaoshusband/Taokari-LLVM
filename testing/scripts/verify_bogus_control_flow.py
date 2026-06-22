@@ -87,6 +87,15 @@ def main() -> int:
     if "FuncRNG() % 5" not in source_text or missing_choices:
         print("BCF seed-source variety missing", file=sys.stderr)
         return 1
+    if "getOrCreateJunkFunction(*Fake.getModule(), FuncRNG)" not in source_text:
+        print("BCF junk helper is not RNG-shaped", file=sys.stderr)
+        return 1
+    if "switch (FuncRNG() % 4)" not in source_text:
+        print("BCF junk helper palette missing", file=sys.stderr)
+        return 1
+    if "1103515245" in source_text or "12345" in source_text:
+        print("BCF junk helper still uses fixed LCG constants", file=sys.stderr)
+        return 1
 
     with tempfile.TemporaryDirectory(prefix="taokari-bcf-") as tmp_name:
         tmp = Path(tmp_name)

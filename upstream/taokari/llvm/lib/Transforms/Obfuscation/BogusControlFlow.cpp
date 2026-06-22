@@ -256,7 +256,7 @@ struct BogusControlFlow : public FunctionPass {
       V = IRB.CreateAdd(V, ConstantInt::get(Int64, FuncRNG()), "bcf.fake.add");
     }
     if (Level >= 2) {
-      auto *JunkFn = getOrCreateJunkFunction(*Fake.getModule());
+      auto *JunkFn = getOrCreateJunkFunction(*Fake.getModule(), FuncRNG);
       V = IRB.CreateCall(JunkFn, {V}, "bcf.fake.call");
     }
     IRB.CreateStore(V, &JunkSlot);
@@ -330,7 +330,8 @@ struct BogusControlFlow : public FunctionPass {
     Exit.CreateBr(&Real);
   }
 
-  static Function *getOrCreateJunkFunction(Module &M) {
+  static Function *getOrCreateJunkFunction(Module &M,
+                                           std::mt19937_64 &FuncRNG) {
     if (auto *F = M.getFunction("__taokari_bcf_junk"))
       return F;
     auto *Int64 = Type::getInt64Ty(M.getContext());
@@ -342,9 +343,35 @@ struct BogusControlFlow : public FunctionPass {
     auto *BB = BasicBlock::Create(M.getContext(), "entry", F);
     IRBuilder<> IRB(BB);
     auto *X = F->getArg(0);
-    Value *Y = IRB.CreateMul(X, ConstantInt::get(Int64, 1103515245), "j.mul");
-    Y = IRB.CreateAdd(Y, ConstantInt::get(Int64, 12345), "j.add");
-    IRB.CreateRet(IRB.CreateXor(Y, IRB.CreateLShr(Y, 17), "j.xor"));
+    Value *Y = X;
+    switch (FuncRNG() % 4) {
+    case 0:
+      Y = IRB.CreateMul(Y, ConstantInt::get(Int64, FuncRNG() | 1), "j.mul");
+      Y = IRB.CreateAdd(Y, ConstantInt::get(Int64, FuncRNG()), "j.add");
+      Y = IRB.CreateXor(
+          Y, IRB.CreateLShr(Y, (FuncRNG() % 31) + 1, "j.shr"), "j.xor");
+      break;
+    case 1:
+      Y = IRB.CreateXor(Y, ConstantInt::get(Int64, FuncRNG()), "j.xor");
+      Y = IRB.CreateOr(IRB.CreateShl(Y, 13, "j.shl"),
+                       IRB.CreateLShr(Y, 51, "j.shr"), "j.rot");
+      Y = IRB.CreateAdd(Y, ConstantInt::get(Int64, FuncRNG()), "j.add");
+      break;
+    case 2: {
+      Value *A = IRB.CreateAdd(Y, ConstantInt::get(Int64, FuncRNG()), "j.a");
+      Value *B = IRB.CreateXor(Y, ConstantInt::get(Int64, FuncRNG()), "j.b");
+      Y = IRB.CreateSub(IRB.CreateOr(A, B, "j.or"),
+                        IRB.CreateAnd(A, B, "j.and"), "j.sub");
+      break;
+    }
+    default:
+      Y = IRB.CreateXor(Y, ConstantInt::get(Int64, FuncRNG()), "j.xor");
+      Y = IRB.CreateMul(Y, ConstantInt::get(Int64, FuncRNG() | 1), "j.mul");
+      Y = IRB.CreateAdd(
+          Y, IRB.CreateLShr(Y, (FuncRNG() % 31) + 1, "j.shr"), "j.add");
+      break;
+    }
+    IRB.CreateRet(Y);
     return F;
   }
 };
