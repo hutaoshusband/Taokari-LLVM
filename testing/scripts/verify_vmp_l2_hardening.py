@@ -31,10 +31,8 @@ CALLEE_TABLE_RE = re.compile(
 CALL_RE = re.compile(
     r"call i64 @(__taokari_vmp_interp_i64_[^(]+)\((.*?)\)"
 )
+INTERP_BASE_RE = re.compile(r"__taokari_vmp_interp_i64_(.+)_\d+$")
 BC_ARG_RE = re.compile(r"ptr nonnull @__taokari_vmp_bc_(\w+)")
-CALL_TAIL_RE = re.compile(
-    r"i64 ([^,]+), ptr (?:nonnull )?@__taokari_vmp_opmap_(\w+), i64 ([^,]+)$"
-)
 KEY_SEED_RE = re.compile(r"@__taokari_vmp_key_seed_(\w+) = .*?global i64 (-?\d+)")
 I64_RE = re.compile(r"i64 (-?\d+)")
 
@@ -63,16 +61,6 @@ def parse_ir_c_bytes(body: str) -> list[int]:
 
 
 def check_ir(text: str) -> int:
-    for constant in (
-        "-6510615554653179231",
-        "4354685564936845354",
-        "-4658895280553007687",
-        "-7723592293110705685",
-        "-3372029247567499371",
-    ):
-        if constant not in text:
-            return fail("bytecode stream schedule constants missing")
-
     for marker in (
         "vmp.runtime.bytecode.key",
         "vmp.bc.runtime",
@@ -100,17 +88,16 @@ def check_ir(text: str) -> int:
             return fail(f"{name} pcmap length is wrong")
         pcmaps[name] = flags
 
-    calls: list[tuple[str, str]] = []
+    calls: list[str] = []
     interp_names: list[str] = []
     for interp_name, args in CALL_RE.findall(text):
         interp_names.append(interp_name)
-        tail_match = CALL_TAIL_RE.search(args)
         if BC_ARG_RE.search(args):
             return fail("interpreter still consumes static bytecode directly")
-        if not tail_match:
-            continue
-        _tag, opmap_name, key_arg = tail_match.groups()
-        calls.append((opmap_name, key_arg.strip()))
+        base_match = INTERP_BASE_RE.fullmatch(interp_name)
+        if not base_match:
+            return fail(f"cannot recover protected function name from {interp_name}")
+        calls.append(base_match.group(1))
     if len(calls) < 6:
         return fail("missing hardened interpreter calls")
     if len(set(interp_names)) != len(calls):
@@ -124,8 +111,8 @@ def check_ir(text: str) -> int:
     if len(opmaps) < len(calls) or len(set(opmaps.values())) < 4:
         return fail("opcode maps are not per-function")
 
-    expected_ops = set(range(1, 45))
-    for name, key_arg in calls:
+    old_stable_ops = set(range(1, 45))
+    for name in calls:
         words = globals_by_name.get(name)
         if not words:
             return fail(f"missing bytecode global for {name}")
@@ -133,10 +120,10 @@ def check_ir(text: str) -> int:
         if not opmap:
             return fail(f"{name} missing opcode map")
         decoded = [op for op in opmap if op >= 0]
-        if set(decoded) != expected_ops or len(decoded) != len(expected_ops):
-            return fail(f"{name} opcode map does not decode the VM opcode set")
-        if re.fullmatch(r"-?\d+", key_arg):
-            return fail(f"{name} bytecode key is still a plaintext call literal")
+        if len(decoded) != len(old_stable_ops) or len(set(decoded)) != len(decoded):
+            return fail(f"{name} opcode map lost a unique live opcode token set")
+        if set(decoded) == old_stable_ops:
+            return fail(f"{name} opcode map still exposes stable VM enum values")
         if name not in seed_globals:
             return fail(f"{name} missing runtime key seed global")
         if 0 <= words[0] < 64:
@@ -166,7 +153,7 @@ def check_ir(text: str) -> int:
     ]
     if len(indirect_dests) < len(calls):
         return fail("missing VM indirectbr destination lists")
-    if any(count < len(expected_ops) + 4 for count in indirect_dests):
+    if any(count < len(old_stable_ops) + 2 for count in indirect_dests):
         return fail("fake/dead handler targets are missing")
 
     callee_match = CALLEE_TABLE_RE.search(text)

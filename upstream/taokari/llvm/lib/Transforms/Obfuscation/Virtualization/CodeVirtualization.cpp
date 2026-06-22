@@ -1547,6 +1547,32 @@ struct CodeVirtualization : public ModulePass {
     return true;
   }
 
+  bool buildOpcodeRuntimeTokens(SmallVectorImpl<int64_t> &Tokens) {
+    Tokens.assign(kOpcodeTableSize, -1);
+    SmallVector<unsigned, kOpcodeTableSize> Ops;
+    for (unsigned Op = 1; Op < kOpcodeTableSize; ++Op) {
+      unsigned Immediates = 0;
+      if (!opcodeImmediateCount(static_cast<int64_t>(Op), Immediates) &&
+          Op != OpFakeArith && Op != OpFakeMem && Op != OpFakeCall)
+        continue;
+      Ops.push_back(Op);
+    }
+    SmallVector<int64_t, kOpcodeTableSize> Pool;
+    for (unsigned I = OpMemMove + 1; I < kOpcodeTableSize; ++I)
+      Pool.push_back(I);
+    unsigned HighEnd = Pool.size();
+    for (unsigned I = 1; I <= OpMemMove; ++I)
+      Pool.push_back(I);
+    std::shuffle(Ops.begin(), Ops.end(), RNG);
+    std::shuffle(Pool.begin(), Pool.begin() + HighEnd, RNG);
+    std::shuffle(Pool.begin() + HighEnd, Pool.end(), RNG);
+    if (Ops.size() > Pool.size())
+      return false;
+    for (unsigned I = 0; I < Ops.size(); ++I)
+      Tokens[Ops[I]] = Pool[I];
+    return true;
+  }
+
   bool mapOpcodeWords(SmallVectorImpl<int64_t> &Words,
                       ArrayRef<int64_t> OpcodeEncode) const {
     size_t I = 0;
@@ -2615,7 +2641,8 @@ struct CodeVirtualization : public ModulePass {
   }
 
   InterpreterInstance createInterpreter(Module &M, Function &Source,
-                                        uint64_t ExpectedOpMapHash) {
+                                        uint64_t ExpectedOpMapHash,
+                                        ArrayRef<int64_t> OpcodeRuntimeTokens) {
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
     Type *I8 = Type::getInt8Ty(Ctx);
@@ -2851,7 +2878,7 @@ struct CodeVirtualization : public ModulePass {
     // against a per-interp expected value baked in as a constant. A
     // patched map entry (e.g. swapping two opcodes to remap the
     // dispatch) trips the check and routes through the Bad block. The
-    // expected value is computed at build time by hashing OpcodeDecode
+    // expected value is computed at build time by hashing the runtime map
     // in replaceWithVM (passed in via a private global), so the check
     // survives the optimizer because the runtime hash depends on the
     // actual loaded bytes.
@@ -2940,14 +2967,17 @@ struct CodeVirtualization : public ModulePass {
     for (Handler &H : Handlers) {
       BasicBlock *CaseBB = BasicBlock::Create(Ctx, H.Name + ".entry", F);
       BasicBlock *BodyBB = BasicBlock::Create(Ctx, H.Name + ".body", F);
-      uint64_t EncOp = static_cast<uint64_t>(H.Op) ^ DispatchKey;
+      int64_t RuntimeOp = OpcodeRuntimeTokens[static_cast<unsigned>(H.Op)];
+      if (RuntimeOp < 0)
+        report_fatal_error("missing VMP runtime opcode token");
+      uint64_t RuntimeOpU = static_cast<uint64_t>(RuntimeOp);
+      uint64_t EncOp = RuntimeOpU ^ DispatchKey;
       Value *Hit = B.CreateICmpEQ(DispatchToken, ConstantInt::get(I64, EncOp));
       Target = B.CreateSelect(Hit, BlockAddress::get(F, CaseBB), Target,
                               "handler.target");
       Dests.push_back(CaseBB);
       uint64_t RouteToken =
-          (static_cast<uint64_t>(H.Op) * Schedule.Step) ^ DispatchKey ^
-          Schedule.RouteDomain;
+          (RuntimeOpU * Schedule.Step) ^ DispatchKey ^ Schedule.RouteDomain;
       HandlerBlocks.push_back({&H, CaseBB, BodyBB, RouteToken});
     }
     auto *IBI = B.CreateIndirectBr(Target, Dests.size());
@@ -3027,7 +3057,10 @@ struct CodeVirtualization : public ModulePass {
     uint64_t BytecodeKey = nextNonZeroKey();
     SmallVector<int64_t, kOpcodeTableSize> OpcodeEncode;
     SmallVector<int64_t, kOpcodeTableSize> OpcodeDecode;
+    SmallVector<int64_t, kOpcodeTableSize> OpcodeRuntimeTokens;
     if (!buildOpcodeMaps(OpcodeEncode, OpcodeDecode))
+      return false;
+    if (!buildOpcodeRuntimeTokens(OpcodeRuntimeTokens))
       return false;
     SmallVector<int64_t, 64> EncodedWords(P.Words.begin(), P.Words.end());
     SmallVector<uint8_t, 64> PCFlags;
@@ -3064,8 +3097,14 @@ struct CodeVirtualization : public ModulePass {
     PCMap->setAlignment(Align(1));
 
     SmallVector<Constant *, kOpcodeTableSize> OpcodeMapEntries;
-    for (int64_t V : OpcodeDecode)
-      OpcodeMapEntries.push_back(ConstantInt::getSigned(I64, V));
+    SmallVector<int64_t, kOpcodeTableSize> OpcodeMapRuntime;
+    for (int64_t V : OpcodeDecode) {
+      int64_t RuntimeV = -1;
+      if (V >= 0)
+        RuntimeV = OpcodeRuntimeTokens[static_cast<unsigned>(V)];
+      OpcodeMapRuntime.push_back(RuntimeV);
+      OpcodeMapEntries.push_back(ConstantInt::getSigned(I64, RuntimeV));
+    }
     auto *OpcodeMapArrayTy = ArrayType::get(I64, OpcodeMapEntries.size());
     auto *OpcodeMap = new GlobalVariable(
         M, OpcodeMapArrayTy, true, GlobalValue::PrivateLinkage,
@@ -3081,16 +3120,17 @@ struct CodeVirtualization : public ModulePass {
     // using 64-bit wrapping arithmetic. The runtime check then catches
     // any patch to a single OpcodeMap entry.
     uint64_t ExpectedOpMapHash = Schedule.HashOffset;
-    for (unsigned I = 0; I < OpcodeDecode.size(); ++I) {
+    for (unsigned I = 0; I < OpcodeMapRuntime.size(); ++I) {
       uint64_t Entry =
-          static_cast<uint64_t>(static_cast<int64_t>(OpcodeDecode[I]));
+          static_cast<uint64_t>(static_cast<int64_t>(OpcodeMapRuntime[I]));
       uint64_t Mix = Entry +
                      static_cast<uint64_t>(I) * Schedule.Step;
       ExpectedOpMapHash =
           (ExpectedOpMapHash ^ Mix) * Schedule.HashPrime;
     }
 
-    InterpreterInstance Interp = createInterpreter(M, F, ExpectedOpMapHash);
+    InterpreterInstance Interp =
+        createInterpreter(M, F, ExpectedOpMapHash, OpcodeRuntimeTokens);
     F.removeFnAttr(Attribute::AlwaysInline);
     F.removeFnAttr(Attribute::InlineHint);
     F.addFnAttr(Attribute::NoInline);
