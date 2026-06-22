@@ -481,7 +481,7 @@ Main weakness: should become more polymorphic and better tested.
 
 ## Level 2 — Stronger Global Access
 
-* [ ] Add fake global entries
+* [x] Add fake global entries
 * [ ] Add shuffled global table
 * [ ] Add per-function global cache
 * [ ] Add runtime nonce mixing
