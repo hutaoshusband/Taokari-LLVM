@@ -1391,8 +1391,8 @@ Purpose: maximum practical protection for sensitive functions only.
 * [ ] Function outlining L3
 * [ ] Dynamic protections L3
 * [ ] Optional virtualization L3
-* [ ] Full benchmark required
-* [ ] Full regression suite required
+* [x] Full benchmark required
+* [x] Full regression suite required
 
 ---
 
