@@ -62,19 +62,20 @@ def frame_layout(ir_text: str) -> tuple[tuple[int, int, int, int], tuple[str, ..
   body = interpreter_body(ir_text)
   gate(bool(body), "VMP interpreter body present in IR")
   matches = re.findall(
-      r"%(stack|locals|frame|callargs)\d*\s*=\s*alloca \[(\d+) x i64\]",
+      r"%(stack\.[ab]|locals|frame|callargs)\d*\s*=\s*alloca \[(\d+) x i64\]",
       body)
   found = {
       name: int(size)
       for name, size in matches
   }
-  missing = {"stack", "locals", "frame", "callargs"} - set(found)
+  missing = {"stack.a", "stack.b", "locals", "frame", "callargs"} - set(found)
   if missing:
     for line in body.splitlines():
       if "alloca" in line:
         print(f"    {line.strip()}")
   gate(not missing, f"all frame regions have explicit sizes (missing {missing})")
-  sizes = (found["stack"], found["locals"], found["frame"], found["callargs"])
+  sizes = (found["stack.a"] + found["stack.b"], found["locals"],
+           found["frame"], found["callargs"])
   order = tuple(name for name, _ in matches)
   return sizes, order
 
@@ -96,8 +97,12 @@ def main() -> int:
   gate(CLANG.exists(), f"local clang exists at {CLANG}")
 
   source_text = SOURCE_PATH.read_text(encoding="utf-8", errors="ignore")
+  gate('"stack.a"' in source_text and '"stack.b"' in source_text,
+       "operand stack is split across two alloca regions")
+  gate("stackSlot(" in source_text and "C.StackTail" in source_text,
+       "operand stack helpers select between split regions")
   for region, size in (
-      ("stack", 64), ("locals", 64), ("frame", 64), ("callargs", 8)
+      ("locals", 64), ("frame", 64), ("callargs", 8)
   ):
     fixed = (
         f'CreateAlloca(I64, ConstantInt::get(I64, {size}), "{region}")'
@@ -116,6 +121,9 @@ def main() -> int:
        f"frame-region size tuple varies across compiler runs: {size_samples}")
   gate(len(set(order_samples)) >= 2,
        f"frame-region order varies across compiler runs: {order_samples}")
+  gate(any(abs(order.index("stack.a") - order.index("stack.b")) > 1
+           for order in order_samples),
+       f"stack halves can be non-contiguous: {order_samples}")
   for stack, locals_, frame, callargs in size_samples:
     gate(64 <= stack <= 128, f"stack size {stack} is within 64..128")
     gate(64 <= locals_ <= 128, f"locals size {locals_} is within 64..128")
