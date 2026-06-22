@@ -1886,6 +1886,8 @@ struct CodeVirtualization : public ModulePass {
     Value *LocalsTail;
     Value *LocalsSplit;
     Value *Frame;
+    Value *FrameTail;
+    Value *FrameSplit;
     Value *CallArgs;
     GlobalVariable *CalleeTable;
     unsigned CalleeCount;
@@ -1916,6 +1918,14 @@ struct CodeVirtualization : public ModulePass {
     Value *HeadPtr = B.CreateGEP(C.I64, C.Locals, Idx, "loc.a.ptr");
     Value *TailPtr = B.CreateGEP(C.I64, C.LocalsTail, TailIdx, "loc.b.ptr");
     return B.CreateSelect(UseHead, HeadPtr, TailPtr, "loc.ptr");
+  }
+
+  Value *frameSlot(IRBuilder<> &B, InterpCtx &C, Value *Idx) {
+    Value *UseHead = B.CreateICmpULT(Idx, C.FrameSplit);
+    Value *TailIdx = B.CreateSub(Idx, C.FrameSplit);
+    Value *HeadPtr = B.CreateGEP(C.I64, C.Frame, Idx, "frm.a.ptr");
+    Value *TailPtr = B.CreateGEP(C.I64, C.FrameTail, TailIdx, "frm.b.ptr");
+    return B.CreateSelect(UseHead, HeadPtr, TailPtr, "frm.ptr");
   }
 
   void branchIfFalse(IRBuilder<> &B, InterpCtx &C, Value *Ok) {
@@ -2229,8 +2239,8 @@ struct CodeVirtualization : public ModulePass {
                    branchIfFalse(B, C,
                                  B.CreateICmpULT(FrameIdx,
                                                  ConstantInt::get(C.I64, 64)));
-                   Value *V = B.CreateLoad(C.I64,
-                                           B.CreateGEP(C.I64, C.Frame, FrameIdx));
+                   Value *V =
+                       B.CreateLoad(C.I64, frameSlot(B, C, FrameIdx));
                    pushStk(B, C, narrowTo(B, C, V, Ty));
                    B.CreateBr(C.Dispatch);
                  }});
@@ -2243,8 +2253,7 @@ struct CodeVirtualization : public ModulePass {
                                  B.CreateICmpULT(FrameIdx,
                                                  ConstantInt::get(C.I64, 64)));
                    Value *Narrowed = narrowTo(B, C, V, Ty);
-                   B.CreateStore(Narrowed,
-                                 B.CreateGEP(C.I64, C.Frame, FrameIdx));
+                   B.CreateStore(Narrowed, frameSlot(B, C, FrameIdx));
                    B.CreateBr(C.Dispatch);
                  }});
     H.push_back({OpLoadMem, "loadmem", shapeOf(OpLoadMem),
@@ -2813,15 +2822,22 @@ struct CodeVirtualization : public ModulePass {
     auto *LocalsHeadSlots = ConstantInt::get(I64, LocalsSplit);
     auto *LocalsTailSlots = ConstantInt::get(I64, LocalsTotal - LocalsSplit);
     auto *LocalsSplitValue = ConstantInt::get(I64, LocalsSplit);
-    auto *FrameSlots = RandomSlots(64, 64);
+    uint64_t FrameTotal = 64 + (RNG() % 65);
+    uint64_t FrameSplit = 16 + (RNG() % 33);
+    if (FrameSplit >= FrameTotal)
+      FrameSplit = FrameTotal / 2;
+    auto *FrameHeadSlots = ConstantInt::get(I64, FrameSplit);
+    auto *FrameTailSlots = ConstantInt::get(I64, FrameTotal - FrameSplit);
+    auto *FrameSplitValue = ConstantInt::get(I64, FrameSplit);
     auto *CallArgSlots = RandomSlots(8, 8);
     AllocaInst *Stack = nullptr;
     AllocaInst *StackTail = nullptr;
     AllocaInst *Locals = nullptr;
     AllocaInst *LocalsTail = nullptr;
     AllocaInst *Frame = nullptr;
+    AllocaInst *FrameTail = nullptr;
     AllocaInst *CallArgs = nullptr;
-    SmallVector<unsigned, 6> FrameOrder = {0, 1, 2, 3, 4, 5};
+    SmallVector<unsigned, 7> FrameOrder = {0, 1, 2, 3, 4, 5, 6};
     for (unsigned I = FrameOrder.size() - 1; I > 0; --I)
       std::swap(FrameOrder[I], FrameOrder[RNG() % (I + 1)]);
     for (unsigned Region : FrameOrder) {
@@ -2833,7 +2849,7 @@ struct CodeVirtualization : public ModulePass {
         Locals = B.CreateAlloca(I64, LocalsHeadSlots, "locals.a");
         break;
       case 2:
-        Frame = B.CreateAlloca(I64, FrameSlots, "frame");
+        Frame = B.CreateAlloca(I64, FrameHeadSlots, "frame.a");
         break;
       case 3:
         CallArgs = B.CreateAlloca(I64, CallArgSlots, "callargs");
@@ -2843,6 +2859,9 @@ struct CodeVirtualization : public ModulePass {
         break;
       case 5:
         LocalsTail = B.CreateAlloca(I64, LocalsTailSlots, "locals.b");
+        break;
+      case 6:
+        FrameTail = B.CreateAlloca(I64, FrameTailSlots, "frame.b");
         break;
       }
     }
@@ -2891,7 +2910,8 @@ struct CodeVirtualization : public ModulePass {
     InterpCtx TagCtx{I64,   F,       &Ctx, BC,      BCTail, BCSplit, BCLen,
                      PCMap, PtrTable, PtrCount, PC, SP,     Stack,
                      StackTail, StackSplitValue, Locals, LocalsTail,
-                     LocalsSplitValue, Frame, CallArgs, CalleeTable,
+                     LocalsSplitValue, Frame, FrameTail, FrameSplitValue,
+                     CallArgs, CalleeTable,
                      static_cast<unsigned>(CalleeOrder.size()), Args, ArgLen,
                      TamperFlag, ExpectedTag, OpcodeMap, BytecodeKey, PcKey,
                      StackKey, Dispatch, Bad,
@@ -2985,7 +3005,8 @@ struct CodeVirtualization : public ModulePass {
     InterpCtx IC{I64,   F,       &Ctx, BC,      BCTail, BCSplit, BCLen,
                  PCMap, PtrTable, PtrCount, PC, SP,     Stack,
                  StackTail, StackSplitValue, Locals, LocalsTail,
-                 LocalsSplitValue, Frame, CallArgs, CalleeTable,
+                 LocalsSplitValue, Frame, FrameTail, FrameSplitValue,
+                 CallArgs, CalleeTable,
                  static_cast<unsigned>(CalleeOrder.size()), Args, ArgLen,
                  TamperFlag, ExpectedTag, OpcodeMap, BytecodeKey, PcKey,
                  StackKey, Dispatch, Bad, M.getDataLayout().isLittleEndian()};

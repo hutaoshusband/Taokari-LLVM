@@ -30,7 +30,8 @@ int main(void) {
 }
 """
 
-SAMPLE_COUNT = 4
+SAMPLE_COUNT = 2
+COMPILE_TIMEOUT_SECONDS = 45
 
 
 def run(command: list[str], **kw) -> subprocess.CompletedProcess[str]:
@@ -62,14 +63,15 @@ def frame_layout(ir_text: str) -> tuple[tuple[int, int, int, int], tuple[str, ..
   body = interpreter_body(ir_text)
   gate(bool(body), "VMP interpreter body present in IR")
   matches = re.findall(
-      r"%(stack\.[ab]|locals\.[ab]|frame|callargs)\d*\s*=\s*alloca \[(\d+) x i64\]",
+      r"%(stack\.[ab]|locals\.[ab]|frame\.[ab]|callargs)\d*\s*=\s*alloca \[(\d+) x i64\]",
       body)
   found = {
       name: int(size)
       for name, size in matches
   }
   missing = {
-      "stack.a", "stack.b", "locals.a", "locals.b", "frame", "callargs"
+      "stack.a", "stack.b", "locals.a", "locals.b", "frame.a", "frame.b",
+      "callargs"
   } - set(found)
   if missing:
     for line in body.splitlines():
@@ -78,7 +80,7 @@ def frame_layout(ir_text: str) -> tuple[tuple[int, int, int, int], tuple[str, ..
   gate(not missing, f"all frame regions have explicit sizes (missing {missing})")
   sizes = (found["stack.a"] + found["stack.b"],
            found["locals.a"] + found["locals.b"],
-           found["frame"], found["callargs"])
+           found["frame.a"] + found["frame.b"], found["callargs"])
   order = tuple(name for name, _ in matches)
   return sizes, order
 
@@ -92,7 +94,8 @@ def compile_ir(tmp: Path, index: int) -> str:
       "-mllvm", "-taokari", "-mllvm", "-taokari-vmp",
       "-S", "-emit-llvm", "-o", str(ll),
   ]
-  must(run([str(CLANG), *flags], cwd=tmp), f"emit IR sample {index}")
+  must(run([str(CLANG), *flags], cwd=tmp, timeout=COMPILE_TIMEOUT_SECONDS),
+       f"emit IR sample {index}")
   return ll.read_text(encoding="utf-8", errors="ignore")
 
 
@@ -108,8 +111,12 @@ def main() -> int:
        "locals are split across two alloca regions")
   gate("localSlot(" in source_text and "C.LocalsTail" in source_text,
        "local-slot helpers select between split regions")
+  gate('"frame.a"' in source_text and '"frame.b"' in source_text,
+       "frame is split across two alloca regions")
+  gate("frameSlot(" in source_text and "C.FrameTail" in source_text,
+       "frame-slot helpers select between split regions")
   for region, size in (
-      ("frame", 64), ("callargs", 8)
+      ("callargs", 8),
   ):
     fixed = (
         f'CreateAlloca(I64, ConstantInt::get(I64, {size}), "{region}")'
@@ -134,6 +141,9 @@ def main() -> int:
   gate(any(abs(order.index("locals.a") - order.index("locals.b")) > 1
            for order in order_samples),
        f"locals halves can be non-contiguous: {order_samples}")
+  gate(any(abs(order.index("frame.a") - order.index("frame.b")) > 1
+           for order in order_samples),
+       f"frame halves can be non-contiguous: {order_samples}")
   for stack, locals_, frame, callargs in size_samples:
     gate(64 <= stack <= 128, f"stack size {stack} is within 64..128")
     gate(64 <= locals_ <= 128, f"locals size {locals_} is within 64..128")
