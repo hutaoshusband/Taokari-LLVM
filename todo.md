@@ -448,7 +448,7 @@ Main weakness: no AArch64 parity test and limited fake target noise.
 ## Level 3 — Fortress Indirect Branches
 
 * [x] Add per-function branch table variants
-* [ ] Add multiple decrypt formulas
+* [x] Add multiple decrypt formulas
 * [ ] Add bogus branch destinations
 * [ ] Add trap destinations
 * [ ] Add fake recovery paths
