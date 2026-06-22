@@ -266,7 +266,7 @@ Example identities:
 * [x] Add MBA on constant decryptors
 * [x] Add MBA on string decryptors
 * [x] Add MBA on page-table decryptors
-* [ ] Add solver-resistance samples
+* [x] Add solver-resistance samples
 * [ ] Add overhead budget system
 * [ ] Add hot-loop avoidance
 * [x] Add performance profile tests
