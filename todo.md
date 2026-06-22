@@ -1462,16 +1462,16 @@ Purpose: maximum practical protection for sensitive functions only.
 
 Most impact for Taokari first:
 
-1. [ ] Opaque predicate engine
-2. [ ] Bogus control flow
-3. [ ] Stronger flattening
-4. [ ] Runtime-mixed constant encryption
-5. [ ] StringEnc status hardening
-6. [ ] MBA pass
-7. [ ] Metadata stripping
+1. [x] Opaque predicate engine
+2. [x] Bogus control flow
+3. [x] Stronger flattening
+4. [x] Runtime-mixed constant encryption
+5. [x] StringEnc status hardening
+6. [x] MBA pass
+7. [x] Metadata stripping
 8. [ ] Function outlining
 9. [ ] Dynamic protections
-10. [ ] Optional virtualization
+10. [x] Optional virtualization
 
 ---
 
