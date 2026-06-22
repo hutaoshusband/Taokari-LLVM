@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <memory>
 #include <random>
+#include <string>
 
 #define DEBUG_TYPE "flattening"
 
@@ -179,6 +180,10 @@ bool Flattening::flatten(Function *f) {
   };
 
   const uint64_t functionStateKey = randWord();
+  const std::string nameTag = "." + std::to_string(functionStateKey);
+  auto bbName = [&](StringRef Prefix) {
+    return (Prefix + Twine(nameTag)).str();
+  };
   auto randStateKey = [&]() -> ConstantInt * {
     return ConstantInt::get(IntTy, randWord() ^ functionStateKey);
   };
@@ -298,9 +303,9 @@ bool Flattening::flatten(Function *f) {
 
   // Create main loop
   auto bbLoopEntry =
-      BasicBlock::Create(f->getContext(), "loopEntry", f, insertBlock);
+      BasicBlock::Create(f->getContext(), bbName("loopEntry"), f, insertBlock);
   auto bbLoopEnd =
-      BasicBlock::Create(f->getContext(), "loopEnd", f, insertBlock);
+      BasicBlock::Create(f->getContext(), bbName("loopEnd"), f, insertBlock);
 
   // loopEntry
   IRB.SetInsertPoint(bbLoopEntry);
@@ -327,24 +332,31 @@ bool Flattening::flatten(Function *f) {
   BranchInst::Create(bbLoopEntry, bbLoopEnd);
 
   auto swDefault =
-      BasicBlock::Create(f->getContext(), "switchDefault", f, bbLoopEnd);
+      BasicBlock::Create(f->getContext(), bbName("switchDefault"), f,
+                         bbLoopEnd);
   auto swFakeCaseGate =
-      BasicBlock::Create(f->getContext(), "switchFakeCaseGate", f, bbLoopEnd);
+      BasicBlock::Create(f->getContext(), bbName("switchFakeCaseGate"), f,
+                         bbLoopEnd);
   auto swFakeSucc0 =
       fortressMode
-          ? BasicBlock::Create(f->getContext(), "switchFakeSucc0", f, bbLoopEnd)
+          ? BasicBlock::Create(f->getContext(), bbName("switchFakeSucc0"), f,
+                               bbLoopEnd)
           : nullptr;
   auto swFakeSucc1 =
       fortressMode
-          ? BasicBlock::Create(f->getContext(), "switchFakeSucc1", f, bbLoopEnd)
+          ? BasicBlock::Create(f->getContext(), bbName("switchFakeSucc1"), f,
+                               bbLoopEnd)
           : nullptr;
   auto swFakeSucc2 =
       fortressMode
-          ? BasicBlock::Create(f->getContext(), "switchFakeSucc2", f, bbLoopEnd)
+          ? BasicBlock::Create(f->getContext(), bbName("switchFakeSucc2"), f,
+                               bbLoopEnd)
           : nullptr;
   auto swDefaultJunk =
-      BasicBlock::Create(f->getContext(), "switchDefaultJunk", f, bbLoopEnd);
-  auto swTrap = BasicBlock::Create(f->getContext(), "switchTrap", f, bbLoopEnd);
+      BasicBlock::Create(f->getContext(), bbName("switchDefaultJunk"), f,
+                         bbLoopEnd);
+  auto swTrap =
+      BasicBlock::Create(f->getContext(), bbName("switchTrap"), f, bbLoopEnd);
   IRB.SetInsertPoint(swDefault);
   Value *junkA = IRB.CreateXor(randConst(), randConst(), "defaultJunkA");
   Value *junkB = IRB.CreateAdd(junkA, randConst(), "defaultJunkB");
@@ -402,13 +414,14 @@ bool Flattening::flatten(Function *f) {
   if (fortressMode) {
     auto dispatchLayout = RNG() % 4;
     switchBlock =
-        BasicBlock::Create(f->getContext(), "switchDispatch", f, bbLoopEnd);
+        BasicBlock::Create(f->getContext(), bbName("switchDispatch"), f,
+                           bbLoopEnd);
 
     if (dispatchLayout == 0) {
       BranchInst::Create(switchBlock, bbLoopEntry);
     } else if (dispatchLayout == 1) {
       auto dispatchGate = BasicBlock::Create(
-          f->getContext(), "switchDispatchGate", f, bbLoopEnd);
+          f->getContext(), bbName("switchDispatchGate"), f, bbLoopEnd);
       IRB.SetInsertPoint(bbLoopEntry);
       IRB.CreateCondBr(buildOpaqueTrue(IRB, "dispatchGate.pred"), dispatchGate,
                        swFakeCaseGate);
@@ -419,7 +432,7 @@ bool Flattening::flatten(Function *f) {
       IRB.CreateBr(switchBlock);
     } else if (dispatchLayout == 2) {
       auto nestedOuter = BasicBlock::Create(
-          f->getContext(), "switchNestedDispatch", f, bbLoopEnd);
+          f->getContext(), bbName("switchNestedDispatch"), f, bbLoopEnd);
       IRB.SetInsertPoint(bbLoopEntry);
       IRB.CreateBr(nestedOuter);
       IRB.SetInsertPoint(nestedOuter);
@@ -428,9 +441,9 @@ bool Flattening::flatten(Function *f) {
       outerSwitch->addCase(ConstantInt::get(IntTy, 0), switchBlock);
     } else {
       auto dispatchGateA = BasicBlock::Create(
-          f->getContext(), "switchDispatchGateA", f, bbLoopEnd);
+          f->getContext(), bbName("switchDispatchGateA"), f, bbLoopEnd);
       auto dispatchGateB = BasicBlock::Create(
-          f->getContext(), "switchDispatchGateB", f, bbLoopEnd);
+          f->getContext(), bbName("switchDispatchGateB"), f, bbLoopEnd);
       IRB.SetInsertPoint(bbLoopEntry);
       IRB.CreateCondBr(buildOpaqueTrue(IRB, "dispatchGateA.pred"),
                        dispatchGateA, swFakeCaseGate);
@@ -486,7 +499,7 @@ bool Flattening::flatten(Function *f) {
         continue;
       }
       ValueToValueMapTy VMap;
-      BasicBlock *Clone = CloneBasicBlock(BB, VMap, ".tao.clone", f);
+      BasicBlock *Clone = CloneBasicBlock(BB, VMap, ".tao.clone" + nameTag, f);
       for (Instruction &I : *Clone) {
         RemapInstruction(&I, VMap,
                          RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
@@ -567,11 +580,13 @@ bool Flattening::flatten(Function *f) {
         for (size_t i = 0; i < LiveBuckets.size(); ++i) {
           const size_t bucket = LiveBuckets[i];
           BasicBlock *bucketBody =
-              BasicBlock::Create(Ctx, "switchBucketBody", f, bbLoopEnd);
+              BasicBlock::Create(Ctx, bbName("switchBucketBody"), f,
+                                 bbLoopEnd);
           BasicBlock *nextBucket =
               i + 1 == LiveBuckets.size()
                   ? swDefault
-                  : BasicBlock::Create(Ctx, "switchBucketProbe", f, bbLoopEnd);
+                  : BasicBlock::Create(Ctx, bbName("switchBucketProbe"), f,
+                                       bbLoopEnd);
 
           IRB.SetInsertPoint(bucketProbe);
           Value *bucketHit = IRB.CreateICmpEQ(
@@ -584,7 +599,7 @@ bool Flattening::flatten(Function *f) {
             BasicBlock *nextCase =
                 j + 1 == Buckets[bucket].size()
                     ? swDefault
-                    : BasicBlock::Create(Ctx, "switchDispatchProbe", f,
+                    : BasicBlock::Create(Ctx, bbName("switchDispatchProbe"), f,
                                          bbLoopEnd);
             Value *hit = IRB.CreateICmpEQ(
                 switchCondition, Buckets[bucket][j].first, "switchHit");

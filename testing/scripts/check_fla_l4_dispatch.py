@@ -51,6 +51,8 @@ def check_source_shapes() -> None:
     assert "auto dispatchLayout = RNG() % 4" in source, "FLA dispatch layout family was not widened"
     assert "fortressMode ? RNG() % 7 : RNG() % 4" in source, "FLA next-key family was not widened"
     assert "switchDispatchGateB" in source, "FLA fourth dispatch layout is missing"
+    assert 'bbName("switchDispatch")' in source, "FLA dispatch block names are not suffixed"
+    assert '".tao.clone" + nameTag' in source, "FLA clone names are not suffixed"
 
 
 def compile_and_check(out: Path, name: str, extra_flags: list[str], want_indirectbr: bool) -> None:
@@ -62,6 +64,8 @@ def compile_and_check(out: Path, name: str, extra_flags: list[str], want_indirec
     ir = ll.read_text(encoding="utf-8", errors="ignore")
     assert "switch i" not in ir, f"{name}: level-4 dispatcher still emits LLVM switch"
     assert "br i1" in ir, f"{name}: level-4 compare/branch dispatcher missing"
+    assert "loopEntry." in ir, f"{name}: loop block suffix missing"
+    assert "switchDefault." in ir, f"{name}: switch block suffix missing"
     assert ir.count("switchHit") >= 20, f"{name}: level-4 sparse/fake case density too low"
     if want_indirectbr:
         assert "indirectbr" in ir, f"{name}: indirectbr dispatcher missing"
