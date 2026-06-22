@@ -101,13 +101,11 @@ Value *frameAddress(IRBuilder<> &IRB, const Twine &Name) {
   return FP;
 }
 
-/// Lazy lookup/create of the module-wide nonce global + its one-shot
-/// initializer. The global is mutable (NOT constant), initialised from
-/// `frameaddress` inside a function that runs in a `llvm.global_ctors` entry,
-/// so the value is only known at runtime. The obfuscator never writes a
-/// known initializer, which is what blocks constant folding.
+/// Lazy lookup/create of the module-wide nonce global. The global is mutable
+/// and read through a volatile load, so callers keep a runtime dependency.
 GlobalVariable *getOrCreateRuntimeNonce(Module &M, IRBuilder<> &IRB,
                                         IntegerType *IntTy,
+                                        std::mt19937_64 &RNG,
                                         const Twine &Name) {
   // The nonce is keyed off the requested integer width so different callers
   // share a single global of matching width. Multiple widths produce a few
@@ -118,7 +116,7 @@ GlobalVariable *getOrCreateRuntimeNonce(Module &M, IRBuilder<> &IRB,
   if (GV)
     return GV;
 
-  auto *Init = ConstantInt::get(IntTy, 0x9E3779B97F4A7C15ull);
+  auto *Init = randomInt(IntTy, RNG);
   GV = new GlobalVariable(M, IntTy, /*isConstant=*/false,
                           GlobalValue::PrivateLinkage, Init, GVName);
   GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
@@ -181,7 +179,7 @@ Value *taokari::makeContextSeed(Function &F, IRBuilder<> &IRB,
 
   case OpaqueSeedKind::RuntimeNonce: {
     auto &M = *F.getParent();
-    GlobalVariable *GV = getOrCreateRuntimeNonce(M, IRB, IntTy, Name);
+    GlobalVariable *GV = getOrCreateRuntimeNonce(M, IRB, IntTy, RNG, Name);
     return makeVolatileLoad(IRB, IntTy, GV, Name);
   }
   }
