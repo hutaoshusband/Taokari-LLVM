@@ -1,0 +1,88 @@
+{
+  "randomSeed": "0000000000000000",
+  "fla": {
+    "enable": false,
+    "level": 0,
+    "maxInsts": 4000,
+    "maxBlocks": 200,
+    "maxAllocas": 64
+  },
+  "bcf": {
+    "enable": false,
+    "level": 0,
+    "probability": 0,
+    "functionProbability": 50,
+    "loopCount": 1,
+    "maxInsts": 4000,
+    "maxBlocks": 200,
+    "maxAllocas": 64
+  },
+  "mba": {
+    "enable": false,
+    "level": 0,
+    "probability": 40,
+    "functionProbability": 100,
+    "maxInsts": 4000,
+    "maxBlocks": 200,
+    "maxAllocas": 64
+  },
+  "icall": {
+    "enable": false,
+    "level": 0,
+    "probability": 100,
+    "functionProbability": 100,
+    "maxInsts": 4000,
+    "maxBlocks": 200,
+    "maxAllocas": 64
+  },
+  "indbr": {
+    "enable": false,
+    "level": 0,
+    "maxInsts": 4000,
+    "maxBlocks": 200,
+    "maxAllocas": 64
+  },
+  "indgv": {
+    "enable": false,
+    "level": 0,
+    "maxInsts": 4000,
+    "maxBlocks": 200,
+    "maxAllocas": 64
+  },
+  "cie": {
+    "enable": false,
+    "level": 0,
+    "minConstSize": 0,
+    "maxInsts": 4000,
+    "maxBlocks": 200,
+    "maxAllocas": 64
+  },
+  "cfe": {
+    "enable": false,
+    "level": 0,
+    "minConstSize": 0,
+    "maxInsts": 4000,
+    "maxBlocks": 200,
+    "maxAllocas": 64
+  },
+  "cse": {
+    "enable": false,
+    "level": 0,
+    "minStringLength": 0,
+    "localStackDecrypt": false,
+    "heapDecrypt": false,
+    "reencryptAfterUse": false,
+    "volatileSeed": false,
+    "decryptorMba": false,
+    "maxInsts": 4000,
+    "maxBlocks": 200,
+    "maxAllocas": 64
+  },
+  "meta": {
+    "enable": false,
+    "level": 0,
+    "releaseStrip": false,
+    "randomizeSections": false,
+    "exportAllowlist": []
+  }
+}

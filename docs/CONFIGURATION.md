@@ -168,7 +168,12 @@ flattening for it, regardless of the JSON config.
 
 ## Validation
 
-Unknown keys in the JSON config are silently ignored today. Future
-work (todo.md item 14.L1: "Add config validation" and "Add error
-messages for invalid keys") will warn on unknown keys and reject
-malformed values up front.
+Unknown top-level nodes and unknown per-pass keys both emit a warning
+to `stderr` at config-load time (`warning: unknown taokari config
+key: <pass>.<key>`), so typos surface during the build instead of
+silently being ignored.
+
+A complete reference config covering every pass with conservative
+defaults lives at
+[`testing/configs/taokari-default.json`](../testing/configs/taokari-default.json).
+Copy it as a starting point and edit per build.
