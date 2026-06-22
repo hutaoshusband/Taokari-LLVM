@@ -1,4 +1,4 @@
-"""Verifier for randomized VMP interpreter dummy arguments."""
+"""Verifier for randomized VMP interpreter signature layout."""
 from __future__ import annotations
 
 import re
@@ -57,6 +57,11 @@ def interpreter_params(ir_text: str) -> tuple[str, ...]:
   return tuple(params)
 
 
+def param_name(param: str) -> str:
+  match = re.search(r"%([A-Za-z0-9_.]+)$", param)
+  return match.group(1) if match else ""
+
+
 def compile_ir(tmp: Path, index: int) -> str:
   src = tmp / f"vmp_sig_dummy_{index}.c"
   ll = tmp / f"vmp_sig_dummy_{index}.ll"
@@ -75,6 +80,8 @@ def main() -> int:
 
   source_text = SOURCE_PATH.read_text(encoding="utf-8", errors="ignore")
   gate("InterpParam::Dummy" in source_text, "dummy parameter role exists")
+  gate("std::swap(ParamLayout" in source_text,
+       "real interpreter parameters are shuffled")
   gate("ParamLayout.insert" in source_text,
        "dummy parameters are inserted into the interpreter layout")
 
@@ -88,21 +95,32 @@ def main() -> int:
   gate(all(12 <= count <= 15 for count in counts),
        f"interpreter arity includes 1..4 dummy args: {counts}")
   dummy_positions: list[tuple[int, ...]] = []
+  real_orders: list[tuple[str, ...]] = []
+  old_order = (
+      "bc", "bclen", "pc.map", "ptr.table", "ptr.count", "args", "arg.len",
+      "tamper", "bytecode.tag", "opcode.map", "bytecode.key")
   for params in samples:
+    names = tuple(param_name(param) for param in params)
     positions = tuple(
-        i for i, param in enumerate(params) if "vmp.dummy" in param)
+        i for i, name in enumerate(names) if name.startswith("vmp.dummy"))
     dummy_positions.append(positions)
+    real_order = tuple(name for name in names if not name.startswith("vmp.dummy"))
+    real_orders.append(real_order)
     gate(positions, f"dummy arg present at position(s) {positions}")
     gate(len(positions) == len(params) - 11,
          f"dummy count matches arity delta for {len(params)} args")
+    gate(real_order != old_order,
+         f"real interpreter parameter order differs from old ABI: {real_order}")
 
   gate(len(set(dummy_positions)) >= 2,
        f"dummy positions vary across compiler runs: {dummy_positions}")
+  gate(len(set(real_orders)) >= 2,
+       f"real parameter order varies across compiler runs: {real_orders}")
   gate(any(pos and pos[-1] != len(samples[i]) - 1
            for i, pos in enumerate(dummy_positions)),
        "at least one sample inserts a dummy before the final argument")
 
-  print("vmp interpreter dummy-argument verifier: ok")
+  print("vmp interpreter signature-layout verifier: ok")
   return 0
 
 

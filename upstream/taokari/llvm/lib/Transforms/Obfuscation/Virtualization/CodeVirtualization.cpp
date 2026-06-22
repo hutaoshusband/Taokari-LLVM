@@ -2607,9 +2607,9 @@ struct CodeVirtualization : public ModulePass {
     Type *I64 = Type::getInt64Ty(Ctx);
     Type *I8 = Type::getInt8Ty(Ctx);
     Type *Ptr = PointerType::getUnqual(Ctx);
-    // The real argument order is fixed inside ParamLayout, but dummy i64
-    // slots are inserted at random positions so the visible interpreter
-    // signature no longer has a stable arity or type layout. bcLen is the
+    // ParamLayout drives both the interpreter signature and the wrapper call.
+    // Shuffling it keeps semantics intact while changing the visible
+    // interpreter ABI. bcLen is the
     // bytecode word count; the dispatch loop checks PC < bcLen before each
     // fetch so a corrupted PC (relevant once L2 encrypts the bytecode) faults
     // to the Bad block instead of reading out of bounds.
@@ -2618,6 +2618,8 @@ struct CodeVirtualization : public ModulePass {
         InterpParam::PtrTable, InterpParam::PtrCount, InterpParam::Args,
         InterpParam::ArgLen,   InterpParam::Tamper,   InterpParam::Tag,
         InterpParam::OpcodeMap, InterpParam::Key};
+    for (unsigned I = ParamLayout.size() - 1; I > 0; --I)
+      std::swap(ParamLayout[I], ParamLayout[RNG() % (I + 1)]);
     unsigned DummyCount = 1 + static_cast<unsigned>(RNG() % 4);
     for (unsigned I = 0; I < DummyCount; ++I) {
       unsigned Pos = static_cast<unsigned>(RNG() % (ParamLayout.size() + 1));
