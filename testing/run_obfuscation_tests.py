@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import shutil
 import subprocess
@@ -401,6 +402,9 @@ def main() -> int:
                         help="disable the RTTI eraser")
     parser.add_argument("--benchmark-out", type=Path,
                         help="write plain-vs-obfuscated compile/runtime/size CSV")
+    parser.add_argument("--benchmark-json", type=Path,
+                        help="write the same plain-vs-obfuscated measurements "
+                             "as JSON (one record per mode/case)")
     args = parser.parse_args()
 
     clang = args.clang.resolve()
@@ -429,7 +433,7 @@ def main() -> int:
             tag = f"{mode}/{case.name}"
             log("RUN", tag, "yellow")
             try:
-                if args.benchmark_out:
+                if args.benchmark_out or args.benchmark_json:
                     start = time.perf_counter()
                     plain_exe = compile_case(driver, case, mode, obfuscate=False)
                     plain_compile = time.perf_counter() - start
@@ -481,7 +485,12 @@ def main() -> int:
             writer.writeheader()
             writer.writerows(benchmark_rows)
         log("BENCH", str(args.benchmark_out), "green")
-    if not args.case and not args.benchmark_out:
+    if args.benchmark_json and benchmark_rows:
+        args.benchmark_json.parent.mkdir(parents=True, exist_ok=True)
+        with args.benchmark_json.open("w", encoding="utf-8") as handle:
+            json.dump(benchmark_rows, handle, indent=2)
+        log("BENCH", str(args.benchmark_json), "green")
+    if not args.case and not args.benchmark_out and not args.benchmark_json:
         failures += run_release_gates(keep_going=args.keep_going)
     return 1 if failures else 0
 

@@ -1270,15 +1270,15 @@ This is required before Taokari can become serious.
 
 ## Level 2 — Measure Costs
 
-* [ ] Record binary size
-* [ ] Record compile time
-* [ ] Record runtime
+* [x] Record binary size
+* [x] Record compile time
+* [x] Record runtime
 * [ ] Record number of transformed functions
 * [ ] Record number of transformed instructions
 * [ ] Record number of obfuscated strings
 * [ ] Record number of obfuscated constants
-* [ ] Add CSV output
-* [ ] Add JSON output
+* [x] Add CSV output
+* [x] Add JSON output
 
 ## Level 3 — Attack-Oriented Verification
 
