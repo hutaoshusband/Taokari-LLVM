@@ -208,7 +208,13 @@ struct BogusControlFlow : public FunctionPass {
     // against a runtime volatile-loaded bound; the body is the same
     // xor/mul/add chain as the linear version, so the CFG now carries
     // a fake loop header + latch in addition to the junk math.
-    if (Level >= 3 && Loops > 1) {
+    // Skip the loop shape on functions that participate in EH (any
+    // funclet or personality): a cloned fake block in an EH function
+    // can inherit funclet colouring, and the extra back-edge then
+    // breaks liveness during codegen. The linear junk chain remains
+    // safe because it stays in one block.
+    bool InEHFunction = Fake.getParent()->hasPersonalityFn();
+    if (Level >= 3 && Loops > 1 && !InEHFunction) {
       addJunkLoop(Fake, Real, Nonce, JunkSlot, Loops, FuncRNG);
       return;
     }
