@@ -251,7 +251,7 @@ Example identities:
 
 * [x] Add multiple MBA rounds
 * [x] Add random identity selection
-* [ ] Add opaque constants inside MBA
+* [x] Add opaque constants inside MBA
 * [x] Add runtime nonce mixing
 * [ ] Add optional `optnone` helper wrappers
 * [x] Add InstCombine survival tests
