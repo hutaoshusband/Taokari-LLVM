@@ -17,7 +17,16 @@ OUT = ROOT / "build" / "vmp-validation"
 VSDEVCMD = Path(
     r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
 )
-DIRTY = bytes.fromhex("9c 50 8a 04 24 34 a7 34 a7 3a 04 24 74 08 0f 0b eb fe cc f1 0f 0b 58 9d")
+DIRTY_STACK = bytes.fromhex(
+    "9c 50 51 48 89 e0 48 8d 48 01 48 0f af c1 a8 01 74 08 0f 0b eb fe cc f1 0f 0b 59 58 9d"
+)
+DIRTY_STACK_DEC = bytes.fromhex(
+    "9c 50 51 48 89 e0 48 8d 48 ff 48 0f af c1 a8 01 74 08 0f 0b eb fe cc f1 0f 0b 59 58 9d"
+)
+DIRTY_GUARDS = (DIRTY_STACK, DIRTY_STACK_DEC)
+OLD_DOUBLE_XOR_DIRTY = bytes.fromhex(
+    "9c 50 8a 04 24 34 a7 34 a7 3a 04 24 74 08 0f 0b eb fe cc f1 0f 0b 58 9d"
+)
 JUNK = bytes.fromhex("9c 50 80 34 24 5a 80 34 24 5a 58 9d")
 SUB = bytes.fromhex("9c 50 48 89 e0 48 8d 40 13 48 83 e8 13 58 9d")
 UNMODELLED = bytes.fromhex("9c 50 8a 04 24 34 3d 34 3d 3a 04 24 74 08 0f 01 c1 c4 e2 7d 18 c0 58 9d")
@@ -182,7 +191,6 @@ def require_max_bytes(path: Path) -> None:
     data = path.read_bytes()
     missing = [
         name for name, pattern in (
-            ("mir-dirtybytes", DIRTY),
             ("mir-junk", JUNK),
             ("mir-sub", SUB),
             ("mir-unmodelled", UNMODELLED),
@@ -193,6 +201,10 @@ def require_max_bytes(path: Path) -> None:
         )
         if pattern not in data
     ]
+    if not any(pattern in data for pattern in DIRTY_GUARDS):
+        missing.append("mir-dirtybytes")
+    if OLD_DOUBLE_XOR_DIRTY in data:
+        raise SystemExit(f"old double-xor dirtybytes survived in {path}")
     if missing:
         raise SystemExit(f"missing max-protection bytes in {path}: {', '.join(missing)}")
 

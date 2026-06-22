@@ -15,7 +15,16 @@ VSDEVCMD = Path(
     r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
 )
 
-DIRTY = bytes.fromhex("9c 50 8a 04 24 34 a7 34 a7 3a 04 24 74 08 0f 0b eb fe cc f1 0f 0b 58 9d")
+DIRTY_STACK = bytes.fromhex(
+    "9c 50 51 48 89 e0 48 8d 48 01 48 0f af c1 a8 01 74 08 0f 0b eb fe cc f1 0f 0b 59 58 9d"
+)
+DIRTY_STACK_DEC = bytes.fromhex(
+    "9c 50 51 48 89 e0 48 8d 48 ff 48 0f af c1 a8 01 74 08 0f 0b eb fe cc f1 0f 0b 59 58 9d"
+)
+DIRTY_GUARDS = (DIRTY_STACK, DIRTY_STACK_DEC)
+OLD_DOUBLE_XOR_DIRTY = bytes.fromhex(
+    "9c 50 8a 04 24 34 a7 34 a7 3a 04 24 74 08 0f 0b eb fe cc f1 0f 0b 58 9d"
+)
 JUNK = bytes.fromhex("9c 50 80 34 24 5a 80 34 24 5a 58 9d")
 SUB = bytes.fromhex("9c 50 48 89 e0 48 8d 40 13 48 83 e8 13 58 9d")
 
@@ -67,6 +76,11 @@ def require(data: bytes, pattern: bytes, name: str) -> None:
         raise SystemExit(f"missing {name} MIR bytes after IR passes")
 
 
+def require_any(data: bytes, patterns: tuple[bytes, ...], name: str) -> None:
+    if not any(pattern in data for pattern in patterns):
+        raise SystemExit(f"missing {name} MIR bytes after IR passes")
+
+
 def run_checks(tmp: Path) -> int:
     plain = tmp / "plain.exe"
     obf = tmp / "obf.exe"
@@ -83,7 +97,9 @@ def run_checks(tmp: Path) -> int:
         raise SystemExit(f"stdout mismatch: {plain_run.stdout!r} != {obf_run.stdout!r}")
 
     data = obj.read_bytes()
-    require(data, DIRTY, "dirtybytes")
+    require_any(data, DIRTY_GUARDS, "dirtybytes")
+    if OLD_DOUBLE_XOR_DIRTY in data:
+        raise SystemExit("old double-xor dirtybytes survived after IR passes")
     require(data, JUNK, "junk")
     require(data, SUB, "substitution")
 

@@ -16,7 +16,16 @@ VSDEVCMD = Path(
 )
 
 MARKER = bytes.fromhex("48 8d 40 00")
-DIRTY = bytes.fromhex("9c 50 8a 04 24 34 a7 34 a7 3a 04 24 74 08 0f 0b eb fe cc f1 0f 0b 58 9d")
+DIRTY_STACK = bytes.fromhex(
+    "9c 50 51 48 89 e0 48 8d 48 01 48 0f af c1 a8 01 74 08 0f 0b eb fe cc f1 0f 0b 59 58 9d"
+)
+DIRTY_STACK_DEC = bytes.fromhex(
+    "9c 50 51 48 89 e0 48 8d 48 ff 48 0f af c1 a8 01 74 08 0f 0b eb fe cc f1 0f 0b 59 58 9d"
+)
+DIRTY_GUARDS = (DIRTY_STACK, DIRTY_STACK_DEC)
+OLD_DOUBLE_XOR_DIRTY = bytes.fromhex(
+    "9c 50 8a 04 24 34 a7 34 a7 3a 04 24 74 08 0f 0b eb fe cc f1 0f 0b 58 9d"
+)
 JUNK = bytes.fromhex("9c 50 80 34 24 5a 80 34 24 5a 58 9d")
 SUB = bytes.fromhex("9c 50 48 89 e0 48 8d 40 13 48 83 e8 13 58 9d")
 
@@ -108,8 +117,18 @@ def assert_has(data: bytes, pattern: bytes, name: str) -> None:
         raise SystemExit(f"missing {name} pattern")
 
 
+def assert_has_any(data: bytes, patterns: tuple[bytes, ...], name: str) -> None:
+    if not any(pattern in data for pattern in patterns):
+        raise SystemExit(f"missing {name} pattern")
+
+
 def assert_not_has(data: bytes, pattern: bytes, name: str) -> None:
     if pattern in data:
+        raise SystemExit(f"unexpected {name} pattern")
+
+
+def assert_not_has_any(data: bytes, patterns: tuple[bytes, ...], name: str) -> None:
+    if any(pattern in data for pattern in patterns):
         raise SystemExit(f"unexpected {name} pattern")
 
 
@@ -131,34 +150,40 @@ def run_checks(tmp: Path) -> int:
         raise SystemExit(f"stdout mismatch: {plain_run.stdout!r} != {obf_run.stdout!r}")
 
     dirty_obj = compile_obj(src, tmp / "dirty.obj", "dirtybytes")
-    assert_has(dirty_obj, DIRTY, "dirtybytes")
+    assert_has_any(dirty_obj, DIRTY_GUARDS, "dirtybytes")
+    assert_not_has(dirty_obj, OLD_DOUBLE_XOR_DIRTY, "old double-xor dirtybytes")
     assert_not_has(dirty_obj, JUNK, "junk")
     assert_not_has(dirty_obj, SUB, "substitution")
 
     junk_obj = compile_obj(src, tmp / "junk.obj", "junk")
     assert_has(junk_obj, JUNK, "junk")
-    assert_not_has(junk_obj, DIRTY, "dirtybytes")
+    assert_not_has_any(junk_obj, DIRTY_GUARDS, "dirtybytes")
+    assert_not_has(junk_obj, OLD_DOUBLE_XOR_DIRTY, "old double-xor dirtybytes")
     assert_not_has(junk_obj, SUB, "substitution")
 
     sub_obj = compile_obj(src, tmp / "sub.obj", "sub")
     assert_has(sub_obj, SUB, "substitution")
-    assert_not_has(sub_obj, DIRTY, "dirtybytes")
+    assert_not_has_any(sub_obj, DIRTY_GUARDS, "dirtybytes")
+    assert_not_has(sub_obj, OLD_DOUBLE_XOR_DIRTY, "old double-xor dirtybytes")
     assert_not_has(sub_obj, JUNK, "junk")
 
     all_obj = compile_obj(src, tmp / "all.obj", "dirtybytes,junk,sub")
-    assert_has(all_obj, DIRTY, "dirtybytes")
+    assert_has_any(all_obj, DIRTY_GUARDS, "dirtybytes")
+    assert_not_has(all_obj, OLD_DOUBLE_XOR_DIRTY, "old double-xor dirtybytes")
     assert_has(all_obj, JUNK, "junk")
     assert_has(all_obj, SUB, "substitution")
     assert_not_has(all_obj, MARKER, "legacy marker")
 
     legacy_obj = compile_obj(src, tmp / "legacy.obj", "1")
     assert_has(legacy_obj, MARKER, "legacy marker")
-    assert_has(legacy_obj, DIRTY, "dirtybytes")
+    assert_has_any(legacy_obj, DIRTY_GUARDS, "dirtybytes")
+    assert_not_has(legacy_obj, OLD_DOUBLE_XOR_DIRTY, "old double-xor dirtybytes")
     assert_has(legacy_obj, JUNK, "junk")
     assert_has(legacy_obj, SUB, "substitution")
 
     annotated_obj = compile_obj(annotated_src, tmp / "annotated.obj", None)
-    assert_has(annotated_obj, DIRTY, "annotated dirtybytes")
+    assert_has_any(annotated_obj, DIRTY_GUARDS, "annotated dirtybytes")
+    assert_not_has(annotated_obj, OLD_DOUBLE_XOR_DIRTY, "old double-xor dirtybytes")
     assert_has(annotated_obj, JUNK, "annotated junk")
     assert_has(annotated_obj, SUB, "annotated substitution")
     assert_not_has(annotated_obj, MARKER, "legacy marker")
@@ -166,7 +191,9 @@ def run_checks(tmp: Path) -> int:
     llvm_ir = tmp / "input.O2.ll"
     clang(src, llvm_ir, "-O2", "-S", "-emit-llvm")
     ir_bytes = llvm_ir.read_bytes()
-    for name, pattern in {"dirtybytes": DIRTY, "junk": JUNK, "substitution": SUB}.items():
+    assert_not_has_any(ir_bytes, DIRTY_GUARDS, "IR-level dirtybytes")
+    assert_not_has(ir_bytes, OLD_DOUBLE_XOR_DIRTY, "IR-level old double-xor dirtybytes")
+    for name, pattern in {"junk": JUNK, "substitution": SUB}.items():
         assert_not_has(ir_bytes, pattern, f"IR-level {name}")
 
     print("verify_machine_obf_level2: ok")

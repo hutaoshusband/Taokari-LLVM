@@ -15,7 +15,14 @@ VSDEVCMD = Path(
     r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
 )
 
-RUNTIME_DIRTY = bytes.fromhex(
+DIRTY_STACK = bytes.fromhex(
+    "9c 50 51 48 89 e0 48 8d 48 01 48 0f af c1 a8 01 74 08 0f 0b eb fe cc f1 0f 0b 59 58 9d"
+)
+DIRTY_STACK_DEC = bytes.fromhex(
+    "9c 50 51 48 89 e0 48 8d 48 ff 48 0f af c1 a8 01 74 08 0f 0b eb fe cc f1 0f 0b 59 58 9d"
+)
+DIRTY_GUARDS = (DIRTY_STACK, DIRTY_STACK_DEC)
+OLD_DOUBLE_XOR_DIRTY = bytes.fromhex(
     "9c 50 8a 04 24 34 a7 34 a7 3a 04 24 74 08 0f 0b eb fe cc f1 0f 0b 58 9d"
 )
 OLD_FIXED_DIRTY = bytes.fromhex("48 39 e4 74 08 0f 0b eb fe cc f1 0f 0b")
@@ -88,8 +95,10 @@ def run_checks(tmp: Path) -> int:
         raise SystemExit(f"stdout mismatch: {plain_run.stdout!r} != {obf_run.stdout!r}")
 
     data = obj.read_bytes()
-    if RUNTIME_DIRTY not in data:
+    if not any(pattern in data for pattern in DIRTY_GUARDS):
         raise SystemExit("missing runtime-dependent dirty-byte guard")
+    if OLD_DOUBLE_XOR_DIRTY in data:
+        raise SystemExit("old double-xor dirty-byte guard survived")
     if OLD_FIXED_DIRTY in data:
         raise SystemExit("old fixed cmp-rsp dirty-byte guard survived")
 
