@@ -1365,15 +1365,15 @@ Purpose: good protection without insane overhead.
 
 Purpose: serious IP protection.
 
-* [ ] Flattening L2
-* [ ] Opaque predicates L2
-* [ ] BCF L2
-* [ ] MBA L2
-* [ ] String encryption L2/L3
+* [x] Flattening L2
+* [x] Opaque predicates L2
+* [x] BCF L2
+* [x] MBA L2
+* [x] String encryption L2/L3
 * [ ] Constant encryption L3
-* [ ] Indirect calls L2/L3
+* [x] Indirect calls L2/L3
 * [ ] Function outlining L2
-* [ ] Metadata strip L3
+* [x] Metadata strip L3
 
 ## Profile: Fortress
 
