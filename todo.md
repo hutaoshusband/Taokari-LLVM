@@ -1290,8 +1290,8 @@ This is required before Taokari can become serious.
 * [x] Add symbol leak tests
 * [ ] Add CFG complexity metric
 * [ ] Add call graph breakage metric
-* [ ] Add regression dashboard
-* [ ] Add release-blocking test mode
+* [x] Add regression dashboard
+* [x] Add release-blocking test mode
 
 **Definition of done for L3:**
 Every new pass must prove three things: it still runs correctly, it costs an acceptable amount, and it survives obvious cleanup attacks.
