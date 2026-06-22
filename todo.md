@@ -432,7 +432,7 @@ Main weakness: no AArch64 parity test and limited fake target noise.
 * [x] Add more `indirectbr` tests
 * [x] Add EH compatibility tests
 * [ ] Add AArch64 smoke test
-* [ ] Add x64 Windows test
+* [x] Add x64 Windows test
 * [ ] Audit block address edge cases
 
 ## Level 2 — Stronger Branch Tables
@@ -487,7 +487,7 @@ Main weakness: should become more polymorphic and better tested.
 * [x] Add runtime nonce mixing
 * [x] Add MBA on global pointer decrypt
 * [ ] Add config for sensitive globals only
-* [ ] Add annotation: `indgv`
+* [x] Add annotation: `indgv`
 
 ## Level 3 — Fortress Globals
 
