@@ -214,7 +214,7 @@ This is one of the most important differentiators against plain Arkari.
 * [ ] Add fake exception-looking regions where safe
 * [ ] Add fake block merging
 * [ ] Add integration with dispatcher fake cases
-* [ ] Add decompiler visual-noise mode
+* [x] Add decompiler visual-noise mode
 * [x] Add benchmark for CFG explosion
 
 **Definition of done for L3:**
