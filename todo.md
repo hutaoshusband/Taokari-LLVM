@@ -1242,7 +1242,7 @@ Goal: make Taokari controllable instead of “all or nothing”.
 * [ ] Add max compile time growth limit
 * [ ] Add max runtime overhead target
 * [x] Add config report output
-* [ ] Add final build summary
+* [x] Add final build summary
 
 **Definition of done for L3:**
 A user should be able to protect only sensitive functions with a sane profile and predictable overhead.
