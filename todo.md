@@ -429,7 +429,7 @@ Main weakness: no AArch64 parity test and limited fake target noise.
 
 * [x] Indirect branch page table exists
 * [x] BlockAddress support exists
-* [ ] Add more `indirectbr` tests
+* [x] Add more `indirectbr` tests
 * [ ] Add EH compatibility tests
 * [ ] Add AArch64 smoke test
 * [ ] Add x64 Windows test
