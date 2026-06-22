@@ -314,7 +314,7 @@ Main weakness: pure constant-expression transformations can sometimes be folded 
 * [ ] Add page-table-backed constants
 * [ ] Add indirect constant references
 * [ ] Add constant access through helper shards
-* [ ] Add LTO survival tests
+* [x] Add LTO survival tests
 * [ ] Add binary diff tests
 
 **Definition of done for L3:**
