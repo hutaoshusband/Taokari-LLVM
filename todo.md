@@ -930,9 +930,9 @@ does under tampering, optimizer pressure, or decompiler lifting.
 
 * [ ] Add bytecode-mutation fuzz harness (flip random words/bits in the
       encrypted stream → must trap via Phase A, never memory-unsafe)
-* [ ] Add property-based differential test (random IR programs across
+* [x] Add property-based differential test (random IR programs across
       the Phase B ISA → native vs VM, shrinks on mismatch)
-* [ ] Add optimizer survival test (`opt -O2`, `-O3`, LTO must not fold
+* [x] Add optimizer survival test (`opt -O2`, `-O3`, LTO must not fold
       the encrypted bytecode or recover the runtime key)
 * [ ] Add decompiler-lift test (Hex-Rays/Ghidra/IDA snapshot of a VM'd
       function — baseline what an analyst actually sees)
@@ -1184,7 +1184,7 @@ VM hostile to *automated* reversing, not just manual reading:
 * [ ] Add tamper-response policy (Phase A's tamper flag triggers
       silent-wrong-results, slow-decay, or trap depending on config —
       never an obvious crash that tells the analyst they hit a check)
-* [ ] Add VM self-verification (interpreter hashes its own handler
+* [x] Add VM self-verification (interpreter hashes its own handler
       table before running; patched handler → tamper flag)
 * [ ] Add cross-function VM state (shared obfuscated runtime so a
       single +vmp function cannot be lifted in isolation — its
