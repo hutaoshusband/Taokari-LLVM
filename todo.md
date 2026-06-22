@@ -1425,7 +1425,7 @@ Purpose: maximum practical protection for sensitive functions only.
 * [x] Implement MBA L1
 * [x] Add optimizer resistance
 * [x] Add MBA to decryptors
-* [ ] Add hot-loop avoidance
+* [x] Add hot-loop avoidance
 
 ## Milestone 5 — Harden Data Protection
 
