@@ -1400,40 +1400,40 @@ Purpose: maximum practical protection for sensitive functions only.
 
 ## Milestone 1 — Stabilize Arkari Base
 
-* [ ] Expand tests
-* [ ] Add config docs
-* [ ] Add size thresholds
-* [ ] Add safer skip logic
-* [ ] Audit current passes
+* [x] Expand tests
+* [x] Add config docs
+* [x] Add size thresholds
+* [x] Add safer skip logic
+* [x] Audit current passes
 
 ## Milestone 2 — Add Opaque Predicate Core
 
-* [ ] Implement opaque predicate engine
-* [ ] Add optimizer survival tests
-* [ ] Integrate with flattening
-* [ ] Integrate with future BCF
+* [x] Implement opaque predicate engine
+* [x] Add optimizer survival tests
+* [x] Integrate with flattening
+* [x] Integrate with future BCF
 
 ## Milestone 3 — Add Bogus Control Flow
 
-* [ ] Implement BCF L1
-* [ ] Add BCF L2
-* [ ] Combine with flattening
-* [ ] Benchmark overhead
+* [x] Implement BCF L1
+* [x] Add BCF L2
+* [x] Combine with flattening
+* [x] Benchmark overhead
 
 ## Milestone 4 — Add MBA
 
-* [ ] Implement MBA L1
-* [ ] Add optimizer resistance
-* [ ] Add MBA to decryptors
+* [x] Implement MBA L1
+* [x] Add optimizer resistance
+* [x] Add MBA to decryptors
 * [ ] Add hot-loop avoidance
 
 ## Milestone 5 — Harden Data Protection
 
-* [ ] StringEnc L2
-* [ ] StringEnc L3
-* [ ] ConstantEnc L2
+* [x] StringEnc L2
+* [x] StringEnc L3
+* [x] ConstantEnc L2
 * [ ] ConstantEnc L3
-* [ ] Metadata strip L3
+* [x] Metadata strip L3
 
 ## Milestone 6 — Add Function Outlining
 
