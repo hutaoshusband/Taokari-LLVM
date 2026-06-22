@@ -1883,6 +1883,8 @@ struct CodeVirtualization : public ModulePass {
     Value *StackTail;
     Value *StackSplit;
     Value *Locals;
+    Value *LocalsTail;
+    Value *LocalsSplit;
     Value *Frame;
     Value *CallArgs;
     GlobalVariable *CalleeTable;
@@ -1906,6 +1908,14 @@ struct CodeVirtualization : public ModulePass {
     Value *HeadPtr = B.CreateGEP(C.I64, C.Stack, Idx, "stk.a.ptr");
     Value *TailPtr = B.CreateGEP(C.I64, C.StackTail, TailIdx, "stk.b.ptr");
     return B.CreateSelect(UseHead, HeadPtr, TailPtr, "stk.ptr");
+  }
+
+  Value *localSlot(IRBuilder<> &B, InterpCtx &C, Value *Idx) {
+    Value *UseHead = B.CreateICmpULT(Idx, C.LocalsSplit);
+    Value *TailIdx = B.CreateSub(Idx, C.LocalsSplit);
+    Value *HeadPtr = B.CreateGEP(C.I64, C.Locals, Idx, "loc.a.ptr");
+    Value *TailPtr = B.CreateGEP(C.I64, C.LocalsTail, TailIdx, "loc.b.ptr");
+    return B.CreateSelect(UseHead, HeadPtr, TailPtr, "loc.ptr");
   }
 
   void branchIfFalse(IRBuilder<> &B, InterpCtx &C, Value *Ok) {
@@ -2173,7 +2183,7 @@ struct CodeVirtualization : public ModulePass {
                    branchIfFalse(B, C, B.CreateICmpULT(ArgNo, C.ArgLen));
                    Value *ArgVal =
                        B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.Args, ArgNo));
-                   B.CreateStore(ArgVal, B.CreateGEP(C.I64, C.Locals, Slot));
+                   B.CreateStore(ArgVal, localSlot(B, C, Slot));
                    B.CreateBr(C.Dispatch);
                  }});
     H.push_back({OpPushConst, "pushconst", shapeOf(OpPushConst),
@@ -2190,7 +2200,8 @@ struct CodeVirtualization : public ModulePass {
                    branchIfFalse(B, C,
                                  B.CreateICmpULT(Slot,
                                                  ConstantInt::get(C.I64, 64)));
-                   Value *V = B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.Locals, Slot));
+                   Value *V =
+                       B.CreateLoad(C.I64, localSlot(B, C, Slot));
                    pushStk(B, C, narrowTo(B, C, V, Ty));
                    B.CreateBr(C.Dispatch);
                  }});
@@ -2201,7 +2212,7 @@ struct CodeVirtualization : public ModulePass {
                    branchIfFalse(B, C,
                                  B.CreateICmpULT(Slot,
                                                  ConstantInt::get(C.I64, 64)));
-                   B.CreateStore(V, B.CreateGEP(C.I64, C.Locals, Slot));
+                   B.CreateStore(V, localSlot(B, C, Slot));
                    B.CreateBr(C.Dispatch);
                  }});
 
@@ -2795,15 +2806,22 @@ struct CodeVirtualization : public ModulePass {
     auto *StackHeadSlots = ConstantInt::get(I64, StackSplit);
     auto *StackTailSlots = ConstantInt::get(I64, StackTotal - StackSplit);
     auto *StackSplitValue = ConstantInt::get(I64, StackSplit);
-    auto *LocalsSlots = RandomSlots(64, 64);
+    uint64_t LocalsTotal = 64 + (RNG() % 65);
+    uint64_t LocalsSplit = 16 + (RNG() % 33);
+    if (LocalsSplit >= LocalsTotal)
+      LocalsSplit = LocalsTotal / 2;
+    auto *LocalsHeadSlots = ConstantInt::get(I64, LocalsSplit);
+    auto *LocalsTailSlots = ConstantInt::get(I64, LocalsTotal - LocalsSplit);
+    auto *LocalsSplitValue = ConstantInt::get(I64, LocalsSplit);
     auto *FrameSlots = RandomSlots(64, 64);
     auto *CallArgSlots = RandomSlots(8, 8);
     AllocaInst *Stack = nullptr;
     AllocaInst *StackTail = nullptr;
     AllocaInst *Locals = nullptr;
+    AllocaInst *LocalsTail = nullptr;
     AllocaInst *Frame = nullptr;
     AllocaInst *CallArgs = nullptr;
-    SmallVector<unsigned, 5> FrameOrder = {0, 1, 2, 3, 4};
+    SmallVector<unsigned, 6> FrameOrder = {0, 1, 2, 3, 4, 5};
     for (unsigned I = FrameOrder.size() - 1; I > 0; --I)
       std::swap(FrameOrder[I], FrameOrder[RNG() % (I + 1)]);
     for (unsigned Region : FrameOrder) {
@@ -2812,7 +2830,7 @@ struct CodeVirtualization : public ModulePass {
         Stack = B.CreateAlloca(I64, StackHeadSlots, "stack.a");
         break;
       case 1:
-        Locals = B.CreateAlloca(I64, LocalsSlots, "locals");
+        Locals = B.CreateAlloca(I64, LocalsHeadSlots, "locals.a");
         break;
       case 2:
         Frame = B.CreateAlloca(I64, FrameSlots, "frame");
@@ -2822,6 +2840,9 @@ struct CodeVirtualization : public ModulePass {
         break;
       case 4:
         StackTail = B.CreateAlloca(I64, StackTailSlots, "stack.b");
+        break;
+      case 5:
+        LocalsTail = B.CreateAlloca(I64, LocalsTailSlots, "locals.b");
         break;
       }
     }
@@ -2869,8 +2890,8 @@ struct CodeVirtualization : public ModulePass {
     B.SetInsertPoint(TagBody);
     InterpCtx TagCtx{I64,   F,       &Ctx, BC,      BCTail, BCSplit, BCLen,
                      PCMap, PtrTable, PtrCount, PC, SP,     Stack,
-                     StackTail, StackSplitValue, Locals, Frame, CallArgs,
-                     CalleeTable,
+                     StackTail, StackSplitValue, Locals, LocalsTail,
+                     LocalsSplitValue, Frame, CallArgs, CalleeTable,
                      static_cast<unsigned>(CalleeOrder.size()), Args, ArgLen,
                      TamperFlag, ExpectedTag, OpcodeMap, BytecodeKey, PcKey,
                      StackKey, Dispatch, Bad,
@@ -2963,8 +2984,8 @@ struct CodeVirtualization : public ModulePass {
     // The table is the source of truth; the switch is generated from it.
     InterpCtx IC{I64,   F,       &Ctx, BC,      BCTail, BCSplit, BCLen,
                  PCMap, PtrTable, PtrCount, PC, SP,     Stack,
-                 StackTail, StackSplitValue, Locals, Frame, CallArgs,
-                 CalleeTable,
+                 StackTail, StackSplitValue, Locals, LocalsTail,
+                 LocalsSplitValue, Frame, CallArgs, CalleeTable,
                  static_cast<unsigned>(CalleeOrder.size()), Args, ArgLen,
                  TamperFlag, ExpectedTag, OpcodeMap, BytecodeKey, PcKey,
                  StackKey, Dispatch, Bad, M.getDataLayout().isLittleEndian()};
