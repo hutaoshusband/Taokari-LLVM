@@ -454,8 +454,8 @@ Main weakness: no AArch64 parity test and limited fake target noise.
 * [ ] Add fake recovery paths
 * [ ] Add branch-table integrity checks
 * [ ] Add dispatcher integration
-* [ ] Add cross-pass tests with flattening
-* [ ] Add cross-pass tests with BCF
+* [x] Add cross-pass tests with flattening
+* [x] Add cross-pass tests with BCF
 
 **Definition of done for L3:**
 Static block targets should be noisy and hard to recover without executing or emulating the function.
