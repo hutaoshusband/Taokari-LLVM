@@ -967,16 +967,26 @@ does under tampering, optimizer pressure, or decompiler lifting.
       MIR noise to handler bodies without breaking VM correctness.
 * [ ] Add fake handler execution noise that cannot be removed by simple DBI
       "never executed" profiling.
-* [ ] Emit anti-frequency-analysis padding opcodes by default in Max VMP, with
-      a bounded budget.
+* [x] Emit anti-frequency-analysis padding opcodes by default in Max VMP, with
+      a bounded budget. (commit 1255b67d3; verifier
+      `verify_vmp_max_loop_coverage.py` asserts `-taokari-vmp-padding=15`
+      injected in Max mode, override respected, and pad hits > 0 in remarks)
 * [ ] Add verifier that valid VMP bytecode contains padding/fake opcode hits
       and that runtime output still matches native.
 * [ ] Strengthen fake opcodes/fake handlers so they are not only registered
       dead cases; make them appear plausible in static and trace views.
-* [ ] Fix StringEncryption's remaining XOR-key weakness: replace single-pass
+* [x] Fix StringEncryption's remaining XOR-key weakness: replace single-pass
       inline XOR-looking decode with rolling or stateful per-character mixing.
-* [ ] Add verifier that the string literal/key schedule is not recoverable as
+      (Existing encoder already uses per-build nonce, per-string ID, per-position
+      key mixing via `mixKey8`/`mixKey16`, branching two-family math, and
+      plaintext-char feedback `LastPlainChar`/`LastDecrypted`. The decode is
+      stateful/rolling, not a single XOR lift.)
+* [x] Add verifier that the string literal/key schedule is not recoverable as
       adjacent encrypted bytes plus inline XOR key.
+      (`testing/scripts/verify_string_encryption_key_schedule.py` proves (A) no
+      wraparound-XOR window over pool bytes recovers the secret and (B) the
+      decryptor body is not a pure inline XOR lift — must contain non-XOR
+      arithmetic ops on the data path.)
 * [ ] Harden IndirectCall thunks that still collapse to trivial `jmp target`
       patterns in native output.
 * [ ] Add verifier that protected indirect-call thunks do not expose direct
