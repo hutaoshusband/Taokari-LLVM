@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,11 @@ LLVM_NM = ROOT / "build" / "taokari-local" / "bin" / "llvm-nm.exe"
 SRC = ROOT / "testing" / "cases" / "vmp_basic" / "src" / "main.c"
 VSDEVCMD = Path(r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat")
 EXPECTED = "vmp-basic:40:25\n"
+
+
+def attr_group(text: str, number: str) -> str:
+    match = re.search(rf"attributes #{number} = \{{([^}}]+)\}}", text)
+    return match.group(1) if match else ""
 
 
 def run(cmd: list[str], *, use_vs_env: bool = False) -> subprocess.CompletedProcess[str]:
@@ -58,6 +64,28 @@ def main() -> int:
         text = ll.read_text(encoding="utf-8", errors="ignore")
         if "__taokari_vmp_interp_i64" not in text or "__taokari_vmp_bc_" not in text:
             print("VMP helper/bytecode marker missing from generated IR", file=sys.stderr)
+            return 1
+        wrapper = re.search(
+            r"define .* @protected_mix\([^)]*\) #(\d+) \{([\s\S]*?)\n\}",
+            text)
+        if not wrapper:
+            print("VMP wrapper function missing from generated IR", file=sys.stderr)
+            return 1
+        if "noinline" not in attr_group(text, wrapper.group(1)):
+            print("VMP wrapper lost noinline attribute", file=sys.stderr)
+            return 1
+        if "call i64 @__taokari_vmp_interp_i64_protected_mix_" not in wrapper.group(2):
+            print("static VMP function is not a call-boundary wrapper", file=sys.stderr)
+            return 1
+        interp = re.search(
+            r"define internal i64 @__taokari_vmp_interp_i64_protected_mix_"
+            r"\d+\([^)]*\) #(\d+) \{",
+            text)
+        if not interp:
+            print("separate internal VMP interpreter missing", file=sys.stderr)
+            return 1
+        if "noinline" not in attr_group(text, interp.group(1)):
+            print("VMP interpreter lost noinline attribute", file=sys.stderr)
             return 1
 
         compiled = run([*flags, "-c", "-o", str(obj)], use_vs_env=True)
