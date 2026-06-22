@@ -1314,7 +1314,7 @@ Not urgent, but must be tracked.
 
 ## Level 2 — New Pass Manager Planning
 
-* [ ] List all legacy passes
+* [x] List all legacy passes
 * [ ] Identify new-PM migration blockers
 * [ ] Create new-PM wrapper prototype
 * [ ] Port one simple module pass

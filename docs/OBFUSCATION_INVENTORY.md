@@ -11,14 +11,20 @@ Current pass surface:
 
 - `ObfuscationPassManager.cpp` - owns the public command-line flags and pass dispatch.
 - `ObfuscationOptions.cpp` - reads JSON config and per-pass options.
+- `OpaquePredicate.cpp` - reusable opaque-predicate families (always-true/false, context-seeded, unfoldable).
+- `BogusControlFlow.cpp` - bogus control flow with fake blocks, junk math, fake loops, fake memory accesses.
+- `MBA.cpp` - mixed boolean/arithmetic substitution with per-function noise and multi-round hardening.
 - `IndirectBranch.cpp` - indirect branch obfuscation.
-- `IndirectCall.cpp` - indirect call obfuscation.
+- `IndirectCall.cpp` - indirect call obfuscation with L3 call-shard thunks.
 - `IndirectGlobalVariable.cpp` - indirect global variable access.
-- `StringEncryption.cpp` - C string encryption.
-- `Flattening.cpp` - control-flow flattening.
+- `StringEncryption.cpp` - C string encryption with L3 fortress knobs (MBA, flatten, indirect, shards, fakes, page-table, delayed-decrypt).
+- `Flattening.cpp` - control-flow flattening with fake cases + opaque predicates.
 - `ConstantIntEncryption.cpp` - integer constant encryption.
 - `ConstantFPEncryption.cpp` - floating-point constant encryption.
 - `MicrosoftRTTIEraser.cpp` - MS C++ RTTI name erasure.
+- `MetadataHygiene.cpp` - source-path / debug-info / compiler-identifier stripping.
+- `NativeIntegrity.cpp` - per-function native-code integrity prototype (entry-block hash check + tamper path).
+- `Virtualization/CodeVirtualization.cpp` - bytecode VM with encrypted bytecode, PC/stack encryption, handler-body MBA noise, opcode-map self-verification, per-function interpreter cloning, and per-build tamper-response policy.
 
 A second obfuscation component runs below the IR layer, in the codegen
 pipeline (after register allocation and scheduling) — invisible to IR-level
