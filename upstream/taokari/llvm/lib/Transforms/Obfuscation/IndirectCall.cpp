@@ -65,6 +65,7 @@ struct IndirectCall : public FunctionPass {
   std::mt19937_64                  RNG;
   uint64_t                         PtrEncKey = 0;
   uint64_t                         ModulePacSeed = 0;
+  uint64_t                         ModulePacSalt = 0;
 
   bool RunOnFuncChanged = false;
 
@@ -82,6 +83,13 @@ struct IndirectCall : public FunctionPass {
 
   StringRef getPassName() const override {
     return {"IndirectCall"};
+  }
+
+  uint64_t nextNonZeroKey() {
+    uint64_t Key = RNG();
+    while (!Key)
+      Key = RNG();
+    return Key;
   }
 
   Value *zeroFor(Type *Ty) {
@@ -122,9 +130,7 @@ struct IndirectCall : public FunctionPass {
     auto &Ctx = M.getContext();
     auto *I64 = Type::getInt64Ty(Ctx);
     auto *PtrTy = PointerType::getUnqual(Ctx);
-    uint64_t Seed = RNG();
-    if (!Seed)
-      Seed = 0xC3A5C85C97CB3127ULL;
+    uint64_t Seed = nextNonZeroKey();
     auto *SeedGV = new GlobalVariable(
         M, I64, false, GlobalValue::PrivateLinkage,
         ConstantInt::get(I64, Seed),
@@ -220,8 +226,8 @@ struct IndirectCall : public FunctionPass {
     uint64_t H = ModulePacSeed ^ CalleeKeys.lookup(Callee);
     H ^= static_cast<uint64_t>(hash_value(Fn->getName())) << 1;
     H ^= static_cast<uint64_t>(hash_value(Callee->getName())) << 33;
-    H ^= 0x9E3779B97F4A7C15ULL;
-    return H ? H : 0xD1B54A32D192ED03ULL;
+    H ^= ModulePacSalt;
+    return H ? H : ModulePacSalt;
   }
 
   void NumberCallees(Module &M) {
@@ -244,7 +250,7 @@ struct IndirectCall : public FunctionPass {
             Function *TableCallee = fortressCallee(M, Callee);
             if (CalleeKeys.count(TableCallee) == 0) {
               Callees.push_back(TableCallee);
-              CalleeKeys[TableCallee] = RNG();
+              CalleeKeys[TableCallee] = nextNonZeroKey();
             }
           }
         }
@@ -260,9 +266,8 @@ struct IndirectCall : public FunctionPass {
     CalleeObjectShareTable = nullptr;
     CalleeKeys.clear();
     CalleeShards.clear();
-    ModulePacSeed = RNG();
-    if (!ModulePacSeed)
-      ModulePacSeed = 0xA0761D6478BD642FULL;
+    ModulePacSeed = nextNonZeroKey();
+    ModulePacSalt = nextNonZeroKey();
 
     NumberCallees(M);
     if (!Callees.size()) {

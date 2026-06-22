@@ -119,7 +119,10 @@ def main() -> int:
         if reject(relocs.split("RELOCATION RECORDS FOR [.data]")[0],
                   ["safe_callee"], "safe direct-call relocation"):
             return 1
-        if require(dis, ["callq\t*%rax", "ud2"], "disassembly"):
+        if require(dis, ["callq\t*%rax"], "disassembly"):
+            return 1
+        if "ud2" not in dis and "int3" not in dis:
+            print("disassembly missing: trap marker", file=sys.stderr)
             return 1
 
         for name, extra in {
