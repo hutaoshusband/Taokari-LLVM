@@ -431,7 +431,7 @@ Main weakness: no AArch64 parity test and limited fake target noise.
 * [x] BlockAddress support exists
 * [x] Add more `indirectbr` tests
 * [x] Add EH compatibility tests
-* [ ] Add AArch64 smoke test
+* [x] Add AArch64 smoke test
 * [x] Add x64 Windows test
 * [ ] Audit block address edge cases
 
