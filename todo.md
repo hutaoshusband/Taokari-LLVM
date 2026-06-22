@@ -939,11 +939,11 @@ does under tampering, optimizer pressure, or decompiler lifting.
 
 ### Phase H — Performance guardrails (so bulletproof stays shippable)
 
-* [ ] Add hot-loop detection (refuse to VM functions with a high
+* [x] Add hot-loop detection (refuse to VM functions with a high
       backedge-taken count; interpreter-in-a-hot-loop is catastrophic)
 * [ ] Add per-function overhead budget (refuse virtualization if the
       L1.5.4 benchmark measures > N× native for this function)
-* [ ] Add bytecode size budget (cap blowup; refuse if `P.Words.size()`
+* [x] Add bytecode size budget (cap blowup; refuse if `P.Words.size()`
       exceeds a configurable fraction of native code size)
 
 ### Reverse-engineering report follow-up
