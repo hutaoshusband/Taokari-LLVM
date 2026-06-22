@@ -222,6 +222,13 @@ struct IndirectBranch : public FunctionPass {
     createPageTableArgs.ObjectKeys = &BBKeys;
     createPageTableArgs.OutPageTable = &BBPageTable;
     createPageTableArgs.PtrEncKey = PtrEncKey;
+    // L2+ (todo.md "Add fake block entries" / "Add fake encrypted
+    // indices"): pad the module-level page table with decoy targets so
+    // a static lifter cannot infer the real branch-target count from
+    // the table size. Half as many fakes as real targets keeps the
+    // overhead bounded.
+    createPageTableArgs.FakeEntries =
+        std::max<unsigned>(1, BBAddrTargets.size() / 2);
 
     createPageTable(createPageTableArgs);
     return false;
@@ -283,6 +290,11 @@ struct IndirectBranch : public FunctionPass {
       createPageTableArgs.ObjectKeys = &FuncKeys;
       createPageTableArgs.OutPageTable = &FuncBBPageTable;
       createPageTableArgs.PtrEncKey = PtrEncKey;
+      // L2+ fake entries: same idea as the module-level padding but on
+      // the per-function page table, so two indirect branches in the
+      // same function do not share a table shape.
+      createPageTableArgs.FakeEntries =
+          std::max<unsigned>(1, FuncBBs.size() / 2);
 
       enhancedPageTable(createPageTableArgs, &FuncBBIndex);
     }
