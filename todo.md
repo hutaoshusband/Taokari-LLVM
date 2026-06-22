@@ -268,7 +268,7 @@ Example identities:
 * [x] Add MBA on page-table decryptors
 * [x] Add solver-resistance samples
 * [ ] Add overhead budget system
-* [ ] Add hot-loop avoidance
+* [x] Add hot-loop avoidance
 * [x] Add performance profile tests
 
 **Definition of done for L3:**
