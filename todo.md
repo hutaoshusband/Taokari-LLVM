@@ -1305,7 +1305,7 @@ Not urgent, but must be tracked.
 
 ## Level 1 — Build Cleanup
 
-* [ ] Remove stale `C:\Arkari` cache assumptions
+* [x] Remove stale `C:\Arkari` cache assumptions
 * [x] Document `configure-release.ps1`
 * [x] Document `VCPKG_ROOT`
 * [x] Add clean Windows build instructions
