@@ -1059,8 +1059,16 @@ does under tampering, optimizer pressure, or decompiler lifting.
 * [ ] Add PC encryption at rest in the VMP interpreter loop.
 * [ ] Add VM stack/locals encryption at rest between handlers.
 * [ ] Add interpreter self-verification for handler table/code patching.
-* [ ] Add tamper-response policy so VM/native integrity failures do not always
+* [x] Add tamper-response policy so VM/native integrity failures do not always
       become an obvious crash.
+      (`replaceWithVM` in CodeVirtualization.cpp picks one of four tamper
+      response shapes per +vmp function from the per-module RNG:
+      `exit(86)` (loud, legacy), `exit(0)` (silent wrong results),
+      tight spin (slow-decay hang), or `exit(<random>)`
+      (non-fingerprintable code). None is an obvious "you hit a check"
+      crash; all route through libc `exit` or an opaque back-edge.
+      `testing/scripts/verify_vmp_tamper_response.py` confirms the
+      policy produces varied trap shapes across builds.)
 * [ ] Keep next work one seam per commit: implement, rebuild
       `build\taokari-local\bin\clang.exe`, run focused verifier, run regression
       harness, clean temp/cache files, commit locally, do not push.

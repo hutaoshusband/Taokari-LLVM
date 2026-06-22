@@ -2852,13 +2852,60 @@ struct CodeVirtualization : public ModulePass {
     Value *Tampered = B.CreateLoad(I64, TamperFlag);
     B.CreateCondBr(B.CreateICmpNE(Tampered, Zero), Trap, Ok);
     B.SetInsertPoint(Trap);
+    // Per-build tamper-response policy (todo.md "tamper-response policy
+    // so VM/native integrity failures do not always become an obvious
+    // crash"). The pass picks one of four response shapes per function
+    // from the per-module RNG, so two builds of the same source produce
+    // different tamper responses and an analyst cannot fingerprint the
+    // trap by exit code or by control flow. None of the modes produce an
+    // obvious "you hit a check" crash: all route through ordinary libc
+    // (exit) or an opaque spin.
+    enum TamperResponse : uint8_t {
+      TRExitLoud = 0,    // exit(86) — current loud mode
+      TRExitSilent = 1,  // exit(0) — silent wrong results
+      TRSpin = 2,        // tight spin — slow-decay hang
+      TRExitRandom = 3,  // exit(<random>) — non-fingerprintable code
+    };
+    TamperResponse Mode = static_cast<TamperResponse>(RNG() % 4);
     auto *ExitTy =
         FunctionType::get(Type::getVoidTy(Ctx), {Type::getInt32Ty(Ctx)}, false);
     FunctionCallee Exit = M.getOrInsertFunction("exit", ExitTy);
     if (auto *ExitFn = dyn_cast<Function>(Exit.getCallee()))
       ExitFn->addFnAttr(Attribute::NoReturn);
-    B.CreateCall(Exit, {ConstantInt::get(Type::getInt32Ty(Ctx), 86)});
-    B.CreateUnreachable();
+    switch (Mode) {
+    case TRExitSilent:
+      B.CreateCall(Exit, {ConstantInt::get(Type::getInt32Ty(Ctx), 0)});
+      B.CreateUnreachable();
+      break;
+    case TRSpin: {
+      // A back-edge that re-checks the (already-set) tamper flag. The
+      // branch is always taken so the loop never escapes, but it is not
+      // a trap instruction and reads as ordinary control flow.
+      BasicBlock *SpinHdr = BasicBlock::Create(Ctx, "tamper.spin.hdr", &F);
+      BasicBlock *SpinBody = BasicBlock::Create(Ctx, "tamper.spin.body", &F);
+      B.CreateBr(SpinHdr);
+      B.SetInsertPoint(SpinHdr);
+      B.CreateCondBr(
+          B.CreateICmpNE(B.CreateLoad(I64, TamperFlag), Zero), SpinBody,
+          SpinBody);
+      B.SetInsertPoint(SpinBody);
+      B.CreateBr(SpinHdr);
+      break;
+    }
+    case TRExitRandom: {
+      uint32_t RandomCode =
+          static_cast<uint32_t>(RNG() & 0x7fffffffu) | 1u;
+      B.CreateCall(Exit,
+                   {ConstantInt::get(Type::getInt32Ty(Ctx), RandomCode)});
+      B.CreateUnreachable();
+      break;
+    }
+    case TRExitLoud:
+    default:
+      B.CreateCall(Exit, {ConstantInt::get(Type::getInt32Ty(Ctx), 86)});
+      B.CreateUnreachable();
+      break;
+    }
     B.SetInsertPoint(Ok);
     if (F.getReturnType()->isVoidTy())
       B.CreateRetVoid();
