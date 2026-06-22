@@ -128,6 +128,10 @@ CASES = [
     # IndirectGlobalVariable on a wider range of global shapes than the
     # basic c_globals case.
     Case("indirect_globals_struct", (case_path("indirect_globals_struct") / "src" / "main.cpp",), "indgv-struct:10:-6066930265826625388:101:102:103:0\n"),
+    # Cross-pass fixture: IndirectGlobalVariable + StringEncryption +
+    # ConstantIntegerEncryption in one function. Stresses all three
+    # passes composing correctly.
+    Case("indgv_x_strenc_x_constenc", (case_path("indgv_x_strenc_x_constenc") / "src" / "main.cpp",), "xpass:taokari-xpass-secret:-6066930261531658089:107\nxpass:taokari-xpass-secret:-6066930261531658085:118\nxpass-done:-6066930261531658089:-6066930261531658085\n"),
     # Functions & parameter passing fixture: value/reference/pointer params,
     # varying return types (int/double/struct), inline, function pointers,
     # std::function, capturing lambdas, and C varargs. Stresses IndirectCall
