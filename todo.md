@@ -1068,7 +1068,17 @@ does under tampering, optimizer pressure, or decompiler lifting.
       pc.key alloca exists, every PC load is paired with an XOR against
       pc.key, every PC store writes the encrypted form, and the
       protected binary still produces correct output.)
-* [ ] Add VM stack/locals encryption at rest between handlers.
+* [x] Add VM stack/locals encryption at rest between handlers.
+      (`createInterpreter` in CodeVirtualization.cpp now derives a
+      per-interpreter StackKey from the runtime bytecode key mixed with
+      a distinct per-build constant, and the operand-stack push/pop
+      helpers (`pushEnc`/`popEnc`) XOR every pushed value with StackKey
+      before it lands in the stack alloca and de-XOR on pop. A memory
+      snapshot between handler dispatches shows only encrypted junk on
+      the operand stack. `testing/scripts/verify_vmp_stack_encryption.py`
+      confirms the stk.key alloca exists, every push encrypts, every
+      pop decrypts, and the protected binary still produces correct
+      output.)
 * [ ] Add interpreter self-verification for handler table/code patching.
 * [x] Add tamper-response policy so VM/native integrity failures do not always
       become an obvious crash.

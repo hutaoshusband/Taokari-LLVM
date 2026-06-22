@@ -1804,6 +1804,7 @@ struct CodeVirtualization : public ModulePass {
     Value *OpcodeMap;
     Value *BytecodeKey;
     Value *PcKey;
+    Value *StackKey;
     BasicBlock *Dispatch;
     BasicBlock *Bad;
     bool LittleEndian;
@@ -1813,6 +1814,32 @@ struct CodeVirtualization : public ModulePass {
     BasicBlock *Cont = BasicBlock::Create(*C.Ctx, "guard.ok", C.F);
     B.CreateCondBr(Ok, Cont, C.Bad);
     B.SetInsertPoint(Cont);
+  }
+
+  // Encrypted push/pop for the VM operand stack (todo.md "VM stack/locals
+  // encryption at rest between handlers"). Values are XOR'd with a per-
+  // interp StackKey before they land in the stack alloca and de-XOR'd on
+  // pop. A memory snapshot between handlers therefore shows only
+  // encrypted junk on the operand stack.
+  void pushEnc(IRBuilder<> &B, InterpCtx &C, Value *V) {
+    Value *Idx = B.CreateLoad(C.I64, C.SP);
+    Value *Slot = B.CreateGEP(C.I64, C.Stack, Idx);
+    Value *Key = B.CreateAlignedLoad(C.I64, C.StackKey, Align(8),
+                                     "stk.key.ld");
+    Value *Enc = B.CreateXor(V, Key, "stk.enc");
+    B.CreateStore(Enc, Slot);
+    B.CreateStore(B.CreateAdd(Idx, ConstantInt::get(C.I64, 1)), C.SP);
+  }
+
+  Value *popEnc(IRBuilder<> &B, InterpCtx &C) {
+    Value *Idx = B.CreateSub(B.CreateLoad(C.I64, C.SP),
+                             ConstantInt::get(C.I64, 1));
+    B.CreateStore(Idx, C.SP);
+    Value *Enc = B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.Stack, Idx),
+                              "stk.enc.ld");
+    Value *Key = B.CreateAlignedLoad(C.I64, C.StackKey, Align(8),
+                                     "stk.key.ld");
+    return B.CreateXor(Enc, Key, "stk.plain");
   }
 
   // PC encryption helpers (todo.md "PC encryption at rest"). The PC
@@ -1898,13 +1925,13 @@ struct CodeVirtualization : public ModulePass {
   void pushStk(IRBuilder<> &B, InterpCtx &C, Value *V) {
     Value *Idx = B.CreateLoad(C.I64, C.SP);
     branchIfFalse(B, C, B.CreateICmpULT(Idx, ConstantInt::get(C.I64, 64)));
-    push(B, C.I64, C.Stack, C.SP, V);
+    pushEnc(B, C, V);
   }
 
   Value *popStk(IRBuilder<> &B, InterpCtx &C) {
     Value *Idx = B.CreateLoad(C.I64, C.SP);
     branchIfFalse(B, C, B.CreateICmpUGT(Idx, ConstantInt::get(C.I64, 0)));
-    return pop(B, C.I64, C.Stack, C.SP);
+    return popEnc(B, C);
   }
 
   // Narrow a full i64 value to its native width, returned as the
@@ -2578,6 +2605,19 @@ struct CodeVirtualization : public ModulePass {
     auto *PcKey = B.CreateAlloca(I64, nullptr, "pc.key");
     B.CreateStore(
         B.CreateXor(BytecodeKey, ConstantInt::get(I64, PcKeyConst)), PcKey);
+    // Operand-stack encryption key (todo.md "VM stack/locals encryption
+    // at rest between handlers"). The stack alloca holds every pushed
+    // value XOR StackKey, so a memory snapshot between handler dispatches
+    // reveals no plaintext operand values. StackKey is derived from the
+    // runtime bytecode key mixed with a distinct per-build constant so
+    // the optimizer cannot fold it.
+    uint64_t StackKeyConst = RNG();
+    if (!StackKeyConst)
+      StackKeyConst = 0xD1B54A32D192ED03ULL;
+    auto *StackKey = B.CreateAlloca(I64, nullptr, "stk.key");
+    B.CreateStore(
+        B.CreateXor(BytecodeKey, ConstantInt::get(I64, StackKeyConst)),
+        StackKey);
     B.CreateStore(
         B.CreateXor(ConstantInt::get(I64, 0),
                     B.CreateAlignedLoad(I64, PcKey, Align(8))),
@@ -2637,7 +2677,7 @@ struct CodeVirtualization : public ModulePass {
                  SP,    Stack,   Locals, Frame,  CallArgs,
                  CalleeTable, static_cast<unsigned>(CalleeOrder.size()),
                  Args,  ArgLen,  TamperFlag, ExpectedTag, OpcodeMap, BytecodeKey,
-                 PcKey, Dispatch, Bad, M.getDataLayout().isLittleEndian()};
+                 PcKey, StackKey, Dispatch, Bad, M.getDataLayout().isLittleEndian()};
     Value *MappedOp = fetchWord(B, IC);
     branchIfFalse(B, IC,
                   B.CreateICmpULT(MappedOp,
