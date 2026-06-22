@@ -215,7 +215,7 @@ This is one of the most important differentiators against plain Arkari.
 * [ ] Add fake block merging
 * [ ] Add integration with dispatcher fake cases
 * [ ] Add decompiler visual-noise mode
-* [ ] Add benchmark for CFG explosion
+* [x] Add benchmark for CFG explosion
 
 **Definition of done for L3:**
 The CFG should contain convincing fake regions that static analysis cannot cheaply prune.
