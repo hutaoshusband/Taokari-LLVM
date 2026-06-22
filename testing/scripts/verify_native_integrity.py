@@ -35,6 +35,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
+NATIVE_INTEGRITY_SOURCE = (
+    ROOT / "upstream" / "taokari" / "llvm" / "lib" / "Transforms" /
+    "Obfuscation" / "NativeIntegrity.cpp"
+)
 VSDEVCMD = Path(
     r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
 )
@@ -114,6 +118,21 @@ def main() -> int:
   if not CLANG.exists():
     print(f"missing clang: {CLANG}", file=sys.stderr)
     return 2
+  source_text = NATIVE_INTEGRITY_SOURCE.read_text(encoding="utf-8",
+                                                  errors="ignore")
+  fixed_literals = ["0xCBF29CE484222325", "0x9E3779B97F4A7C15",
+                    "0x100000001B3"]
+  present = [literal for literal in fixed_literals if literal in source_text]
+  if present:
+    print(f"nativeint verifier: FAIL fixed hash literals remain {present}",
+          file=sys.stderr)
+    return 1
+  for needle in ("HashOffset = nextNonZeroKey()",
+                 "HashStep = nextOddKey()",
+                 "HashPrime = nextOddKey()"):
+    if needle not in source_text:
+      print(f"nativeint verifier: FAIL missing {needle}", file=sys.stderr)
+      return 1
 
   tmp = Path(tempfile.mkdtemp(prefix="taokari-ni-"))
   try:

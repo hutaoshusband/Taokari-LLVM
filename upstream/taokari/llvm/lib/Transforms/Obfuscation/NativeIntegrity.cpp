@@ -54,6 +54,17 @@ struct NativeIntegrity : public FunctionPass {
     return {"NativeIntegrity"};
   }
 
+  uint64_t nextNonZeroKey() {
+    uint64_t Key = RNG();
+    while (!Key)
+      Key = RNG();
+    return Key;
+  }
+
+  uint64_t nextOddKey() {
+    return nextNonZeroKey() | 1ULL;
+  }
+
   bool runOnFunction(Function &F) override {
     if (F.isDeclaration())
       return false;
@@ -95,12 +106,15 @@ struct NativeIntegrity : public FunctionPass {
     // different pool bytes.
     constexpr unsigned PoolWords = 8;
     SmallVector<Constant *, PoolWords> PoolConsts;
-    uint64_t Expected = 0xCBF29CE484222325ULL;
+    uint64_t HashOffset = nextNonZeroKey();
+    uint64_t HashStep = nextOddKey();
+    uint64_t HashPrime = nextOddKey();
+    uint64_t Expected = HashOffset;
     for (unsigned I = 0; I < PoolWords; ++I) {
       uint64_t V = RNG();
       PoolConsts.push_back(ConstantInt::get(I64, V));
-      uint64_t Mix = V + static_cast<uint64_t>(I) * 0x9E3779B97F4A7C15ULL;
-      Expected = (Expected ^ Mix) * 0x100000001B3ULL;
+      uint64_t Mix = V + static_cast<uint64_t>(I) * HashStep;
+      Expected = (Expected ^ Mix) * HashPrime;
     }
     auto *PoolTy = ArrayType::get(I64, PoolWords);
     auto *Pool = new GlobalVariable(
@@ -125,7 +139,7 @@ struct NativeIntegrity : public FunctionPass {
     B.SetInsertPoint(&OrigEntry);
     auto *HashAlloca = B.CreateAlloca(I64, nullptr, "nativeint.hash");
     auto *IdxAlloca = B.CreateAlloca(I32, nullptr, "nativeint.idx");
-    B.CreateStore(ConstantInt::get(I64, 0xCBF29CE484222325ULL), HashAlloca);
+    B.CreateStore(ConstantInt::get(I64, HashOffset), HashAlloca);
     B.CreateStore(ConstantInt::get(I32, 0), IdxAlloca);
     BasicBlock *LoopHdr = BasicBlock::Create(Ctx, "nativeint.hdr", &F);
     BasicBlock *LoopBody = BasicBlock::Create(Ctx, "nativeint.body", &F);
@@ -145,9 +159,9 @@ struct NativeIntegrity : public FunctionPass {
     Value *CurHash = B.CreateLoad(I64, HashAlloca);
     Value *IdxExt = B.CreateZExt(CurIdx, I64);
     Value *Mix = B.CreateAdd(
-        Entry, B.CreateMul(IdxExt, ConstantInt::get(I64, 0x9E3779B97F4A7C15ULL)));
+        Entry, B.CreateMul(IdxExt, ConstantInt::get(I64, HashStep)));
     Value *NextHash = B.CreateMul(
-        B.CreateXor(CurHash, Mix), ConstantInt::get(I64, 0x100000001B3ULL));
+        B.CreateXor(CurHash, Mix), ConstantInt::get(I64, HashPrime));
     B.CreateStore(NextHash, HashAlloca);
     B.CreateStore(B.CreateAdd(CurIdx, ConstantInt::get(I32, 1)), IdxAlloca);
     B.CreateBr(LoopHdr);
