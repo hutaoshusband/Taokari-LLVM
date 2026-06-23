@@ -53,7 +53,18 @@ using namespace llvm;
 namespace llvm {
 cl::opt<bool> TaokariMaxProtection(
     "taokari-max", cl::init(false), cl::NotHidden,
-    cl::desc("Enable every current Taokari protection at maximum strength."));
+    cl::desc(
+        "Enable every current Taokari protection at maximum strength. "
+        "PRESET: forces enable=true, level=4, probability=100 on every "
+        "obfuscation option (fla/bcf/mba/cie/cfe/cse/icall/indbr/indgv/meta/"
+        "vmp), BCF loop count 3, full string hardening, and native integrity. "
+        "EXPENSIVE: this is the heaviest possible recipe and can hang the "
+        "compile if combined with global -taokari-vmp (every non-trivial "
+        "function becomes a VM candidate with no budget). The recommended "
+        "production path is the explicit per-pass recipe in "
+        "build_max_protection.bat (annotation-only VMP), NOT -taokari-max. "
+        "Use the -taokari-max-no-* helpers to selectively disable parts of "
+        "the preset when tuning."));
 } // namespace llvm
 
 namespace {
@@ -65,28 +76,43 @@ namespace {
 // was given a non-empty value at all: any non-empty value means "MIR
 // obfuscation layer is on". Parsing the comma-list is a Level 2 concern.
 static cl::opt<std::string> TaokariMirFlag(
-    "taokari-mir", cl::init(""), cl::Hidden,
+    "taokari-mir", cl::init(""), cl::NotHidden,
     cl::desc("Enable Taokari Machine IR (backend) obfuscation. "
-             "Value is a comma-separated list of MIR passes "
-             "(e.g. dirtybytes,junk,sub). Level 1 treats any non-empty "
-             "value as on."));
+             "CODEGEN-LAYER OBFUSCATION: runs after register allocation and "
+             "scheduling, so output reaches the binary below the point "
+             "Hex-Rays/D810 lift from (IR-level tools cannot repair it). "
+             "Value is a comma-separated list of MIR sub-passes: "
+             "dirtybytes (anti-disassembly junk bytes), junk (anti-dataflow "
+             "instructions), sub (instruction substitution e.g. add->lea), "
+             "split (function splitting), fakeprologue (fake prologue/epilogue "
+             "patterns), unmodelled (anti-microcode-lift, fortress-only). "
+             "Example: -taokari-mir=dirtybytes,junk,sub. Cheap on compile "
+             "time (~0.2s typical); the biggest cost is binary size growth."));
 
 static cl::opt<unsigned> TaokariMirDirtyProb(
-    "taokari-mir-dirtybytes-prob", cl::init(100), cl::Hidden,
-    cl::desc("Percent of MIR-enabled functions receiving dirty bytes."));
+    "taokari-mir-dirtybytes-prob", cl::init(100), cl::NotHidden,
+    cl::desc("Percent of MIR-enabled functions receiving dirty bytes "
+             "(0..100). 100 = every MIR-enabled function. CHEAP."));
 
 static cl::opt<unsigned> TaokariMirJunkProb(
-    "taokari-mir-junk-prob", cl::init(100), cl::Hidden,
-    cl::desc("Percent of MIR-enabled functions receiving MIR junk."));
+    "taokari-mir-junk-prob", cl::init(100), cl::NotHidden,
+    cl::desc("Percent of MIR-enabled functions receiving MIR junk "
+             "instructions with real side effects (0..100). 100 = every "
+             "MIR-enabled function. CHEAP."));
 
 static cl::opt<unsigned> TaokariMirSubProb(
-    "taokari-mir-sub-prob", cl::init(100), cl::Hidden,
-    cl::desc("Percent of MIR-enabled functions receiving MIR substitution."));
+    "taokari-mir-sub-prob", cl::init(100), cl::NotHidden,
+    cl::desc("Percent of MIR-enabled functions receiving MIR instruction "
+             "substitution, e.g. add -> lea (0..100). 100 = every "
+             "MIR-enabled function. CHEAP."));
 
 static cl::opt<unsigned> TaokariMirSseProb(
-    "taokari-mir-sse-prob", cl::init(100), cl::Hidden,
+    "taokari-mir-sse-prob", cl::init(100), cl::NotHidden,
     cl::desc("Percent of MIR-SSE-enabled functions receiving body-walking "
-             "anti-microcode-lift guards."));
+             "anti-microcode-lift guards (0..100). FORTRESS-ONLY: emits "
+             "unmodelled SSE instructions that defeat Hex-Rays microcode "
+             "lifting. Can perturb the generated SSE schedule; verify your "
+             "SSE-heavy code still produces correct results."));
 
 struct MirSubpasses {
   bool Marker = false;

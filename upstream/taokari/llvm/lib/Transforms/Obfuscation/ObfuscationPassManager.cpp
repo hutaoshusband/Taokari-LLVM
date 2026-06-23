@@ -21,7 +21,12 @@ extern cl::opt<bool> TaokariMaxProtection;
 
 static cl::opt<bool>
     EnableIRObfuscation("irobf", cl::init(false), cl::NotHidden,
-                        cl::desc("Enable IR Code Obfuscation."));
+                        cl::desc("Enable IR Code Obfuscation. Master switch "
+                                 "for the Taokari obfuscator. Set to enable "
+                                 "any combination of the per-pass -irobf-* / "
+                                 "-taokari-* flags below. Use -taokari-cfg "
+                                 "to drive configuration from a JSON file, "
+                                 "or -taokari-max for the all-on preset."));
 
 // Taokari alias of the master -irobf flag.
 static cl::alias TaokariIRObfuscation("taokari", cl::desc("Alias for -irobf"),
@@ -32,7 +37,11 @@ static cl::opt<bool>
                      cl::desc("Enable IR Indirect Branch Obfuscation."));
 static cl::opt<uint32_t>
     LevelIndirectBr("level-indbr", cl::init(0), cl::NotHidden,
-                    cl::desc("Set IR Indirect Branch Obfuscation Level."));
+                    cl::desc("Set IR Indirect Branch Obfuscation Level "
+                             "(0=off, 1=basic, 2=strong, 3=fortress, "
+                             "4=fortress+). Each level compounds the others: "
+                             "compile time and binary size grow roughly "
+                             "linearly with level."));
 
 static cl::alias TaokariIndirectBr("taokari-indbr",
                                    cl::desc("Alias for -irobf-indbr"),
@@ -77,7 +86,11 @@ static cl::alias TaokariLevelIndirectGV("taokari-level-indgv",
 
 static cl::opt<bool> EnableIRFlattening(
     "irobf-fla", cl::init(false), cl::NotHidden,
-    cl::desc("Enable IR Control Flow Flattening Obfuscation."));
+    cl::desc("Enable IR Control Flow Flattening Obfuscation. Replaces the "
+             "real CFG with a switch-dispatch state machine so a decompiler "
+             "cannot follow the original block order. CHEAP on compile time; "
+             "the cost is binary size and (with level>=3) decompiler visual "
+             "noise. Use -taokari-level-fla to set the strength (0..4)."));
 static cl::opt<uint32_t> LevelIRFlattening(
     "level-fla", cl::init(0), cl::NotHidden,
     cl::desc("Set IR Control Flow Flattening Obfuscation Level."));
@@ -160,7 +173,17 @@ static cl::alias
 
 static cl::opt<bool>
     EnableBogusControlFlow("irobf-bcf", cl::init(false), cl::NotHidden,
-                           cl::desc("Enable IR Bogus Control Flow."));
+                           cl::desc("Enable IR Bogus Control Flow. Inserts "
+                                    "fake basic blocks guarded by opaque "
+                                    "predicates so a decompiler sees "
+                                    "plausible-but-dead control flow. CHEAP "
+                                    "on compile time; cost is binary size "
+                                    "(scales with -taokari-bcf-loops and "
+                                    "selection probability). Use "
+                                    "-taokari-bcf-before-fla and "
+                                    "-taokari-bcf-after-fla to wrap the "
+                                    "flattened dispatcher on both sides "
+                                    "(biggest single IDA visual win)."));
 static cl::opt<uint32_t>
     LevelBogusControlFlow("level-bcf", cl::init(0), cl::NotHidden,
                           cl::desc("Set IR Bogus Control Flow Level."));
@@ -201,7 +224,12 @@ static cl::opt<bool> TaokariMaxNoIndirects(
 
 static cl::opt<bool>
     EnableMBA("irobf-mba", cl::init(false), cl::NotHidden,
-              cl::desc("Enable IR Mixed Boolean Arithmetic substitution."));
+              cl::desc("Enable IR Mixed Boolean Arithmetic substitution. "
+                       "Rewrites simple arithmetic (a+b, a^b, a&b, ...) as "
+                       "equivalent MBA expressions that survive InstCombine "
+                       "and GVN. CHEAP on compile time; cost is binary size "
+                       "and instruction count (scales with -taokari-mba-prob "
+                       "0..100)."));
 static cl::opt<uint32_t>
     LevelMBA("level-mba", cl::init(0), cl::NotHidden,
              cl::desc("Set IR Mixed Boolean Arithmetic Level."));
@@ -214,7 +242,19 @@ static cl::alias TaokariLevelMBA("taokari-level-mba",
 
 static cl::opt<bool>
     EnableVMP("irobf-vmp", cl::init(false), cl::NotHidden,
-              cl::desc("Enable IR code virtualization prototype."));
+              cl::desc("Enable IR code virtualization prototype. Compiles "
+                       "annotated functions to a per-function VM bytecode "
+                       "interpreter so the original logic is no longer "
+                       "readable as native code. VERY EXPENSIVE on compile "
+                       "AND runtime: do not virtualize hot loops (use "
+                       "-taokari-vmp-max-back-edges to refuse them), and do "
+                       "not enable globally under -taokari-max without "
+                       "budget caps (-taokari-vmp-max-bytecode-words, "
+                       "-taokari-vmp-max-bytecode-expansion). Recommended "
+                       "production path: annotation-only via "
+                       "__attribute__((annotate(\"+vmp\"))) on a few "
+                       "hand-picked sensitive functions, with -vmp on "
+                       "CRT/main."));
 static cl::opt<uint32_t>
     LevelVMP("level-vmp", cl::init(0), cl::NotHidden,
              cl::desc("Set IR code virtualization level."));
@@ -228,12 +268,24 @@ static cl::alias TaokariLevelVMP("taokari-level-vmp",
 static cl::opt<std::string> TaokariConfigPath("taokari-cfg",
                                               cl::init(std::string{}),
                                               cl::NotHidden,
-                                              cl::desc("Taokari config path."));
+                                              cl::desc("Taokari config path. "
+                                                       "JSON file that drives "
+                                                       "every per-pass toggle "
+                                                       "and level. Overrides "
+                                                       "implied defaults; "
+                                                       "command-line -taokari-* "
+                                                       "flags override the "
+                                                       "config in turn. See "
+                                                       "docs/CONFIGURATION.md "
+                                                       "for the schema."));
 
 static cl::opt<bool> TaokariReport(
     "taokari-report", cl::init(false), cl::NotHidden,
     cl::desc("Print the resolved obfuscation configuration to stderr "
-             "at the start of the pass pipeline."));
+             "at the start of the pass pipeline. DIAGNOSTICS: use this to "
+             "verify which passes are actually enabled and at what level "
+             "after -taokari-max / -taokari-cfg / command-line flags are "
+             "all merged. No effect on output."));
 
 static cl::opt<std::string>
     ArkariConfigPath("arkari-cfg", cl::init(std::string{}), cl::NotHidden,

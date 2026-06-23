@@ -118,7 +118,17 @@ static cl::opt<bool>
                    cl::desc("Print LLVM IR input to isel pass"));
 static cl::opt<cl::boolOrDefault>
     VerifyMachineCode("verify-machineinstrs", cl::Hidden,
-                      cl::desc("Verify generated machine code"));
+                      cl::desc(
+                          "Verify generated machine code after every codegen "
+                          "pass. DEBUG-ONLY DEVELOPMENT CHECK: re-runs the "
+                          "MachineVerifier (liveness, register classes, MIR "
+                          "validity) after every codegen pass. Has ZERO "
+                          "effect on the generated code, only asserts it "
+                          "stays verifier-clean. Very expensive — measured "
+                          "~2.6x compile-time overhead on obfuscated builds. "
+                          "Production builds MUST NOT enable this; only use "
+                          "it when developing or debugging a new codegen "
+                          "pass."));
 static cl::opt<cl::boolOrDefault>
     DebugifyAndStripAll("debugify-and-strip-all-safe", cl::Hidden,
                         cl::desc("Debugify MIR before and Strip debug after "

@@ -177,3 +177,97 @@ A complete reference config covering every pass with conservative
 defaults lives at
 [`testing/configs/taokari-default.json`](../testing/configs/taokari-default.json).
 Copy it as a starting point and edit per build.
+
+## Compile-time cost reference
+
+This section is the authoritative answer to *"which flags cost compile
+time, and which don't?"* All numbers are wall-clock on a representative
+Max Protection target (~100-line C source, full fla/bcf/mba/cie/cfe/
+cse/icall/indbr/indgv/meta recipe) measured by
+`testing/scripts/verify_max_compile_time_verify_flag.py`.
+
+### What is visible in `-help` (and what is not)
+
+Taokari flags are LLVM `cl::opt` options. They are **not** listed by
+`clang -help` (clang does not enumerate LLVM pass options). They are
+listed by:
+
+- `opt -help` — all visible Taokari flags (the ones marked
+  `cl::NotHidden`, which is the default for the per-pass flags).
+- `opt -help-hidden` — adds the `cl::Hidden` flags too, including the
+  debug-only checks listed below.
+
+Every flag's short description comes from its `cl::desc` string in the
+source; this document restates the cost-relevant ones.
+
+### Compile-time-safe (no measurable cost)
+
+These flags do not add measurable compile time on their own:
+
+| Flag / category                    | Why it is free                                                  |
+| ---------------------------------- | --------------------------------------------------------------- |
+| `-mllvm -taokari-<p>-prob=N`       | Selection probability. No extra work, just a per-instruction coin flip. |
+| `-mllvm -taokari-bcf-before-fla` / `-taokari-bcf-after-fla` | Just controls *when* BCF runs relative to fla. Same total work either way. |
+| `-mllvm -taokari-report`           | Diagnostic print to stderr. Does not transform IR. |
+| `-mllvm -taokari-vmp-compat-report=<path>` | Diagnostic TSV report. Does not transform IR. |
+| `-Wl,/DEBUG:NONE`                  | Linker flag. Strips PDB/CodeView from the output so the binary carries no debug info. Saves link time, costs nothing. |
+
+### Compile-time-cheap passes (per TU: tens of milliseconds)
+
+These are the IR-layer obfuscators. On the reference target they add
+roughly 10–60 ms each to a single-TU compile. They compound when
+stacked (BCF on a flattened function clones a much larger CFG), but the
+total IR-obfuscation cost measured by `-ftime-report` is still well
+under 100 ms:
+
+| Pass flag             | Layer | Typical per-TU cost | What raises its cost                   |
+| --------------------- | ----- | ------------------- | -------------------------------------- |
+| `-taokari-fla`        | IR    | ~10–30 ms           | Level (4 ≫ 1), function size threshold |
+| `-taokari-bcf`        | IR    | ~10–30 ms           | `-taokari-bcf-loops` (3 ≫ 1), level 2  |
+| `-taokari-mba`        | IR    | ~5–15 ms            | `-taokari-mba-prob` (100 ≫ 20)         |
+| `-taokari-cie` / `-taokari-cfe` | IR | ~5–15 ms each    | Level (2 ≫ 1), number of constants     |
+| `-taokari-cse`        | IR    | ~5–20 ms            | Number and length of string literals   |
+| `-taokari-icall` / `-taokari-indbr` / `-taokari-indgv` | IR | ~5–15 ms each | Level (3 ≫ 1)            |
+| `-taokari-meta`       | IR    | ~5–10 ms            | Level (3 ≫ 1), number of globals       |
+| `-taokari-mir=...`    | Codegen | ~200 ms (full set) | Binary size, not compile time          |
+
+### Compile-time-expensive (avoid in tight loops)
+
+| Flag                                  | Cost | Why | Mitigation |
+| ------------------------------------- | ---- | --- | ---------- |
+| `-mllvm -verify-machineinstrs`        | **~2.6× compile time** | Debug-only safety check: re-runs the MachineVerifier after every codegen pass. Has zero effect on the generated code. **Never enable in production.** | Just do not pass it. |
+| `-mllvm -taokari-max`                 | All passes at level 4 + probability 100 + BCF loop 3 | Forces the heaviest possible recipe. Can hang the compile when combined with global `-taokari-vmp`. | Use the explicit per-pass recipe in `build_max_protection.bat` instead. |
+| `-mllvm -taokari-vmp` (global)        | Very high; can hang under `-taokari-max` | Every non-trivial function becomes a VM candidate with no budget. | Use annotation-only `+vmp` on a few functions; `-vmp` on CRT/main; budget caps below. |
+| `-mllvm -taokari-vmp-padding=N` (high) | Scales with N | Padding opcodes inflate the bytecode. 5 = light, 15 = heavy. | Default 0; Max Protection uses 5. |
+| `-flto`                               | ~8× compile time vs `-O2` | Whole-program LTO link-time optimisation on top of obfuscation. | Only use when cross-module obfuscation is required. |
+
+### VMP budget caps (set these when using `-taokari-max`)
+
+These four knobs refuse to virtualise functions that would blow up
+compile time or runtime. They default to *off*; **under `-taokari-max`
+you should set at least the first three** or a hot-loop function will
+hang the build:
+
+| Flag                                   | Default | Recommended under `-taokari-max` | What it does |
+| -------------------------------------- | ------- | -------------------------------- | ------------ |
+| `-taokari-vmp-max-back-edges=N`        | `UINT32_MAX` (off) | `64` | Refuses functions with more than N CFG back edges (hot loops). |
+| `-taokari-vmp-max-bytecode-expansion=N`| `0` (off) | `32` | Refuses functions whose bytecode-per-IR-instruction ratio exceeds N. |
+| `-taokari-vmp-max-bytecode-words=N`    | `4096` | `2048` | Caps the bytecode size of a single VM'd function. |
+| `-taokari-vmp-compat-report=<path>`    | (off) | (recommended) | Emits a TSV showing which `+vmp` functions virtualised vs skipped — use this to verify your `+vmp` functions actually virtualised. |
+
+### Quick sanity recipes
+
+Use `-mllvm -taokari-report` to see exactly which passes merged into
+the final pipeline after all flags and config are applied. The output
+goes to stderr and looks like:
+
+```
+taokari-report: fla enable=true level=4
+taokari-report: bcf enable=true level=2
+taokari-report: vmp enable=false level=0
+...
+```
+
+If you are tuning compile time, run the
+`testing/scripts/verify_max_compile_time_verify_flag.py` A/B benchmark
+to confirm your recipe is faster than the debug-flag baseline.

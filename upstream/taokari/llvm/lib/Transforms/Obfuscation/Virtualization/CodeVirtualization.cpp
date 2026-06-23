@@ -41,26 +41,42 @@ namespace {
 static cl::opt<uint32_t> VMPMaxBytecodeWords(
     "taokari-vmp-max-bytecode-words", cl::init(4096), cl::NotHidden,
     cl::desc("Maximum bytecode words per VMP function before virtualization "
-             "is refused; 0 disables the limit."));
+             "is refused; 0 disables the limit. SAFETY BUDGET: caps how "
+             "large a single VM'd function can grow. Lower = faster compile "
+             "and smaller binary; too low refuses big functions. Default 4096 "
+             "is generous; 2048 is a faster starting point."));
 
 static cl::opt<uint32_t> VMPPaddingPercent(
     "taokari-vmp-padding", cl::init(0), cl::NotHidden,
     cl::desc("Percent of VMP instructions followed by a semantic no-op "
-             "padding opcode, 0..100."));
+             "padding opcode, 0..100. ANTI-FREQUENCY-ANALYSIS: flattens the "
+             "handler-hit histogram a tracer records. 0 = off (fastest); "
+             "5 = light noise (Max Protection default); 15 = heavy fortress "
+             "noise (very expensive)."));
 
 static cl::opt<uint32_t> VMPMaxBackEdges(
     "taokari-vmp-max-back-edges", cl::init(UINT32_MAX), cl::NotHidden,
     cl::desc("Maximum CFG back edges allowed before VMP refuses a function; "
-             "UINT32_MAX disables the limit."));
+             "UINT32_MAX disables the limit. HOT-LOOP GUARD: virtualizing a "
+             "tight loop makes it run under an interpreter and is "
+             "catastrophic for runtime. Set a real cap (e.g. 64) under "
+             "-taokari-max to refuse hot-loop functions automatically."));
 
 static cl::opt<uint32_t> VMPMaxBytecodeExpansion(
     "taokari-vmp-max-bytecode-expansion", cl::init(0), cl::NotHidden,
     cl::desc("Maximum bytecode words per original IR instruction before VMP "
-             "refuses a function; 0 disables the limit."));
+             "refuses a function; 0 disables the limit. BLOW-UP BUDGET: "
+             "caps how much the VM bytecode can exceed native IR size. Set a "
+             "real cap (e.g. 32) under -taokari-max to refuse pathological "
+             "functions automatically."));
 
 static cl::opt<std::string> VMPCompatReportPath(
     "taokari-vmp-compat-report", cl::init(""), cl::NotHidden,
-    cl::desc("Write a TSV VMP compatibility report to this path."));
+    cl::desc("Write a TSV VMP compatibility report to this path. "
+             "DIAGNOSTICS: one row per +vmp function with status "
+             "(virtualized / partially virtualized / skipped), reason, "
+             "bytecode word count, and split-region count. Use this to "
+             "verify your +vmp functions actually virtualize."));
 
 struct VMPCompatEntry {
   std::string FunctionName;
