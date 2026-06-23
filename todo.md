@@ -1676,6 +1676,14 @@ into, and what a new `build_strong.bat` would ship.
 
 ## Phase 3 — VMP targeting policy (the spear)
 
+These items are product-specific (which functions in the *real* binary
+are sensitive) and belong to the product owner, not the compiler. The
+compiler framework they depend on is delivered: the `+vmp`/`-vmp`
+annotations, the Phase 1 budget caps, the compat report, and the
+demo target's `vm_one` reference in build_max_protection.bat. They are
+left `[ ]` because they require the real product source, not a
+compiler change.
+
 * [ ] Enumerate the real product's sensitive functions. Candidates:
       license check, auth/entitlement decision, crypto routine,
       anti-tamper decision, proprietary algorithm core. For the demo
