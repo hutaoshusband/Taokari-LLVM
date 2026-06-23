@@ -1554,3 +1554,290 @@ obfuscation regression matrix stays green (57 PASS / 0 FAIL).
 A protected function should produce garbage microcode for Hex-Rays and should
 not be cleanly liftable without emulation. The protection must survive D810's
 default rule sets because it is below the layer D810 operates on.
+
+---
+
+# 22. Max Protection Build Bottleneck — Flag & Annotation Strategy
+
+Status: **planning only. Do not build until the plan is reviewed.**
+
+## Incident
+
+`-mllvm -taokari-max` together with `-mllvm -taokari-vmp` hangs the compile
+even on all cores. Annotated-only VMP (current `build_max_protection.bat`)
+builds in ~5 s, but the non-VMP'd regions still lift cleanly in IDA Pro, so
+the graphs do not look hard enough.
+
+## Root Cause (verified by reading the code, not built against)
+
+* `-taokari-max` forces `setEnable(true), setLevel(4), setProbability(100)`
+  on every option in `ObfuscationPassManager::getOptions()`, including
+  `vmpOpt()`. There is no `TaokariMaxNoVMP` escape hatch (the existing
+  `-no-*` helpers cover bcf/fla/mba/const/indirects only).
+* `ObfuscationOptions::toObfuscate(vmpOpt(), F)` falls through to the
+  global enable flag whenever a function has neither `+vmp` nor `-vmp`
+  annotation. So under `-taokari-max`, every non-trivial function becomes
+  a VMP candidate.
+* `taokari-vmp-max-back-edges` defaults to `UINT32_MAX` (no cap) and
+  `taokari-vmp-max-bytecode-expansion` defaults to `0` (disabled). Nothing
+  in the default budget refuses a hot-loop function.
+* Per-function VMP work is expensive: interpreter clone + encrypted
+  bytecode global + per-BB key rotation + opmap self-verify + handler MBA
+  noise + PC/stack encryption. At level 4 on every function, total work
+  is unbounded.
+* The current `build_max_protection.bat` flag list already avoids the
+  bomb by not passing `-taokari-max` and not passing `-taokari-vmp`. It
+  only passes `-taokari-vmp-padding=5` and `-taokari-vmp-compat-report=`,
+  plus per-pass flags for fla/bcf/mba/cie/cfe/cse/icall/indbr/indgv/meta.
+  This is the correct base. What it lacks: MIR passes, BCF around fla,
+  native integrity is implied but not asserted, and IDA gnarliness is
+  not measured.
+
+The gap is not "VMP is broken". The gap is two separate things:
+
+1. Under `-taokari-max` VMP goes global with no budget, so it hangs.
+2. Under annotated-only VMP, the rest of the binary is under-protected
+   for IDA because MIR, native integrity, and BCF-around-fla are off.
+
+## Strategy
+
+Split the blanket from the spear.
+
+* **Blanket** = every cheap, IDA-visible pass applied globally:
+  fla L4, bcf L2 (before + after fla), mba prob 40, cie/cfe L2, cse,
+  icall, indbr, indgv, meta L3, **MIR fortress**, native integrity.
+  These survive the optimizer and the Hex-Rays lifter, they are cheap,
+  and they make non-VMP'd regions look noisy.
+* **Spear** = VMP, annotation-only, on 1–N hand-picked sensitive
+  functions, with hard budget caps so it physically cannot hang.
+
+Then add measurement: compile-time budget, IDA CFG gnarliness, and
+differential correctness. Every tier must pass all three before it
+ships.
+
+## Phase 1 — Defuse the `-taokari-max` + VMP bomb
+
+* [ ] Add `TaokariMaxNoVMP("taokari-max-no-vmp", cl::init(false))` next
+      to the existing `-no-*` helpers in `ObfuscationPassManager.cpp`,
+      and gate `Opt->vmpOpt()->setEnable(false)` on it inside the
+      `if (TaokariMaxProtection)` block. One-line behaviour change,
+      matches the existing pattern.
+* [ ] Default `taokari-vmp-max-back-edges` from `UINT32_MAX` to a real
+      ceiling (start with 64; tunable). A function with more back edges
+      than the cap is refused for VMP and recorded in the compat report.
+* [ ] Default `taokari-vmp-max-bytecode-expansion` from `0` (disabled)
+      to a real ceiling (start with 32; tunable). Refuses functions
+      whose bytecode-per-IR-instruction ratio exceeds the cap.
+* [ ] Lower the default `taokari-vmp-max-bytecode-words` from 4096 to
+      2048 as a sane upper bound for a single VMP function. Override
+      remains available.
+* [ ] Document in `docs/CONFIGURATION.md` that `-taokari-max` now
+      implies `-taokari-max-no-vmp` unless VMP is explicitly turned
+      back on, and that explicit `-taokari-vmp` + `-taokari-max` is
+      supported but budgeted by the three caps above.
+
+## Phase 2 — Strong blanket flag recipe (the new "default strong")
+
+All flags applied globally, no `-taokari-max` shortcut, no global
+`-taokari-vmp`. This is what `build_max_protection.bat` should grow
+into, and what a new `build_strong.bat` would ship.
+
+* [ ] Keep the existing IR blanket from `build_max_protection.bat`:
+      fla L4, bcf L2, mba prob 40, cie L2, cfe L2, cse, icall, indbr,
+      indgv, meta L3.
+* [ ] Add `-mllvm -taokari-bcf-before-fla` and
+      `-mllvm -taokari-bcf-after-fla` so BCF wraps the flattened
+      dispatcher on both sides. This is the single biggest visual
+      win in IDA after VMP itself.
+* [ ] Add MIR fortress:
+      `-mllvm -taokari-mir=dirtybytes,junk,sub,split,fakeprologue`.
+      MIR runs below the IR lifter, so Hex-Rays cannot see through it.
+* [ ] Set MIR probabilities to 100 (current default):
+      `-mllvm -taokari-mir-dirtybytes-prob=100`,
+      `-mllvm -taokari-mir-junk-prob=100`,
+      `-mllvm -taokari-mir-sub-prob=100`.
+* [ ] Assert native integrity is on. Under the strong blanket it
+      should auto-apply (Max Protection enables `NativeIntegrity` on
+      every non-trivial function). Add
+      `-mllvm -taokari-native-integrity` if an explicit flag exists,
+      or document that the strong blanket relies on the auto-trigger.
+* [ ] Keep `-mllvm -taokari-vmp-padding=5` (harmless when no function
+      is selected; informative if one is).
+* [ ] Keep `-mllvm -taokari-vmp-compat-report="%REPORT%"` for
+      diagnostics.
+* [ ] Keep `-mllvm -verify-machineinstrs` and `-Wl,/DEBUG:NONE`.
+
+## Phase 3 — VMP targeting policy (the spear)
+
+* [ ] Enumerate the real product's sensitive functions. Candidates:
+      license check, auth/entitlement decision, crypto routine,
+      anti-tamper decision, proprietary algorithm core. For the demo
+      target, `vm_one` remains the canonical example.
+* [ ] Annotate every sensitive function `__attribute__((noinline,
+      annotate("+vmp")))` in source.
+* [ ] Annotate CRT/glue/main/wrapper functions
+      `__attribute__((annotate("-vmp")))` so the cap-fallthrough
+      never virtualizes them by accident.
+* [ ] For each `+vmp` function, record in the plan: expected native
+      IR instruction count, expected bytecode word count, expected
+      back-edge count. If any exceeds the Phase 1 cap, split the
+      function or raise the cap for that function only via a tuning
+      commit.
+* [ ] For each `+vmp` function, confirm the compat report row after
+      build says `virtualized`, not `partially virtualized` or
+      `skipped`. Partial / skipped is a signal that the blanket is
+      carrying the load and VMP is decorative.
+
+## Phase 4 — Compile-time budget
+
+* [ ] Extend `build_max_protection.bat` (and the new `build_strong.bat`)
+      to capture wall-clock compile time via `powershell -Command "$t
+      = Measure-Command { ... }"` or a simple `tmr` temp file with
+      `%TIME%` deltas. Write the number to `%OUTDIR%\compile_time.txt`.
+* [ ] Pick a budget. Suggested: 30 s wall-clock for the demo target
+      on the dev machine, 120 s for a real product target. Anything
+      above fails the build with a clear message.
+* [ ] If budget is exceeded, the build prints which pass was running
+      when the budget tripped (use `-mllvm -debug-only=taokari-vmp`
+      or `-mllvm -time-passes` to isolate).
+
+## Phase 5 — IDA gnarliness measurement (the actual complaint)
+
+The user-visible goal is "the graphs render and look crazy in IDA
+Professional". Make that measurable.
+
+* [ ] Add `testing/scripts/measure_ida_cfg_complexity.py` (does not
+      require running IDA at first; can use `llvmpy`/`opt`/raw IR to
+      count nodes/edges/fake cases per function, and the .exe section
+      entropy as a proxy).
+* [ ] Define metrics:
+      - IR CFG node count per target function
+      - IR CFG edge count per target function
+      - IR CFG fake-case density (fla + bcf contributions)
+      - .text section entropy after MIR
+      - Number of indirect call/branch/global rewrites per function
+* [ ] Add a real IDA snapshot path for later: an IDAPython script
+      `testing/scripts/ida_cfg_snapshot.py` that walks a function
+      list and dumps the Hex-Rays CFG to a JSON or PNG. Gated on IDA
+      being installed, skipped otherwise.
+* [ ] Define a "gnarly enough" bar per tier. Suggested starting
+      point for the strong tier:
+      - IR CFG node count >= 4x the unobfuscated baseline
+      - IR CFG edge count >= 6x the unobfuscated baseline
+      - .text section entropy >= 7.0 bits/byte
+      - No function in the binary lifts to a clean switch in Hex-Rays
+        (manual check until `ida_cfg_snapshot.py` exists).
+
+## Phase 6 — Tiered presets
+
+Each tier is a complete flag recipe plus an acceptance bar. Tiers are
+additive: Tier N+1 includes everything in Tier N.
+
+### Tier A — Dev (fast smoke)
+
+* [ ] IR blanket only: fla L2, mba prob 20, meta L2, cse, cie L1.
+* [ ] No VMP. No MIR. No native integrity.
+* [ ] Bar: < 5 s compile on demo target. Correctness passes. IDA
+      graphs deliberately clean (this is the baseline reference).
+
+### Tier B — Blanket (the "looks noisy enough in IDA without VMP" tier)
+
+* [ ] Phase 2 flag recipe in full, no VMP, no `-taokari-vmp` global.
+* [ ] Bar: < 30 s compile on demo target. Correctness passes.
+      Phase 5 IR CFG metrics hit 4x/6x node/edge bar. .text entropy
+      >= 7.0.
+
+### Tier C — Strong (the "spear" tier, current product target)
+
+* [ ] Tier B blanket.
+* [ ] `+vmp` on 1–3 hand-picked sensitive functions, `-vmp` on CRT
+      and main.
+* [ ] Phase 1 VMP caps active.
+* [ ] Bar: < 60 s compile on demo target. Correctness passes.
+      VMP compat report shows `virtualized` on every `+vmp` function.
+      Phase 5 metrics on VMP'd functions hit 10x/15x node/edge bar.
+
+### Tier D — Fortress (optional, opt-in per build)
+
+* [ ] Tier C blanket and spear.
+* [ ] Raise `taokari-vmp-max-bytecode-words` to 8192 for explicit
+      `+vmp` functions that need it (not global).
+* [ ] Raise BCF loop count to 3 (already set under `-taokari-max`).
+* [ ] Enable `taokari-vmp-padding=15` (heavier anti-frequency noise).
+* [ ] Bar: < 300 s compile on demo target. Correctness passes.
+      Phase 5 metrics on VMP'd functions hit 20x/30x node/edge bar.
+      Two builds of the same source produce structurally different
+      IR (per-build seed visible in CFG diff).
+
+## Phase 7 — Testing matrix (one row per tier, one column per check)
+
+* [ ] Add `testing/scripts/verify_max_build_no_vmp_hang.py`: compiles
+      a non-trivial source (say the existing `vmp_basic.c` with 20
+      functions) under `-taokari-max -taokari-max-no-vmp`, asserts
+      the build finishes under the Phase 4 budget, and asserts the
+      compat report contains zero `virtualized` rows.
+* [ ] Add `testing/scripts/verify_max_build_vmp_budgeted.py`: same
+      source, under `-taokari-max -taokari-vmp` with the Phase 1
+      caps active, asserts the build finishes under budget, asserts
+      at most N functions virtualized where N matches the cap, and
+      asserts no `STATUS_ACCESS_VIOLATION` on execution.
+* [ ] Add `testing/scripts/verify_tier_recipe.py`: parameterised
+      over Tier A/B/C/D, compiles the demo target under each tier's
+      exact flag recipe, asserts compile time, correctness, and the
+      Phase 5 metric bars for that tier.
+* [ ] Wire `verify_max_build_no_vmp_hang.py` and
+      `verify_max_build_vmp_budgeted.py` into the release-blocking
+      matrix in `testing/run_obfuscation_tests.py` once they land.
+* [ ] Existing verifiers still pass unchanged:
+      `verify_vmp_level1.py`, `verify_vmp_l2_hardening.py`,
+      `verify_vmp_max_loop_coverage.py`, `verify_vmp_opmap_decoys.py`,
+      `verify_vmp_frame_size_variation.py`, `verify_vmp_pointer_support.py`,
+      `verify_vmp_signature_dummy_args.py`, `verify_vmp_no_fixed_key_fallbacks.py`,
+      `verify_vmp_runtime_traps.py`, `verify_vmp_fake_handler_gating.py`,
+      `verify_native_integrity.py`, `verify_icall_thunk_no_static_target.py`,
+      `verify_indirect_call_level3.py`, `verify_machine_obf_level1.py`,
+      `verify_cfg_complexity_metric.py`, `verify_call_graph_breakage.py`.
+
+## Phase 8 — Documentation
+
+* [ ] Update `build_max_protection.bat` header comment to state
+      which tier it implements (currently Tier C with only one
+      `+vmp` demo function).
+* [ ] Add `docs/TIERS.md` describing Tier A/B/C/D recipes and bars.
+      One page. No essays.
+* [ ] Update `docs/CONFIGURATION.md` with the three VMP budget knobs
+      and their new defaults from Phase 1.
+* [ ] Update `README.md` quick-start with the Tier B recipe as the
+      recommended default for "protect my binary without VMP first,
+      add VMP later".
+
+## Phase 9 — Rollout order (when the build ban lifts)
+
+Ordered so each step unblocks the next and each step is independently
+verifiable. Do not reorder Phase 1 relative to Phase 2 — the caps
+must exist before the blanket recipe is trusted under `-taokari-max`.
+
+1. [ ] Phase 1.1 (`-taokari-max-no-vmp` flag) — land, rebuild clang,
+       run `verify_max_build_no_vmp_hang.py` (write the verifier in
+       the same commit or the next).
+2. [ ] Phase 1.2 + 1.3 (back-edges and bytecode-expansion caps) —
+       land, rebuild, run both new verifiers.
+3. [ ] Phase 2 blanket recipe in `build_strong.bat` (new file, do
+       not touch the existing `build_max_protection.bat` until Tier
+       C parity is proven).
+4. [ ] Phase 4 timing capture.
+5. [ ] Phase 5 metric scripts (IR-only first, IDA snapshot later).
+6. [ ] Phase 7 tier verifier, starting Tier A and Tier B only.
+7. [ ] Phase 6 Tier C and Tier D flags wired into the existing
+       `build_max_protection.bat` once Tier C parity is proven.
+8. [ ] Phase 8 docs.
+
+**Definition of done for Section 22:**
+`-taokari-max` can be combined with `-taokari-vmp` without hanging
+because the Phase 1 caps refuse runaway functions. The Phase 2
+blanket recipe alone makes non-VMP'd regions look noisy in IDA
+(measured by Phase 5 metrics, not by eye). The Phase 3 spear
+covers the 1–N functions that genuinely need VMP, with per-function
+budgets recorded up front. Every tier has a published flag recipe,
+a compile-time budget, a correctness gate, and an IDA-gnarliness
+gate. Nothing in this section is built until the plan is reviewed.
