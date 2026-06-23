@@ -221,6 +221,13 @@ static cl::opt<bool> TaokariMaxNoConst(
 static cl::opt<bool> TaokariMaxNoIndirects(
     "taokari-max-no-indirects", cl::init(false), cl::NotHidden,
     cl::desc("Benchmark helper: disable max indirect passes."));
+static cl::opt<bool> TaokariMaxNoVMP(
+    "taokari-max-no-vmp", cl::init(false), cl::NotHidden,
+    cl::desc("Escape hatch for -taokari-max + -taokari-vmp: keep every other "
+             "max-strength pass on but force vmp off so the build cannot hang "
+             "on per-function VM work. Without this, -taokari-max sets vmp "
+             "globally enabled, so every non-trivial function becomes a VMP "
+             "candidate with no budget cap and the compile hangs."));
 
 static cl::opt<bool>
     EnableMBA("irobf-mba", cl::init(false), cl::NotHidden,
@@ -421,6 +428,14 @@ struct ObfuscationPassManager : public ModulePass {
         Opt->iCallOpt()->setEnable(false);
         Opt->indGvOpt()->setEnable(false);
       }
+      // -taokari-max-no-vmp: leave every other max pass at L4/prob 100 but
+      // force VMP off so the compile cannot hang on per-function VM work.
+      // The existing -taokari-max-no-* helpers (bcf/fla/mba/const/indirects)
+      // cover the cheap passes; VMP is the one pass expensive enough to need
+      // its own opt-out under -taokari-max. See docs/CONFIGURATION.md
+      // "Max Protection + VMP budget".
+      if (TaokariMaxNoVMP)
+        Opt->vmpOpt()->setEnable(false);
     }
     return Opt;
   }

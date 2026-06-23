@@ -39,12 +39,14 @@ using namespace llvm;
 namespace {
 
 static cl::opt<uint32_t> VMPMaxBytecodeWords(
-    "taokari-vmp-max-bytecode-words", cl::init(4096), cl::NotHidden,
+    "taokari-vmp-max-bytecode-words", cl::init(2048), cl::NotHidden,
     cl::desc("Maximum bytecode words per VMP function before virtualization "
              "is refused; 0 disables the limit. SAFETY BUDGET: caps how "
              "large a single VM'd function can grow. Lower = faster compile "
-             "and smaller binary; too low refuses big functions. Default 4096 "
-             "is generous; 2048 is a faster starting point."));
+             "and smaller binary; too low refuses big functions. Default "
+             "2048 is the sane starting point; raise to 4096 or 8192 only "
+             "for a single hand-picked +vmp function that needs the room "
+             "(see Tier D in docs/TIERS.md)."));
 
 static cl::opt<uint32_t> VMPPaddingPercent(
     "taokari-vmp-padding", cl::init(0), cl::NotHidden,
@@ -55,20 +57,24 @@ static cl::opt<uint32_t> VMPPaddingPercent(
              "noise (very expensive)."));
 
 static cl::opt<uint32_t> VMPMaxBackEdges(
-    "taokari-vmp-max-back-edges", cl::init(UINT32_MAX), cl::NotHidden,
+    "taokari-vmp-max-back-edges", cl::init(64), cl::NotHidden,
     cl::desc("Maximum CFG back edges allowed before VMP refuses a function; "
              "UINT32_MAX disables the limit. HOT-LOOP GUARD: virtualizing a "
              "tight loop makes it run under an interpreter and is "
-             "catastrophic for runtime. Set a real cap (e.g. 64) under "
-             "-taokari-max to refuse hot-loop functions automatically."));
+             "catastrophic for runtime. Default 64 refuses hot-loop "
+             "functions automatically; pass a larger value to override on a "
+             "single +vmp function only. A function refused here is recorded "
+             "as 'skipped' in the -taokari-vmp-compat-report."));
 
 static cl::opt<uint32_t> VMPMaxBytecodeExpansion(
-    "taokari-vmp-max-bytecode-expansion", cl::init(0), cl::NotHidden,
+    "taokari-vmp-max-bytecode-expansion", cl::init(32), cl::NotHidden,
     cl::desc("Maximum bytecode words per original IR instruction before VMP "
              "refuses a function; 0 disables the limit. BLOW-UP BUDGET: "
-             "caps how much the VM bytecode can exceed native IR size. Set a "
-             "real cap (e.g. 32) under -taokari-max to refuse pathological "
-             "functions automatically."));
+             "caps how much the VM bytecode can exceed native IR size. "
+             "Default 32 refuses pathological functions automatically under "
+             "-taokari-max; pass 0 to disable for a single explicitly "
+             "tuned +vmp function. A function refused here is recorded as "
+             "'skipped' in the -taokari-vmp-compat-report."));
 
 static cl::opt<std::string> VMPCompatReportPath(
     "taokari-vmp-compat-report", cl::init(""), cl::NotHidden,

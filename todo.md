@@ -1617,18 +1617,18 @@ ships.
 
 ## Phase 1 — Defuse the `-taokari-max` + VMP bomb
 
-* [ ] Add `TaokariMaxNoVMP("taokari-max-no-vmp", cl::init(false))` next
+* [x] Add `TaokariMaxNoVMP("taokari-max-no-vmp", cl::init(false))` next
       to the existing `-no-*` helpers in `ObfuscationPassManager.cpp`,
       and gate `Opt->vmpOpt()->setEnable(false)` on it inside the
       `if (TaokariMaxProtection)` block. One-line behaviour change,
       matches the existing pattern.
-* [ ] Default `taokari-vmp-max-back-edges` from `UINT32_MAX` to a real
+* [x] Default `taokari-vmp-max-back-edges` from `UINT32_MAX` to a real
       ceiling (start with 64; tunable). A function with more back edges
       than the cap is refused for VMP and recorded in the compat report.
-* [ ] Default `taokari-vmp-max-bytecode-expansion` from `0` (disabled)
+* [x] Default `taokari-vmp-max-bytecode-expansion` from `0` (disabled)
       to a real ceiling (start with 32; tunable). Refuses functions
       whose bytecode-per-IR-instruction ratio exceeds the cap.
-* [ ] Lower the default `taokari-vmp-max-bytecode-words` from 4096 to
+* [x] Lower the default `taokari-vmp-max-bytecode-words` from 4096 to
       2048 as a sane upper bound for a single VMP function. Override
       remains available.
 * [ ] Document in `docs/CONFIGURATION.md` that `-taokari-max` now
@@ -1771,7 +1771,7 @@ additive: Tier N+1 includes everything in Tier N.
 
 ## Phase 7 — Testing matrix (one row per tier, one column per check)
 
-* [ ] Add `testing/scripts/verify_max_build_no_vmp_hang.py`: compiles
+* [x] Add `testing/scripts/verify_max_build_no_vmp_hang.py`: compiles
       a non-trivial source (say the existing `vmp_basic.c` with 20
       functions) under `-taokari-max -taokari-max-no-vmp`, asserts
       the build finishes under the Phase 4 budget, and asserts the
