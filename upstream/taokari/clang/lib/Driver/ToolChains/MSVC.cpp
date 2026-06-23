@@ -40,6 +40,15 @@ using namespace clang::driver::tools;
 using namespace clang;
 using namespace llvm::opt;
 
+static bool hasTaokariMaxProtection(const ArgList &Args) {
+  for (const Arg *A : Args.filtered(options::OPT_mllvm)) {
+    StringRef Value(A->getValue(0));
+    if (Value == "-taokari-max" || Value == "--taokari-max")
+      return true;
+  }
+  return false;
+}
+
 static bool canExecute(llvm::vfs::FileSystem &VFS, StringRef Path) {
   auto Status = VFS.status(Path);
   if (!Status)
@@ -281,6 +290,8 @@ void visualstudio::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   StringRef Linker = Args.getLastArgValue(options::OPT_fuse_ld_EQ,
                                           TC.getDriver().getPreferredLinker());
+  if (Linker.empty() && hasTaokariMaxProtection(Args))
+    Linker = "lld";
   if (Linker.empty())
     Linker = "link";
   // We need to translate 'lld' into 'lld-link'.
@@ -288,6 +299,9 @@ void visualstudio::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     Linker = "lld-link";
 
   if (Linker == "lld-link") {
+    if (hasTaokariMaxProtection(Args))
+      CmdArgs.push_back("/debug:none");
+
     for (Arg *A : Args.filtered(options::OPT_vfsoverlay))
       CmdArgs.push_back(
           Args.MakeArgString(std::string("/vfsoverlay:") + A->getValue()));
