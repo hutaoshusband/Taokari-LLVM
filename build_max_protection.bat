@@ -111,6 +111,7 @@ set "T0=%TIME%"
   -mllvm -taokari-cfg="%CFG%" ^
   -mllvm -taokari-fla -mllvm -taokari-level-fla=4 ^
   -mllvm -taokari-bcf -mllvm -taokari-level-bcf=2 ^
+  -mllvm -taokari-bcf-before-fla -mllvm -taokari-bcf-after-fla ^
   -mllvm -taokari-mba -mllvm -taokari-mba-prob=40 ^
   -mllvm -taokari-cie -mllvm -taokari-level-cie=2 ^
   -mllvm -taokari-cfe -mllvm -taokari-level-cfe=2 ^
@@ -119,6 +120,10 @@ set "T0=%TIME%"
   -mllvm -taokari-indbr ^
   -mllvm -taokari-indgv ^
   -mllvm -taokari-meta -mllvm -taokari-level-meta=3 ^
+  -mllvm -taokari-mir=dirtybytes,junk,sub,split,fakeprologue ^
+  -mllvm -taokari-mir-dirtybytes-prob=100 ^
+  -mllvm -taokari-mir-junk-prob=100 ^
+  -mllvm -taokari-mir-sub-prob=100 ^
   -mllvm -taokari-vmp-padding=5 ^
   -mllvm -taokari-vmp-compat-report="%REPORT%" ^
   -Wl,/DEBUG:NONE || goto fail

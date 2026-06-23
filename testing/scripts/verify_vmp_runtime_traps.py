@@ -369,6 +369,14 @@ def main() -> int:
         flags = [
             str(CLANG), str(src), "-O0",
             "-mllvm", "-taokari", "-mllvm", "-taokari-vmp",
+            # The victim function is deliberately large so it exercises a
+            # wide opcode range under tampering. The Phase 1 budget caps
+            # (back-edges/expansion/words) now default on and would refuse
+            # it; this verifier tests tamper handling, not budget, so
+            # disable the caps here.
+            "-mllvm", "-taokari-vmp-max-back-edges=0",
+            "-mllvm", "-taokari-vmp-max-bytecode-expansion=0",
+            "-mllvm", "-taokari-vmp-max-bytecode-words=0",
         ]
         built_ir = run([*flags, "-S", "-emit-llvm", "-o", str(base_ll)],
                        use_vs_env=True)

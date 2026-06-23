@@ -57,11 +57,32 @@ NOINLINE int f17(int x){return ((x+1)^0xa3)-7;}
 NOINLINE int f18(int x){return ((x-3)^0x5c)*6;}
 NOINLINE int f19(int x){return ((x^0xb1)+19)-10;}
 
+// Hot-loop beast: >64 CFG back edges. Under bare -taokari-vmp this is
+// a VMP candidate (no +vmp/-vmp annotation), but the Phase 1
+// back-edges=64 cap MUST refuse it. The verifier asserts this function
+// is NOT virtualized, proving the cap fires.
+NOINLINE int hot_loop_beast(int n){
+  int s=0;
+  for(int a=0;a<n;++a){
+    for(int b=0;b<n;++b){
+      for(int c=0;c<n;++c){
+        for(int d=0;d<n;++d){
+          s += (a^b) + (c^d);
+        }
+      }
+    }
+  }
+  return s;
+}
+
 int main(void){
   int s=0;
   int(*fs[20])(int)={f0,f1,f2,f3,f4,f5,f6,f7,f8,f9,
                      f10,f11,f12,f13,f14,f15,f16,f17,f18,f19};
   for(int i=0;i<20;++i) s+=fs[i](i+1);
+  // Keep hot_loop_beast referenced so it is compiled and shows up in
+  // the compat report (with a tiny arg so the run is still fast).
+  s += hot_loop_beast(1);
   printf("maxvmp:%d\n", s);
   return 0;
 }
@@ -126,7 +147,41 @@ def main() -> int:
             )
             return 1
 
-    print(f"max build vmp budgeted: ok (compile {elapsed:.1f}s)")
+        # Budget-cap assertion. The Phase 1 caps refuse functions that
+        # exceed a cap (back-edges>64, expansion>32, words>2048); they do
+        # NOT cap a global count. So the proof is: a function that exceeds
+        # a cap (here hot_loop_beast has >64 back edges) must be refused
+        # (status != virtualized), while normal functions still virtualize.
+        # That is the cap "at most N" semantics: per-function refusal, not
+        # a global ceiling.
+        report_text = report.read_text(
+            encoding="utf-8", errors="ignore") if report.exists() else ""
+        rows = {}
+        for line in report_text.splitlines():
+            if line.count("\t") >= 2 and not line.startswith("function\t"):
+                parts = line.split("\t")
+                rows[parts[0]] = parts[1]
+        virtualized = sum(1 for s in rows.values() if s == "virtualized")
+        if virtualized == 0:
+            print("max build vmp budgeted: FAIL (no functions virtualized "
+                  "- caps over-refused, VMP did not run)",
+                  file=sys.stderr)
+            return 1
+        # hot_loop_beast has 70+ back edges, exceeding the back-edges=64
+        # cap. It MUST be refused, proving the cap fires.
+        beast_status = rows.get("hot_loop_beast")
+        if beast_status is None:
+            print("max build vmp budgeted: FAIL (hot_loop_beast missing "
+                  "from compat report)", file=sys.stderr)
+            return 1
+        if beast_status == "virtualized":
+            print(f"max build vmp budgeted: FAIL (hot_loop_beast virtualized "
+                  f"despite >64 back edges - back-edges cap did not fire)",
+                  file=sys.stderr)
+            return 1
+
+    print(f"max build vmp budgeted: ok (compile {elapsed:.1f}s, "
+          f"{virtualized} functions virtualized, hot_loop_beast refused)")
     return 0
 
 
