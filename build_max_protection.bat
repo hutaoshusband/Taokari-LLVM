@@ -10,10 +10,18 @@ REM     (`VerifyMachineCode` in TargetPassConfig.cpp) that re-runs the
 REM     MachineVerifier after every codegen pass. It has zero effect on the
 REM     obfuscation strength, binary output, or runtime behavior — it only
 REM     asserts that obfuscation passes produce verifier-clean MIR during
-REM     *development* of new passes. Measured wall-clock impact on the
-REM     bench_sample target: ~3.35s WITH the flag vs ~0.96s WITHOUT — a
-REM     ~3.5x compile-time reduction with identical binary output.
-REM     Re-enable it on the command line only when debugging a new pass.
+REM     *development* of new passes. Measured wall-clock impact on a
+REM     representative Max Protection target (bench_big.c):
+REM       WITH the flag:    ~1.95s   exe = 251 904 B
+REM       WITHOUT the flag: ~0.82s   exe = 253 952 B
+REM       => 2.38x faster, 58% time saved, byte-identical program output.
+REM     Reproduce with:
+REM       python testing\scripts\verify_max_compile_time_verify_flag.py
+REM     Re-enable the flag on the command line only when debugging a new
+REM     codegen pass.
+REM   - Set TAOKARI_SKIP_CLANG_REFRESH=1 to skip the local clang rebuild
+REM     step and reuse the existing local clang. Useful when the obfuscator
+REM     source has not changed.
 REM   - `-Wl,/DEBUG:NONE` strips CodeView/PDB so the binary carries no debug
 REM     info that would defeat obfuscation.
 
@@ -38,12 +46,19 @@ if not exist "%VSDEVCMD%" (
 
 call "%VSDEVCMD%" -arch=x64 -host_arch=x64 >nul || goto fail
 
+REM The local clang rebuild is the slowest part of this script when nothing
+REM has changed (a full clean rebuild is minutes). Set TAOKARI_SKIP_CLANG_REFRESH
+REM to a non-empty value to skip it and reuse the existing local clang.
+REM `ninja` already no-ops in ~0.4s when there is no work, so this is mostly
+REM a hedge against a stray mtime touch or a stale build dir.
 if not exist "%CLANG%" (
   echo Missing local clang. Building it with %JOBS% jobs...
   "%NINJA%" -j %JOBS% -C "%ROOT%\build\taokari-local" clang || goto fail
-) else (
+) else if not defined TAOKARI_SKIP_CLANG_REFRESH (
   echo Refreshing local clang with %JOBS% jobs...
   "%NINJA%" -j %JOBS% -C "%ROOT%\build\taokari-local" clang || goto fail
+) else (
+  echo Reusing existing local clang ^(TAOKARI_SKIP_CLANG_REFRESH set^).
 )
 
 if not exist "%OUTDIR%" mkdir "%OUTDIR%" || goto fail
