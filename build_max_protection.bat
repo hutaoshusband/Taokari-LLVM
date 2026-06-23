@@ -1,7 +1,14 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 
 REM Taokari Max Protection build recipe.
+REM
+REM Tier (Section 22): Tier C — strong blanket + VMP "spear" on the
+REM annotated functions. This script is the Tier C reference recipe:
+REM the full IR blanket (fla L4, bcf L2, mba prob 40, cie/cfe L2, cse,
+REM icall, indbr, indgv, meta L3) plus one +vmp demo function. Grow it
+REM toward Tier D by annotating more sensitive functions and raising
+REM taokari-vmp-max-bytecode-words per-function. See docs/TIERS.md.
 REM
 REM Compile-time notes:
 REM   - This script intentionally does NOT pass `-mllvm -verify-machineinstrs`.
@@ -94,6 +101,7 @@ set "REPORT=%OUTDIR%\%NAME%_vmp_report.txt"
 echo.
 echo Building Max protection binary...
 echo Source: %SRC%
+set "T0=%TIME%"
 "%CLANG%" -O2 "%SRC%" -o "%EXE%" ^
   -fno-ident ^
   -ffile-prefix-map="%ROOT%"=. ^
@@ -114,6 +122,11 @@ echo Source: %SRC%
   -mllvm -taokari-vmp-padding=5 ^
   -mllvm -taokari-vmp-compat-report="%REPORT%" ^
   -Wl,/DEBUG:NONE || goto fail
+set "T1=%TIME%"
+
+call :elapsed "%T0%" "%T1%" ELAPSED
+>"%OUTDIR%\compile_time.txt" echo %ELAPSED%
+echo Compile time: %ELAPSED% seconds
 
 echo.
 echo Max protection binary:
@@ -125,6 +138,26 @@ echo.
 echo CPU jobs used for compiler build: %JOBS%
 echo VMP is selected-function only. This batch uses one +vmp demo function unless you pass your own annotated source.
 exit /b 0
+
+REM Compute whole-second delta between two %TIME% stamps (HH:MM:SS,cc).
+REM Handles midnight wraparound. Sets %3 to the integer seconds.
+:elapsed
+setlocal
+set "START=%~1"
+set "END=%~2"
+set "S_H=%START:~0,2%"
+set "S_M=%START:~3,2%"
+set "S_S=%START:~6,2%"
+set "E_H=%END:~0,2%"
+set "E_M=%END:~3,2%"
+set "E_S=%END:~6,2%"
+set /a "S_H=1%S_H%-100, S_M=1%S_M%-100, S_S=1%S_S%-100"
+set /a "E_H=1%E_H%-100, E_M=1%E_M%-100, E_S=1%E_S%-100"
+set /a "S=S_H*3600+S_M*60+S_S, E=E_H*3600+E_M*60+E_S"
+set /a "D=E-S"
+if !D! LSS 0 set /a "D+=86400"
+endlocal & set "%~3=%D%"
+goto :eof
 
 :fail
 echo.

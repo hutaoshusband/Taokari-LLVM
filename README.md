@@ -159,6 +159,29 @@ clang -O2 -mllvm -taokari-mir=dirtybytes,junk,sub main.c -o main_mir.exe
 
 Or via the MSVC ABI driver: swap `clang` for `clang-cl` and use `/std:` / `/EHsc`.
 
+### Recommended default: Tier B (strong blanket, no VMP)
+
+For most binaries the right starting point is the **strong blanket**
+recipe (Tier B in `docs/TIERS.md`): every cheap, IDA-visible pass applied
+globally, VMP off. The blanket makes non-VMP'd regions look noisy in IDA
+without paying for VM virtualisation. The one-line entry point is
+`build_strong.bat`:
+
+```bat
+build_strong.bat               :: demo target
+build_strong.bat my_app.c      :: your source
+```
+
+Add VMP later by annotating 1-N sensitive functions in source with
+`__attribute__((noinline, annotate("+vmp")))` and re-running the script;
+the VMP budget caps (Section 22 Phase 1) refuse runaway functions for
+you. That grows the build toward Tier C (`build_max_protection.bat`).
+
+`-mllvm -taokari-max` is safe to combine with `-mllvm -taokari-vmp`
+since Section 22 Phase 1: the same caps budget it. Pass
+`-mllvm -taokari-max-no-vmp` to keep every other max-strength pass on
+while forcing VMP off entirely.
+
 ---
 
 ## Build

@@ -236,24 +236,32 @@ under 100 ms:
 | Flag                                  | Cost | Why | Mitigation |
 | ------------------------------------- | ---- | --- | ---------- |
 | `-mllvm -verify-machineinstrs`        | **~2.6× compile time** | Debug-only safety check: re-runs the MachineVerifier after every codegen pass. Has zero effect on the generated code. **Never enable in production.** | Just do not pass it. |
-| `-mllvm -taokari-max`                 | All passes at level 4 + probability 100 + BCF loop 3 | Forces the heaviest possible recipe. Can hang the compile when combined with global `-taokari-vmp`. | Use the explicit per-pass recipe in `build_max_protection.bat` instead. |
-| `-mllvm -taokari-vmp` (global)        | Very high; can hang under `-taokari-max` | Every non-trivial function becomes a VM candidate with no budget. | Use annotation-only `+vmp` on a few functions; `-vmp` on CRT/main; budget caps below. |
+| `-mllvm -taokari-max`                 | All passes at level 4 + probability 100 + BCF loop 3 | Forces the heaviest possible recipe. Combines safely with `-taokari-vmp` only because the VMP budget caps (see below) now default *on*. | For a tunable recipe, prefer `build_strong.bat` (Tier B) or `build_max_protection.bat` (Tier C). |
+| `-mllvm -taokari-vmp` (global)        | Safe under `-taokari-max` since the budget caps landed (Section 22 Phase 1). | Every non-trivial function becomes a VM candidate; the caps refuse runaway functions and record them in the compat report. | For targeted protection, use annotation-only `+vmp` on a few functions and `-vmp` on CRT/main. Pass `-taokari-max-no-vmp` to disable VMP under `-taokari-max` while keeping every other max pass on. |
 | `-mllvm -taokari-vmp-padding=N` (high) | Scales with N | Padding opcodes inflate the bytecode. 5 = light, 15 = heavy. | Default 0; Max Protection uses 5. |
 | `-flto`                               | ~8× compile time vs `-O2` | Whole-program LTO link-time optimisation on top of obfuscation. | Only use when cross-module obfuscation is required. |
 
-### VMP budget caps (set these when using `-taokari-max`)
+### Max Protection + VMP budget
 
-These four knobs refuse to virtualise functions that would blow up
-compile time or runtime. They default to *off*; **under `-taokari-max`
-you should set at least the first three** or a hot-loop function will
-hang the build:
+Under `-mllvm -taokari-max` VMP is globally enabled (every non-trivial
+function becomes a VM candidate). Two mechanisms keep that safe:
 
-| Flag                                   | Default | Recommended under `-taokari-max` | What it does |
-| -------------------------------------- | ------- | -------------------------------- | ------------ |
-| `-taokari-vmp-max-back-edges=N`        | `UINT32_MAX` (off) | `64` | Refuses functions with more than N CFG back edges (hot loops). |
-| `-taokari-vmp-max-bytecode-expansion=N`| `0` (off) | `32` | Refuses functions whose bytecode-per-IR-instruction ratio exceeds N. |
-| `-taokari-vmp-max-bytecode-words=N`    | `4096` | `2048` | Caps the bytecode size of a single VM'd function. |
-| `-taokari-vmp-compat-report=<path>`    | (off) | (recommended) | Emits a TSV showing which `+vmp` functions virtualised vs skipped — use this to verify your `+vmp` functions actually virtualised. |
+1. **`-taokari-max-no-vmp`** — escape hatch. Keep every other max-strength
+   pass at L4/prob 100 but force VMP off entirely. The compile cannot hang
+   on per-function VM work. This is what `build_strong.bat` (Tier B)
+   relies on implicitly by not enabling VMP at all.
+
+2. **VMP budget caps** — these three knobs now default *on* and refuse
+   functions that would blow up compile time or runtime. A refused
+   function is recorded as `skipped` in the compat report. Override on
+   a single explicitly tuned `+vmp` function only.
+
+| Flag                                   | Default | What it does |
+| -------------------------------------- | ------- | ------------ |
+| `-taokari-vmp-max-back-edges=N`        | `64` | Refuses functions with more than N CFG back edges (hot loops). `UINT32_MAX` disables. |
+| `-taokari-vmp-max-bytecode-expansion=N`| `32` | Refuses functions whose bytecode-per-IR-instruction ratio exceeds N. `0` disables. |
+| `-taokari-vmp-max-bytecode-words=N`    | `2048` | Caps the bytecode size of a single VM'd function. `0` disables. Raise to `8192` for Tier D only. |
+| `-taokari-vmp-compat-report=<path>`    | (off) | Emits a TSV showing which `+vmp` functions virtualised vs skipped — use this to verify your `+vmp` functions actually virtualised. |
 
 ### Quick sanity recipes
 
