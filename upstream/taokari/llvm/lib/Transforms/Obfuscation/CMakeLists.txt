@@ -5,6 +5,7 @@ add_llvm_component_library(LLVMObfuscation
   ObfuscationOptions.cpp
   Virtualization/CodeVirtualization.cpp
   MBA.cpp
+  FunctionOutlining.cpp
   BogusControlFlow.cpp
   IndirectBranch.cpp
   IndirectCall.cpp
@@ -31,6 +32,7 @@ add_llvm_component_library(LLVMObfuscation
   Core
   Support
   TargetParser
+  Analysis
   TransformUtils
   Linker
   )

@@ -237,6 +237,7 @@ protected:
   std::shared_ptr<ObfOpt> CfeOpt = nullptr;
   std::shared_ptr<ObfOpt> BcfOpt = nullptr;
   std::shared_ptr<ObfOpt> MbaOpt = nullptr;
+  std::shared_ptr<ObfOpt> OutlineOpt = nullptr;
   std::shared_ptr<ObfOpt> RttiOpt = nullptr;
   std::shared_ptr<ObfOpt> MetaOpt = nullptr;
   std::shared_ptr<ObfOpt> VmpOpt = nullptr;
@@ -255,6 +256,7 @@ public:
     allOpt.push_back(CfeOpt);
     allOpt.push_back(BcfOpt);
     allOpt.push_back(MbaOpt);
+    allOpt.push_back(OutlineOpt);
     allOpt.push_back(RttiOpt);
     allOpt.push_back(MetaOpt);
     allOpt.push_back(VmpOpt);
@@ -270,6 +272,7 @@ public:
                      const std::shared_ptr<ObfOpt> &cfeOpt,
                      const std::shared_ptr<ObfOpt> &bcfOpt,
                      const std::shared_ptr<ObfOpt> &mbaOpt,
+                     const std::shared_ptr<ObfOpt> &outlineOpt,
                      const std::shared_ptr<ObfOpt> &rttiOpt,
                      const std::shared_ptr<ObfOpt> &metaOpt,
                      const std::shared_ptr<ObfOpt> &vmpOpt) {
@@ -282,6 +285,7 @@ public:
     this->CfeOpt = cfeOpt;
     this->BcfOpt = bcfOpt;
     this->MbaOpt = mbaOpt;
+    this->OutlineOpt = outlineOpt;
     this->RttiOpt = rttiOpt;
     this->MetaOpt = metaOpt;
     this->VmpOpt = vmpOpt;
@@ -297,6 +301,7 @@ public:
                            std::make_shared<ObfOpt>("cfe"),
                            std::make_shared<ObfOpt>("bcf"),
                            std::make_shared<ObfOpt>("mba"),
+                           std::make_shared<ObfOpt>("outline"),
                            std::make_shared<ObfOpt>("rtti"),
                            std::make_shared<ObfOpt>("meta"),
                            std::make_shared<ObfOpt>("vmp")} {}
@@ -318,6 +323,8 @@ public:
   auto bcfOpt() const { return BcfOpt; }
 
   auto mbaOpt() const { return MbaOpt; }
+
+  auto outlineOpt() const { return OutlineOpt; }
 
   auto rttiOpt() const { return RttiOpt; }
 

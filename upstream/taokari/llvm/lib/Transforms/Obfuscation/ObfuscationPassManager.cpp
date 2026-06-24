@@ -7,6 +7,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Obfuscation/BogusControlFlow.h"
 #include "llvm/Transforms/Obfuscation/CodeVirtualization.h"
+#include "llvm/Transforms/Obfuscation/FunctionOutlining.h"
 #include "llvm/Transforms/Obfuscation/MBA.h"
 #include "llvm/Transforms/Obfuscation/NativeIntegrity.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
@@ -248,6 +249,26 @@ static cl::alias TaokariLevelMBA("taokari-level-mba",
                                  cl::aliasopt(LevelMBA));
 
 static cl::opt<bool>
+    EnableOutline("irobf-outline", cl::init(false), cl::NotHidden,
+                  cl::desc("Enable IR Function Outlining. Splits selected "
+                           "single-successor basic blocks out into internal "
+                           "helper functions so a sensitive function no "
+                           "longer reads as one static body in a decompiler. "
+                           "CHEAP on compile time; cost is call overhead and "
+                           "binary size (scales with -taokari-outline-prob "
+                           "0..100 and -taokari-outline-max-shards)."));
+static cl::opt<uint32_t>
+    LevelOutline("level-outline", cl::init(0), cl::NotHidden,
+                 cl::desc("Set IR Function Outlining Level."));
+
+static cl::alias
+    TaokariOutline("taokari-outline", cl::desc("Alias for -irobf-outline"),
+                   cl::aliasopt(EnableOutline));
+static cl::alias TaokariLevelOutline("taokari-level-outline",
+                                     cl::desc("Alias for -level-outline"),
+                                     cl::aliasopt(LevelOutline));
+
+static cl::opt<bool>
     EnableVMP("irobf-vmp", cl::init(false), cl::NotHidden,
               cl::desc("Enable IR code virtualization prototype. Compiles "
                        "annotated functions to a per-function VM bytecode "
@@ -381,6 +402,7 @@ struct ObfuscationPassManager : public ModulePass {
     }
     Opt->bcfOpt()->readOpt(EnableBogusControlFlow, LevelBogusControlFlow);
     Opt->mbaOpt()->readOpt(EnableMBA, LevelMBA);
+    Opt->outlineOpt()->readOpt(EnableOutline, LevelOutline);
     Opt->rttiOpt()->readOpt(EnableRttiEraser);
     Opt->metaOpt()->readOpt(EnableMetadataHygiene, LevelMetadataHygiene);
     Opt->vmpOpt()->readOpt(EnableVMP, LevelVMP);
@@ -445,7 +467,7 @@ struct ObfuscationPassManager : public ModulePass {
     if (EnableIndirectBr || EnableIndirectCall || EnableIndirectGV ||
         EnableIRFlattening || EnableIRStringEncryption ||
         EnableIRConstantIntEncryption || EnableIRConstantFPEncryption ||
-        EnableBogusControlFlow || EnableMBA || EnableRttiEraser ||
+        EnableBogusControlFlow || EnableMBA || EnableOutline || EnableRttiEraser ||
         EnableMetadataHygiene || EnableVMP || TaokariMaxProtection ||
         !TaokariConfigPath.empty() || !ArkariConfigPath.empty()) {
       EnableIRObfuscation = true;
@@ -475,6 +497,7 @@ struct ObfuscationPassManager : public ModulePass {
       PrintOpt("cfe", Options->cfeOpt());
       PrintOpt("bcf", Options->bcfOpt());
       PrintOpt("mba", Options->mbaOpt());
+      PrintOpt("outline", Options->outlineOpt());
       PrintOpt("meta", Options->metaOpt());
       PrintOpt("vmp", Options->vmpOpt());
     }
@@ -483,6 +506,9 @@ struct ObfuscationPassManager : public ModulePass {
     // dirtied and encrypted by the normal Taokari stack.
     add(llvm::createCodeVirtualizationPass(Options.get()));
     add(llvm::createMbaPass(Options.get()));
+    // Outline before flattening/indirect-branch: the candidate block shape
+    // (single successor, no PHI) is only stable this early in the pipeline.
+    add(llvm::createFunctionOutliningPass(Options.get()));
 
     add(llvm::createConstantIntEncryptionPass(Options.get()));
 
