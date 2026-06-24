@@ -507,19 +507,21 @@ Sensitive global references should not look like direct global accesses in the d
 
 # 10. Function Outlining / Callout Obfuscation
 
-Current status: missing.
+Current status: Level 1 done (basic splitting via CodeExtractor, `outline`
+ObfOpt annotation, `-taokari-outline-max-shards` / `-taokari-outline-prob`
+config, `.shard` re-outlining guard, correctness verifier). L2/L3 pending.
 This is a major differentiator from base Arkari.
 
 ## Level 1 — Basic Function Splitting
 
-* [ ] Add `FunctionOutlining.cpp`
-* [ ] Split selected basic blocks into helper functions
-* [ ] Preserve arguments
-* [ ] Preserve return values
-* [ ] Preserve side effects
-* [ ] Add annotation: `outline`
-* [ ] Add config for max shards
-* [ ] Add simple correctness tests
+* [x] Add `FunctionOutlining.cpp`
+* [x] Split selected basic blocks into helper functions
+* [x] Preserve arguments
+* [x] Preserve return values
+* [x] Preserve side effects
+* [x] Add annotation: `outline`
+* [x] Add config for max shards
+* [x] Add simple correctness tests
 
 ## Level 2 — Indirect Shards
 
