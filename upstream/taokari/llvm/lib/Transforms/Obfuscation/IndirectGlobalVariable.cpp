@@ -1,4 +1,5 @@
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DataLayout.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Transforms/Obfuscation/IndirectGlobalVariable.h"
@@ -9,6 +10,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/Support/RandomNumberGenerator.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/TargetParser/Triple.h"
 
 #include <random>
@@ -16,6 +18,12 @@
 #define DEBUG_TYPE "indgv"
 
 using namespace llvm;
+
+static cl::opt<uint32_t> IndGvMinSize(
+    "taokari-indgv-min-size", cl::init(0), cl::NotHidden,
+    cl::desc("Only indirect globals whose storage is at least this many bytes. "
+             "0 = all eligible globals. Skips low-value small globals so the "
+             "page-table cost lands on the sensitive (larger) ones."));
 
 namespace {
 struct IndirectGlobalVariable : public FunctionPass {
@@ -70,6 +78,15 @@ struct IndirectGlobalVariable : public FunctionPass {
             }
             if (GV->getMetadata("noobf")) {
               continue;
+            }
+            // Sensitive-globals filter: skip globals smaller than the
+            // configured threshold so the page-table cost lands on the larger
+            // (more interesting) globals, not low-value single-byte flags.
+            if (IndGvMinSize) {
+              uint64_t Sz = M.getDataLayout().getTypeAllocSize(
+                  GV->getValueType());
+              if (Sz < IndGvMinSize)
+                continue;
             }
 
             FunctionGVs[&F].insert(GV);

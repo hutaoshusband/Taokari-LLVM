@@ -486,7 +486,7 @@ Main weakness: should become more polymorphic and better tested.
 * [x] Add per-function global cache
 * [x] Add runtime nonce mixing
 * [x] Add MBA on global pointer decrypt
-* [ ] Add config for sensitive globals only
+* [x] Add config for sensitive globals only
 * [x] Add annotation: `indgv`
 
 ## Level 3 — Fortress Globals
