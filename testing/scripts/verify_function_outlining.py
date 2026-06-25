@@ -252,6 +252,11 @@ def main() -> int:
                   file=sys.stderr)
             return 1
         l3_shard_defs = len(callees)
+        # Dispatcher: at least one shard-shaped function must take an i32 token
+        # first arg and branch on it (token-switched callout dispatch).
+        if not re.search(r"define[^@]*@__taokari_sh_[0-9a-f]+\(i32 ", l3_text):
+            print("L3: no token-switched dispatcher shard found", file=sys.stderr)
+            return 1
         # Decompile-quality gate: the sensitive function's original arithmetic
         # (mul by 17) must no longer sit inline in its body; it has been pushed
         # into shards, so a decompiler cannot read it as one clean body.

@@ -476,12 +476,24 @@ struct FunctionOutlining : public FunctionPass {
   // block; later fortress steps (integrity check) add more blocks afterwards.
   void splitShardIntoLayers(Module &M, Function &Shard,
                             std::mt19937_64 &FuncRNG) {
-    if (Shard.size() != 1)
+    // Pick the block with the most real code (the work usually lives in a
+    // non-entry block after CodeExtractor splits allocas/stores off). Splitting
+    // that block spreads the work across a chained caller/sub-shard pair.
+    BasicBlock *Best = nullptr;
+    uint32_t BestSize = 0;
+    for (BasicBlock &BB : Shard) {
+      if (!hasOutlinableTail(BB, OutlineMinSize.getValue(),
+                             OutlineMaxInsts.getValue()))
+        continue;
+      uint32_t S = realSize(BB);
+      if (S > BestSize) {
+        BestSize = S;
+        Best = &BB;
+      }
+    }
+    if (!Best)
       return;
-    BasicBlock *BB = &Shard.getEntryBlock();
-    if (!hasOutlinableTail(*BB, OutlineMinSize.getValue(),
-                           OutlineMaxInsts.getValue()))
-      return;
+    BasicBlock *BB = Best;
 
     DominatorTree DT(Shard);
     AssumptionCache AC(Shard);
@@ -519,6 +531,100 @@ struct FunctionOutlining : public FunctionPass {
     Sub->setLinkage(GlobalValue::InternalLinkage);
     Sub->addFnAttr(Attribute::NoInline);
     Sub->setName(shardName(FuncRNG));
+
+    wrapWithDispatcher(M, Shard, Sub, FuncRNG);
+  }
+
+  // Insert a token-switched dispatcher between the parent shard and the sub-shard
+  // it just extracted. The parent no longer calls the sub-shard directly; it
+  // calls a dispatcher that switches on a token between the real sub-shard and a
+  // fake, so the real edge is hidden behind an indirect dispatch.
+  void wrapWithDispatcher(Module &M, Function &Parent, Function *Sub,
+                          std::mt19937_64 &FuncRNG) {
+    // Find the call site inside the parent that targets the sub-shard.
+    CallInst *CallToSub = nullptr;
+    for (BasicBlock &BB : Parent) {
+      for (Instruction &I : BB) {
+        if (auto *CI = dyn_cast<CallInst>(&I))
+          if (CI->getCalledFunction() == Sub) {
+            CallToSub = CI;
+            break;
+          }
+      }
+      if (CallToSub)
+        break;
+    }
+    if (!CallToSub)
+      return;
+
+    auto &Ctx = M.getContext();
+    auto *I32 = Type::getInt32Ty(Ctx);
+    auto *FTy = Sub->getFunctionType();
+
+    // Fake target with the sub-shard's signature.
+    auto *Fake = Function::Create(FTy, GlobalValue::InternalLinkage,
+                                  shardName(FuncRNG), M);
+    Fake->addFnAttr(Attribute::NoInline);
+    BasicBlock *FBB = BasicBlock::Create(Ctx, "entry", Fake);
+    IRBuilder<> FB(FBB);
+    Type *RetTy = FTy->getReturnType();
+    if (RetTy->isVoidTy())
+      FB.CreateRetVoid();
+    else
+      FB.CreateRet(Constant::getNullValue(RetTy));
+    appendToCompilerUsed(M, {Fake});
+
+    // Dispatcher(i32 token, <sub-shard args>): switch token -> real | default fake.
+    SmallVector<Type *, 8> DispArgTys;
+    DispArgTys.push_back(I32);
+    for (Type *Ty : FTy->params())
+      DispArgTys.push_back(Ty);
+    auto *DispFTy =
+        FunctionType::get(FTy->getReturnType(), DispArgTys, false);
+    auto *Disp = Function::Create(DispFTy, GlobalValue::InternalLinkage,
+                                  shardName(FuncRNG), M);
+    Disp->addFnAttr(Attribute::NoInline);
+    BasicBlock *DispEntry = BasicBlock::Create(Ctx, "entry", Disp);
+    BasicBlock *RealBB = BasicBlock::Create(Ctx, "real", Disp);
+    BasicBlock *FakeBB = BasicBlock::Create(Ctx, "fake", Disp);
+
+    Argument *TokenArg = Disp->getArg(0);
+    uint32_t RealToken = FuncRNG() & 0xffff;
+    IRBuilder<> DE(DispEntry);
+    Value *Pred = DE.CreateICmpEQ(TokenArg, ConstantInt::get(I32, RealToken),
+                                  "disp.tok");
+    DE.CreateCondBr(Pred, RealBB, FakeBB);
+
+    // Real branch forwards args to the sub-shard.
+    IRBuilder<> RB(RealBB);
+    SmallVector<Value *, 8> RealArgs;
+    for (unsigned A = 1; A < Disp->arg_size(); ++A)
+      RealArgs.push_back(Disp->getArg(A));
+    Value *RealRes = RB.CreateCall(Sub, RealArgs);
+    if (RetTy->isVoidTy())
+      RB.CreateRetVoid();
+    else
+      RB.CreateRet(RealRes);
+
+    // Fake branch forwards args to the fake shard.
+    IRBuilder<> FKB(FakeBB);
+    SmallVector<Value *, 8> FakeArgs(RealArgs);
+    Value *FakeRes = FKB.CreateCall(Fake, FakeArgs);
+    if (RetTy->isVoidTy())
+      FKB.CreateRetVoid();
+    else
+      FKB.CreateRet(FakeRes);
+
+    // Rewrite the parent's call: disp(realToken, <original args>).
+    SmallVector<Value *, 8> NewArgs;
+    NewArgs.push_back(ConstantInt::get(I32, RealToken));
+    for (unsigned A = 0; A < CallToSub->arg_size(); ++A)
+      NewArgs.push_back(CallToSub->getArgOperand(A));
+    IRBuilder<> CB(CallToSub);
+    CallInst *NewCall = CB.CreateCall(Disp, NewArgs, CallToSub->getName());
+    NewCall->setCallingConv(CallToSub->getCallingConv());
+    CallToSub->replaceAllUsesWith(NewCall);
+    CallToSub->eraseFromParent();
   }
 };
 } // namespace
