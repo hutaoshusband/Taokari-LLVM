@@ -1262,7 +1262,7 @@ Goal: make Taokari controllable instead of “all or nothing”.
 * [x] Add profile: `balanced`
 * [x] Add profile: `strong`
 * [x] Add profile: `fortress`
-* [ ] Add per-pass budget system
+* [x] Add per-pass budget system
 * [ ] Add max binary size growth limit
 * [ ] Add max compile time growth limit
 * [ ] Add max runtime overhead target
