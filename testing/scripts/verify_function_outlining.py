@@ -51,6 +51,22 @@ int main(void) {
 }
 """
 
+DEBUG_CRASH_SOURCE = r"""
+#include <stdint.h>
+
+__attribute__((noinline))
+int api(int a, int b) {
+    int x = a * 17 + b;
+    int y = (x ^ 0x5a5a) - a;
+    int z = y + (b << 2);
+    return z ^ (x + y);
+}
+
+int main(void) {
+    return api(13, 7) == 0;
+}
+"""
+
 
 def run(command: list[str], *, cwd: Path = ROOT, input: str | None = None) -> subprocess.CompletedProcess[str]:
     if VSDEVCMD.exists():
@@ -117,6 +133,20 @@ def main() -> int:
         tmp = Path(tmp_name)
         src = tmp / "outline.c"
         src.write_text(SOURCE, encoding="utf-8")
+
+        dbg_src = tmp / "outline_debug.c"
+        dbg_src.write_text(DEBUG_CRASH_SOURCE, encoding="utf-8")
+        dbg_exe = tmp / "outline_debug.exe"
+        res = run([str(CLANG), str(dbg_src), "-O2", "-g",
+                   "-mllvm", "-taokari", "-mllvm", "-taokari-outline",
+                   "-mllvm", "-taokari-level-outline=4",
+                   "-mllvm", "-taokari-outline-prob=100",
+                   "-mllvm", "-taokari-outline-max-shards=8",
+                   "-o", str(dbg_exe)])
+        if res.returncode:
+            print(res.stdout, end="")
+            print(res.stderr, end="", file=sys.stderr)
+            return res.returncode
 
         # L1: at level 1 shards keep the readable .shard suffix.
         ir = tmp / "outline.ll"

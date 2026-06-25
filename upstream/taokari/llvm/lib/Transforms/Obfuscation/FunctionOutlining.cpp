@@ -198,6 +198,36 @@ struct FunctionOutlining : public FunctionPass {
     return true;
   }
 
+  static void stripShardDebug(Function &F) {
+    F.setSubprogram(nullptr);
+    SmallVector<Instruction *, 16> Dead;
+    for (BasicBlock &BB : F) {
+      for (Instruction &I : BB) {
+        I.setDebugLoc(DebugLoc());
+        I.dropDbgRecords();
+        if (I.isDebugOrPseudoInst())
+          Dead.push_back(&I);
+      }
+      BB.deleteTrailingDbgRecords();
+    }
+    for (Instruction *I : Dead)
+      I->eraseFromParent();
+  }
+
+  static void hoistEntryAllocas(Function &F) {
+    BasicBlock &Entry = F.getEntryBlock();
+    SmallVector<AllocaInst *, 8> Allocas;
+    for (Instruction &I : Entry)
+      if (auto *AI = dyn_cast<AllocaInst>(&I))
+        Allocas.push_back(AI);
+    auto Insert = Entry.begin();
+    for (AllocaInst *AI : Allocas) {
+      AI->moveBefore(Entry, Insert);
+      Insert = AI->getIterator();
+      ++Insert;
+    }
+  }
+
   bool outlineTail(Function &F, BasicBlock &BB, DominatorTree &DT,
                    AssumptionCache &AC, CodeExtractorAnalysisCache &CEAC,
                    uint32_t MinSize, uint32_t Level,
@@ -258,6 +288,7 @@ struct FunctionOutlining : public FunctionPass {
     }
     if (Level >= 3)
       fortressShard(M, *Shard, FuncRNG);
+    stripShardDebug(*Shard);
     return true;
   }
 
@@ -284,7 +315,7 @@ struct FunctionOutlining : public FunctionPass {
       for (Use &U : A.uses())
         Uses.push_back(&U);
 
-      IRBuilder<> EB(&Entry.front());
+      IRBuilder<> EB(&*Entry.getFirstInsertionPt());
       Value *Wide = EB.CreateZExt(&A, I64, A.getName() + ".z");
       Value *Unmasked = EB.CreateXor(Wide, ConstantInt::get(I64, Keys[I]),
                                      A.getName() + ".unm");
@@ -378,6 +409,7 @@ struct FunctionOutlining : public FunctionPass {
     auto *I64 = Type::getInt64Ty(Ctx);
     uint64_t Token = nextNonZero(FuncRNG);
     uint64_t Salt = nextNonZero(FuncRNG);
+    hoistEntryAllocas(Shard);
 
     auto *TokenGV = new GlobalVariable(
         M, I64, false, GlobalValue::PrivateLinkage,
@@ -397,9 +429,8 @@ struct FunctionOutlining : public FunctionPass {
     BasicBlock *Junk = BasicBlock::Create(Ctx, Shard.getName() + ".ic.junk",
                                           &Shard, Real);
 
-    Entry.getTerminator()->eraseFromParent();
-
-    IRBuilder<> B(&Entry, Entry.getFirstInsertionPt());
+    Instruction *OldTerm = Entry.getTerminator();
+    IRBuilder<> B(OldTerm);
     Value *A = B.CreateAlignedLoad(I64, TokenGV, Align(8), true, "ic.a");
     Value *Bv = B.CreateAlignedLoad(I64, TokenGV, Align(8), true, "ic.b");
     auto *SaltC = ConstantInt::get(I64, Salt);
@@ -407,6 +438,7 @@ struct FunctionOutlining : public FunctionPass {
     Value *R = B.CreateXor(Bv, SaltC, "ic.r");
     Value *Pred = B.CreateICmpEQ(L, R, "ic.p");
     B.CreateCondBr(Pred, Real, Junk);
+    OldTerm->eraseFromParent();
 
     IRBuilder<> J(Junk);
     J.CreateUnreachable();
@@ -498,6 +530,7 @@ struct FunctionOutlining : public FunctionPass {
     Sub->setName(shardName(FuncRNG));
 
     wrapWithDispatcher(M, Shard, Sub, FuncRNG);
+    stripShardDebug(*Sub);
   }
 
   void wrapWithDispatcher(Module &M, Function &Parent, Function *Sub,
