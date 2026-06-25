@@ -120,16 +120,29 @@ struct DynamicProtection : public FunctionPass {
       emitFakeCheck(M, B);
 
     Value *Detected = nullptr;
-    switch (Kind) {
-    case CK_Debugger:
-      Detected = emitDebuggerCheck(M, B, Windows);
-      break;
-    case CK_PEB:
-      Detected = emitPEBCheck(M, B, Windows);
-      break;
-    case CK_Timing:
-      Detected = emitTimingCheck(M, B, Windows);
-      break;
+    // L3: build the detection inside a private internal probe function and call
+    // it indirectly. The real kernel32 edge lives only inside the probe body,
+    // so the caller has no direct call to a detection API for icall to expose
+    // and for a decompiler to flag. The probe is internal, so the icall page
+    // table can further hide the caller->probe edge when both passes are on.
+    Function *Probe = nullptr;
+    if (Level >= 3 && Windows) {
+      Probe = createProbe(M, Kind);
+      auto *I1 = Type::getInt1Ty(Ctx);
+      auto *ProbeTy = FunctionType::get(I1, false);
+      Detected = B.CreateCall(ProbeTy, Probe, {});
+    } else {
+      switch (Kind) {
+      case CK_Debugger:
+        Detected = emitDebuggerCheck(M, B, Windows);
+        break;
+      case CK_PEB:
+        Detected = emitPEBCheck(M, B, Windows);
+        break;
+      case CK_Timing:
+        Detected = emitTimingCheck(M, B, Windows);
+        break;
+      }
     }
 
     // L2: mix the detection result with an unfoldable opaque-false predicate
@@ -171,6 +184,35 @@ struct DynamicProtection : public FunctionPass {
     B.CreateUnreachable();
 
     return true;
+  }
+
+  // Build (or reuse) a private internal probe function that runs the chosen
+  // detection primitive and returns i1. The real kernel32 call edge lives only
+  // inside this probe, so the protected function has no direct detection call.
+  Function *createProbe(Module &M, CheckKind Kind) {
+    auto &Ctx = M.getContext();
+    auto *I1 = Type::getInt1Ty(Ctx);
+    auto *FTy = FunctionType::get(I1, false);
+    std::string Name = "__taokari_dyn_probe_" + std::to_string(RNG() & 0xfffff);
+    auto *Probe = Function::Create(FTy, GlobalValue::InternalLinkage, Name, M);
+    Probe->addFnAttr(Attribute::NoInline);
+    BasicBlock *BB = BasicBlock::Create(Ctx, "entry", Probe);
+    IRBuilder<> PB(BB);
+    Value *Result = nullptr;
+    switch (Kind) {
+    case CK_Debugger:
+      Result = emitDebuggerCheck(M, PB, /*Windows=*/true);
+      break;
+    case CK_PEB:
+      Result = emitPEBCheck(M, PB, /*Windows=*/true);
+      break;
+    case CK_Timing:
+      Result = emitTimingCheck(M, PB, /*Windows=*/true);
+      break;
+    }
+    PB.CreateRet(Result);
+    appendToCompilerUsed(M, {Probe});
+    return Probe;
   }
 
   // A decoy detection call: a private internal function with a

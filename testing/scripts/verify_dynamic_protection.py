@@ -210,6 +210,51 @@ def main() -> int:
                   file=sys.stderr)
             return 1
 
+        # L3: fortress. The detection is built inside a private internal probe
+        # function and called indirectly, so the protected function has no
+        # direct call to a detection API. Clean run must still round-trip.
+        l3_src = tmp / "dyn_l3.c"
+        l3_src.write_text(SOURCE.replace('annotate("+dyn")',
+                                         'annotate("+dyn^dyn=3")'),
+                          encoding="utf-8")
+        l3_ir = tmp / "dyn_l3.ll"
+        res = run([str(CLANG), str(l3_src), "-O0", "-fno-discard-value-names",
+                   "-S", "-emit-llvm", "-mllvm", "-taokari",
+                   "-mllvm", "-taokari-dyn", "-o", str(l3_ir)])
+        if res.returncode:
+            print(res.stdout, end="")
+            print(res.stderr, end="", file=sys.stderr)
+            return res.returncode
+        l3_text = l3_ir.read_text(encoding="utf-8", errors="ignore")
+        if "__taokari_dyn_probe_" not in l3_text:
+            print("L3: no indirect probe function emitted", file=sys.stderr)
+            return 1
+        # The protected function body must not call a detection API directly.
+        sens_body = re.search(r"define[^@]*@sensitive\(.*?\n\}", l3_text, re.S)
+        if sens_body:
+            for api in ("IsDebuggerPresent", "CheckRemoteDebuggerPresent",
+                        "QueryPerformanceCounter"):
+                if api in sens_body.group(0):
+                    print(f"L3: detection API {api} still called directly in "
+                          "protected body (not hidden behind probe)", file=sys.stderr)
+                    return 1
+        l3_exe = tmp / "dyn_l3.exe"
+        res = run([str(CLANG), str(l3_src), "-O2", "-mllvm", "-taokari",
+                   "-mllvm", "-taokari-dyn", "-o", str(l3_exe)])
+        if res.returncode:
+            print(res.stdout, end="")
+            print(res.stderr, end="", file=sys.stderr)
+            return res.returncode
+        l3_run = run([str(l3_exe)])
+        if l3_run.returncode:
+            print(f"L3 clean run tripped the trap (rc={l3_run.returncode})",
+                  file=sys.stderr)
+            return l3_run.returncode
+        if l3_run.stdout != ref_run.stdout:
+            print(f"L3 output drift:\n  obf: {l3_run.stdout!r}\n  ref: {ref_run.stdout!r}",
+                  file=sys.stderr)
+            return 1
+
     print("dyn: PASS")
     return 0
 

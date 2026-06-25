@@ -605,18 +605,21 @@ The binary should not leak project paths, compiler identifiers, helper names or 
 
 # 12. Dynamic Protections
 
-Current status: Level 1 done. Level 2 mostly done (6/8). New `DynamicProtection`
-pass inserts one runtime check at the entry of annotated functions:
-IsDebuggerPresent, a CheckRemoteDebuggerPresent probe (Windows process-state
-debugger check, safer than raw PEB gs access), or a QueryPerformanceCounter
-timing delta. A detected debugger routes through a libc exit tamper path; a
-clean (non-debugged) run always takes the normal path. Off by default and kept
-out of -taokari-max; opt in via `+dyn` annotation or `-taokari-dyn`. L2 adds:
-decoy fake check calls, result mixing with an unfoldable opaque-false
-predicate seeded by a runtime nonce, and a shared module tamper flag that the
-trap sets and every check reads (detection propagates across checks). Also
-fixes a pre-existing bug in makeUnfoldableFalsePredicate (it returned
-always-true). L2 remaining: indirect/delayed checks. L3 pending.
+Current status: Level 1 done. Level 2 mostly done (6/8). Level 3 partial
+(4/11). New `DynamicProtection` pass inserts one runtime check at the entry of
+annotated functions: IsDebuggerPresent, a CheckRemoteDebuggerPresent probe
+(Windows process-state debugger check, safer than raw PEB gs access), or a
+QueryPerformanceCounter timing delta. A detected debugger routes through a libc
+exit tamper path; a clean (non-debugged) run always takes the normal path. Off
+by default and kept out of -taokari-max; opt in via `+dyn` annotation or
+`-taokari-dyn`. L2 adds: decoy fake check calls, result mixing with an
+unfoldable opaque-false predicate seeded by a runtime nonce, and a shared module
+tamper flag that the trap sets and every check reads (detection propagates
+across checks). L3 adds: indirect probe functions hiding the real kernel32 edge
+behind an internal call, and a full correctness/false-positive verifier suite.
+Also fixes a pre-existing bug in makeUnfoldableFalsePredicate (it returned
+always-true). L2 remaining: indirect/delayed checks. L3 remaining: integrity
+integration, post-link hashing, randomized placement, sentinels.
 These must be optional and off by default.
 
 ## Level 1 — Basic Runtime Checks
@@ -648,12 +651,12 @@ These must be optional and off by default.
 * [ ] Add post-link hash patching
 * [ ] Add encrypted hash table
 * [ ] Add randomized check placement
-* [ ] Add check-call indirection
-* [ ] Add tamper response policy
+* [x] Add check-call indirection
+* [x] Add tamper response policy
 * [ ] Add anti-patch sentinel
 * [ ] Add debugger-resistant control paths
-* [ ] Add full correctness test suite
-* [ ] Add false-positive benchmark
+* [x] Add full correctness test suite
+* [x] Add false-positive benchmark
 
 **Definition of done for L3:**
 Tampering or debugging should not be detected by one obvious check.
