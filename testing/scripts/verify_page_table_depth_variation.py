@@ -105,7 +105,7 @@ def verify_indirect_depths(tmp: Path) -> None:
       func_depths.append(count_tables(ir, func_marker))
     if any(depth < 2 or depth > 6 for depth in module_depths):
       raise SystemExit(f"{name}: module depth outside 2..6: {module_depths}")
-    if any(depth < 2 or depth > 5 for depth in func_depths):
+    if any(depth < 3 or depth > 5 for depth in func_depths):
       raise SystemExit(f"{name}: function depth outside level-3 range: {func_depths}")
     observed.extend(module_depths + func_depths)
   if len(set(observed)) < 2:

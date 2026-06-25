@@ -130,7 +130,7 @@ unsigned chooseFakeEntryCount(std::mt19937_64 &rng, unsigned realEntries) {
 unsigned choosePageTableDepth(std::mt19937_64 &rng, unsigned level) {
   if (!level)
     return 0;
-  unsigned minDepth = level > 1 ? 2u : 1u;
+  unsigned minDepth = level >= 3 ? 3u : (level > 1 ? 2u : 1u);
   unsigned maxDepth = std::min(6u, std::max(minDepth, level + 2u));
   return std::uniform_int_distribution<unsigned>(minDepth, maxDepth)(rng);
 }
