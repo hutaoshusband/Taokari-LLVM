@@ -285,9 +285,12 @@ Value *taokari::makeUnfoldableTruePredicate(IRBuilder<> &IRB, Value *Seed,
 Value *taokari::makeUnfoldableFalsePredicate(IRBuilder<> &IRB, Value *Seed,
                                              std::mt19937_64 &RNG,
                                              const Twine &Name) {
+  // x*(x+1) is always even, so the low bit is always 0; comparing it equal to
+  // 1 is therefore always false (the complement of makeUnfoldableTruePredicate,
+  // which compares it equal to 0). Same non-foldable identity.
   auto *IntTy = cast<IntegerType>(Seed->getType());
   Value *Inc = IRB.CreateAdd(Seed, ConstantInt::get(IntTy, 1), Name + ".inc");
   Value *Prod = IRB.CreateMul(Seed, Inc, Name + ".prod");
   Value *Low = IRB.CreateAnd(Prod, ConstantInt::get(IntTy, 1), Name + ".low");
-  return IRB.CreateICmpNE(Low, ConstantInt::get(IntTy, 1), Name);
+  return IRB.CreateICmpEQ(Low, ConstantInt::get(IntTy, 1), Name);
 }

@@ -157,6 +157,46 @@ def main() -> int:
                   file=sys.stderr)
             return 1
 
+        # L2: distributed checks. At level 2 the entry carries a fake decoy
+        # check call and the real detection result is mixed with an unfoldable
+        # opaque predicate. A clean run must still round-trip (the opaque side
+        # is always false at runtime, so the mix never false-positives).
+        l2_src = tmp / "dyn_l2.c"
+        l2_src.write_text(SOURCE.replace('annotate("+dyn")',
+                                         'annotate("+dyn^dyn=2")'),
+                          encoding="utf-8")
+        l2_ir = tmp / "dyn_l2.ll"
+        res = run([str(CLANG), str(l2_src), "-O0", "-fno-discard-value-names",
+                   "-S", "-emit-llvm", "-mllvm", "-taokari",
+                   "-mllvm", "-taokari-dyn", "-o", str(l2_ir)])
+        if res.returncode:
+            print(res.stdout, end="")
+            print(res.stderr, end="", file=sys.stderr)
+            return res.returncode
+        l2_text = l2_ir.read_text(encoding="utf-8", errors="ignore")
+        if "__taokari_dyn_fake_" not in l2_text:
+            print("L2: no fake decoy check emitted", file=sys.stderr)
+            return 1
+        if "dyn.mix" not in l2_text and "or i1" not in l2_text:
+            print("L2: no opaque-predicate result mixing", file=sys.stderr)
+            return 1
+        l2_exe = tmp / "dyn_l2.exe"
+        res = run([str(CLANG), str(l2_src), "-O2", "-mllvm", "-taokari",
+                   "-mllvm", "-taokari-dyn", "-o", str(l2_exe)])
+        if res.returncode:
+            print(res.stdout, end="")
+            print(res.stderr, end="", file=sys.stderr)
+            return res.returncode
+        l2_run = run([str(l2_exe)])
+        if l2_run.returncode:
+            print(f"L2 clean run tripped the trap (rc={l2_run.returncode}): "
+                  f"opaque-false predicate is not actually false", file=sys.stderr)
+            return l2_run.returncode
+        if l2_run.stdout != ref_run.stdout:
+            print(f"L2 output drift:\n  obf: {l2_run.stdout!r}\n  ref: {ref_run.stdout!r}",
+                  file=sys.stderr)
+            return 1
+
     print("dyn: PASS")
     return 0
 

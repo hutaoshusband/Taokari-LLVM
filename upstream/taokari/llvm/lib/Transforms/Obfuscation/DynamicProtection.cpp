@@ -10,6 +10,7 @@
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Obfuscation/DynamicProtection.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
+#include "llvm/Transforms/Obfuscation/OpaquePredicate.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
@@ -78,6 +79,7 @@ struct DynamicProtection : public FunctionPass {
     bool Windows = T.isOSWindows() && T.getArch() == Triple::x86_64;
 
     CheckKind Kind = Windows ? static_cast<CheckKind>(RNG() % 3) : CK_Debugger;
+    const uint32_t Level = Opt.level();
 
     LLVMContext &Ctx = M.getContext();
     IRBuilder<> B(Ctx);
@@ -89,6 +91,13 @@ struct DynamicProtection : public FunctionPass {
 
     BasicBlock *Trap = BasicBlock::Create(Ctx, "dyn.trap", &F);
     B.SetInsertPoint(&OrigEntry);
+
+    // L2: emit a decoy check call that looks like a detection primitive but
+    // does nothing, so a static cross-reference walk sees several plausible
+    // detection sites instead of one obvious one.
+    if (Level >= 2 && Windows)
+      emitFakeCheck(M, B);
+
     Value *Detected = nullptr;
     switch (Kind) {
     case CK_Debugger:
@@ -101,9 +110,19 @@ struct DynamicProtection : public FunctionPass {
       Detected = emitTimingCheck(M, B, Windows);
       break;
     }
-    // Detected is true => tampered/debugged => trap. A clean run makes every
-    // primitive return false, so the branch always falls through to OrigCode.
-    B.CreateCondBr(Detected, Trap, OrigCode);
+
+    // L2: mix the detection result with an unfoldable opaque-false predicate.
+    // At runtime the opaque side is always false, so Tripped == Detected, but
+    // a decompiler cannot fold the branch condition to the raw check output.
+    if (Level >= 2) {
+      auto *I64 = Type::getInt64Ty(Ctx);
+      Value *Seed = taokari::makeSeedFromFlags(F, B, I64, RNG);
+      Value *OpaqueFalse = taokari::makeUnfoldableFalsePredicate(B, Seed, RNG);
+      Value *Mixed = B.CreateOr(Detected, OpaqueFalse, "dyn.mix");
+      B.CreateCondBr(Mixed, Trap, OrigCode);
+    } else {
+      B.CreateCondBr(Detected, Trap, OrigCode);
+    }
 
     // Tamper path: libc exit with a non-zero code, marked NoReturn.
     B.SetInsertPoint(Trap);
@@ -116,6 +135,26 @@ struct DynamicProtection : public FunctionPass {
     B.CreateUnreachable();
 
     return true;
+  }
+
+  // A decoy detection call: a private internal function with a
+  // detection-looking name and signature that simply returns false. Real code
+  // ignores the result; it exists only to pollute a decompiler's call graph.
+  void emitFakeCheck(Module &M, IRBuilder<> &B) {
+    auto &Ctx = M.getContext();
+    auto *I32 = Type::getInt32Ty(Ctx);
+    auto *FTy = FunctionType::get(I32, false);
+    std::string Name = "__taokari_dyn_fake_" + std::to_string(RNG() & 0xfffff);
+    auto *Fake = dyn_cast<Function>(M.getOrInsertFunction(Name, FTy).getCallee());
+    if (Fake->empty()) {
+      Fake->setLinkage(GlobalValue::InternalLinkage);
+      Fake->addFnAttr(Attribute::NoInline);
+      BasicBlock *BB = BasicBlock::Create(Ctx, "entry", Fake);
+      IRBuilder<> FB(BB);
+      FB.CreateRet(ConstantInt::get(I32, 0));
+      appendToCompilerUsed(M, {Fake});
+    }
+    B.CreateCall(Fake);
   }
 
   // IsDebuggerPresent() from kernel32. Returns BOOL (i32) nonzero under a
