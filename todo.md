@@ -1471,8 +1471,8 @@ Purpose: maximum practical protection for sensitive functions only.
 
 ## Milestone 7 — Add Dynamic Protections
 
-* [ ] Runtime checks L1
-* [ ] Distributed checks L2
+* [x] Runtime checks L1
+* [x] Distributed checks L2
 * [x] Function integrity L3
 * [ ] Post-link patching
 
@@ -1496,8 +1496,8 @@ Most impact for Taokari first:
 5. [x] StringEnc status hardening
 6. [x] MBA pass
 7. [x] Metadata stripping
-8. [ ] Function outlining
-9. [ ] Dynamic protections
+8. [x] Function outlining
+9. [x] Dynamic protections
 10. [x] Optional virtualization
 
 ---
