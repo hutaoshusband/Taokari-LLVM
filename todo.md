@@ -167,7 +167,7 @@ test is non-vacuous and that the unfoldable family is what closes the gap.
 * [x] Add `opt -O2` survival tests
 * [x] Use predicates in flattening
 * [x] Use predicates in bogus control flow
-* [ ] Use predicates in anti-debug gates
+* [x] Use predicates in anti-debug gates
 
 **Definition of done for L3:**
 Opaque predicates should survive the normal LLVM cleanup pipeline and be reusable by all other passes.
@@ -267,7 +267,7 @@ Example identities:
 * [x] Add MBA on string decryptors
 * [x] Add MBA on page-table decryptors
 * [x] Add solver-resistance samples
-* [ ] Add overhead budget system
+* [x] Add overhead budget system
 * [x] Add hot-loop avoidance
 * [x] Add performance profile tests
 

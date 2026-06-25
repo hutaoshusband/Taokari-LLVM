@@ -22,6 +22,12 @@ using namespace llvm;
 static cl::opt<uint32_t>
     MBAProbability("taokari-mba-prob", cl::init(40), cl::NotHidden,
                    cl::desc("MBA instruction substitution probability, 0..100."));
+static cl::opt<uint32_t>
+    MBAMaxSubs("taokari-mba-max-substitutions", cl::init(0), cl::NotHidden,
+               cl::desc("Overhead budget: hard cap on MBA substitutions per "
+                        "function. 0 = uncapped (probability alone controls "
+                        "density). Bounds compile time and binary size on "
+                        "huge functions."));
 
 namespace {
 struct MBA : public FunctionPass {
@@ -77,25 +83,47 @@ struct MBA : public FunctionPass {
     std::mt19937_64 FuncRNG(RNG());
     uint32_t EffectiveLevel =
         F.getName().starts_with("__taokari_vmp_interp_") ? 1 : Opt.level();
+    // Overhead budget: once MaxSubs substitutions land in this function, stop.
+    // The probability already limits density, but a very large function can
+    // still produce hundreds of substitutions; this caps the absolute count.
+    const uint32_t MaxSubs = MBAMaxSubs.getValue();
+    uint32_t SubsDone = 0;
     bool Changed = false;
     for (BinaryOperator *BO : Candidates) {
+      if (MaxSubs && SubsDone >= MaxSubs)
+        break;
       if ((FuncRNG() % 100) >= Probability)
         continue;
       switch (BO->getOpcode()) {
       case Instruction::Add:
-        Changed |= substituteAdd(*BO, EffectiveLevel, FuncRNG);
+        if (substituteAdd(*BO, EffectiveLevel, FuncRNG)) {
+          ++SubsDone;
+          Changed = true;
+        }
         break;
       case Instruction::Sub:
-        Changed |= substituteSub(*BO, EffectiveLevel, FuncRNG);
+        if (substituteSub(*BO, EffectiveLevel, FuncRNG)) {
+          ++SubsDone;
+          Changed = true;
+        }
         break;
       case Instruction::Xor:
-        Changed |= substituteXor(*BO, EffectiveLevel, FuncRNG);
+        if (substituteXor(*BO, EffectiveLevel, FuncRNG)) {
+          ++SubsDone;
+          Changed = true;
+        }
         break;
       case Instruction::And:
-        Changed |= substituteAnd(*BO, EffectiveLevel, FuncRNG);
+        if (substituteAnd(*BO, EffectiveLevel, FuncRNG)) {
+          ++SubsDone;
+          Changed = true;
+        }
         break;
       case Instruction::Or:
-        Changed |= substituteOr(*BO, EffectiveLevel, FuncRNG);
+        if (substituteOr(*BO, EffectiveLevel, FuncRNG)) {
+          ++SubsDone;
+          Changed = true;
+        }
         break;
       default:
         break;
