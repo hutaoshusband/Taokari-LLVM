@@ -280,10 +280,13 @@ overhead is predictable on large inputs:
 | ------------------------------------- | ----------------------------------------------------- |
 | `-taokari-outline-max-shards=N`       | Hard cap on outlined helper functions per source function. |
 | `-taokari-outline-max-insts=N`        | Skip blocks larger than N real instructions (0 = uncapped). |
+| `-taokari-outline-cross-pool`         | Opt-in L3: move shard-body constants into a shared encrypted pool. NOT MBA-compatible on the same functions (off by default). |
 | `-taokari-mba-max-substitutions=N`    | Hard cap on MBA substitutions per function (0 = uncapped, probability alone controls density). |
 | `-taokari-indbr-prob=N`               | Fraction of conditional branches rewritten per function (101 = all). |
 | `-taokari-icall-prob=N`               | Fraction of call sites rewritten per function.        |
 | `-taokari-indgv-min-size=N`           | Only indirect globals whose storage is >= N bytes (0 = all). |
+| `-taokari-opaq-kind=<k>`              | Opaque predicate seed source: algebraic\|pointer\|stack\|global\|environment\|nonce. |
+| `-taokari-opaq-family=<f>`            | Opaque predicate identity family: algebraic (foldable L1), unfoldable (L2), nested (L3 two-level chain). Drives passes that use the predicate registry. |
 | `-taokari-vmp-max-bytecode-words=N`   | Refuse VMP candidates whose bytecode exceeds N words. |
 | `-taokari-vmp-max-back-edges=N`       | Refuse VMP candidates with more than N loop back-edges. |
 
