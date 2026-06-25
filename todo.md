@@ -159,7 +159,7 @@ test is non-vacuous and that the unfoldable family is what closes the gap.
 
 * [ ] Add predicate family registry
 * [x] Add random predicate selection
-* [ ] Add predicate nesting
+* [x] Add predicate nesting
 * [ ] Add per-pass predicate style selection
 * [x] Add solver-resistance test cases
 * [x] Add SimplifyCFG survival tests

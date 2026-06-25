@@ -83,6 +83,19 @@ Value *makeUnfoldableFalsePredicate(IRBuilder<> &IRB, Value *Seed,
                                     std::mt19937_64 &RNG,
                                     const Twine &Name = "tao.opq.ufalse");
 
+/// Nested unfoldable predicates (Level 3). Compose two unfoldable identities
+/// through a shared seed so the result is a two-level chain: a single
+/// simplification step cannot resolve it because the inner value feeds the
+/// outer comparison. makeNestedTruePredicate folds to true at runtime,
+/// makeNestedFalsePredicate to false. Used as a stronger guard than the
+/// single-level unfoldable predicates.
+Value *makeNestedTruePredicate(IRBuilder<> &IRB, Value *Seed,
+                               std::mt19937_64 &RNG,
+                               const Twine &Name = "tao.opq.ntrue");
+Value *makeNestedFalsePredicate(IRBuilder<> &IRB, Value *Seed,
+                                std::mt19937_64 &RNG,
+                                const Twine &Name = "tao.opq.nfalse");
+
 } // namespace taokari
 } // namespace llvm
 

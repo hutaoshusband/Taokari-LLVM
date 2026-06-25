@@ -294,3 +294,41 @@ Value *taokari::makeUnfoldableFalsePredicate(IRBuilder<> &IRB, Value *Seed,
   Value *Low = IRB.CreateAnd(Prod, ConstantInt::get(IntTy, 1), Name + ".low");
   return IRB.CreateICmpEQ(Low, ConstantInt::get(IntTy, 1), Name);
 }
+
+namespace {
+// Build the always-even neighbour product x*(x+1) and return its low bit,
+// which is always 0. Shared core for the nested predicates.
+Value *neighbourProductLow(IRBuilder<> &IRB, Value *X, const Twine &Name) {
+  auto *IntTy = cast<IntegerType>(X->getType());
+  Value *Inc = IRB.CreateAdd(X, ConstantInt::get(IntTy, 1), Name + ".inc");
+  Value *Prod = IRB.CreateMul(X, Inc, Name + ".prod");
+  return IRB.CreateAnd(Prod, ConstantInt::get(IntTy, 1), Name + ".low");
+}
+} // namespace
+
+Value *taokari::makeNestedTruePredicate(IRBuilder<> &IRB, Value *Seed,
+                                        std::mt19937_64 &RNG,
+                                        const Twine &Name) {
+  // Two-level chain: inner low bit (always 0) is folded back into the seed,
+  // then the neighbour-product identity is applied again. At runtime the inner
+  // low bit is 0 so Derived == Seed, and the outer low bit is again 0; the
+  // equality to 0 is true. No single simplification step resolves it because
+  // the inner identity must be proved before the add can be evaluated.
+  Value *InnerLow = neighbourProductLow(IRB, Seed, Name + ".i");
+  Value *Derived = IRB.CreateAdd(Seed, InnerLow, Name + ".drv");
+  Value *OuterLow = neighbourProductLow(IRB, Derived, Name + ".o");
+  auto *IntTy = cast<IntegerType>(Seed->getType());
+  return IRB.CreateICmpEQ(OuterLow, ConstantInt::get(IntTy, 0), Name);
+}
+
+Value *taokari::makeNestedFalsePredicate(IRBuilder<> &IRB, Value *Seed,
+                                         std::mt19937_64 &RNG,
+                                         const Twine &Name) {
+  // Complement of the nested true predicate: same chain, compared equal to 1.
+  // The outer low bit is always 0, so the comparison is always false.
+  Value *InnerLow = neighbourProductLow(IRB, Seed, Name + ".i");
+  Value *Derived = IRB.CreateAdd(Seed, InnerLow, Name + ".drv");
+  Value *OuterLow = neighbourProductLow(IRB, Derived, Name + ".o");
+  auto *IntTy = cast<IntegerType>(Seed->getType());
+  return IRB.CreateICmpEQ(OuterLow, ConstantInt::get(IntTy, 1), Name);
+}
