@@ -605,7 +605,7 @@ The binary should not leak project paths, compiler identifiers, helper names or 
 
 # 12. Dynamic Protections
 
-Current status: Level 1 done. Level 2 done (8/8). Level 3 mostly done (7/11). New
+Current status: Level 1 done. Level 2 done (8/8). Level 3 mostly done (8/11). New
 `DynamicProtection` pass inserts one runtime check at the entry of annotated
 functions: IsDebuggerPresent, a CheckRemoteDebuggerPresent probe (Windows
 process-state debugger check, safer than raw PEB gs access), or a
@@ -656,7 +656,7 @@ These must be optional and off by default.
 * [x] Add check-call indirection
 * [x] Add tamper response policy
 * [x] Add anti-patch sentinel
-* [ ] Add debugger-resistant control paths
+* [x] Add debugger-resistant control paths
 * [x] Add full correctness test suite
 * [x] Add false-positive benchmark
 

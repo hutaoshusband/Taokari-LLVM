@@ -201,21 +201,52 @@ struct DynamicProtection : public FunctionPass {
     }
 
     // Tamper path: set the shared tamper flag, then libc exit with a non-zero
-    // code, marked NoReturn.
+    // code, marked NoReturn. At L3 the exit edge is hidden behind an internal
+    // trap stub so the protected function has no direct `call exit` for a
+    // reverser to flag (and icall can further indirect the stub).
     B.SetInsertPoint(Trap);
     if (Level >= 2) {
       GlobalVariable *Flag = getTamperFlag(M);
       B.CreateStore(ConstantInt::get(Type::getInt8Ty(Ctx), 1), Flag);
     }
-    Type *I32 = Type::getInt32Ty(Ctx);
+    if (Level >= 3) {
+      Function *Stub = getOrCreateTrapStub(M);
+      B.CreateCall(FunctionType::get(Type::getVoidTy(Ctx), false), Stub);
+    } else {
+      Type *I32 = Type::getInt32Ty(Ctx);
+      auto *ExitTy = FunctionType::get(Type::getVoidTy(Ctx), {I32}, false);
+      FunctionCallee Exit = M.getOrInsertFunction("exit", ExitTy);
+      if (auto *ExitFn = dyn_cast<Function>(Exit.getCallee()))
+        ExitFn->addFnAttr(Attribute::NoReturn);
+      B.CreateCall(Exit, {ConstantInt::get(I32, 87)});
+    }
+    B.CreateUnreachable();
+
+    return true;
+  }
+
+  // A private internal stub that calls libc exit(87). Used by the L3 trap path
+  // so the protected function has no direct edge to exit().
+  Function *getOrCreateTrapStub(Module &M) {
+    if (auto *Existing = M.getFunction("__taokari_dyn_trap"))
+      return Existing;
+    auto &Ctx = M.getContext();
+    auto *FTy = FunctionType::get(Type::getVoidTy(Ctx), false);
+    auto *Stub = Function::Create(FTy, GlobalValue::InternalLinkage,
+                                  "__taokari_dyn_trap", M);
+    Stub->addFnAttr(Attribute::NoInline);
+    Stub->addFnAttr(Attribute::NoReturn);
+    BasicBlock *BB = BasicBlock::Create(Ctx, "entry", Stub);
+    IRBuilder<> B(BB);
+    auto *I32 = Type::getInt32Ty(Ctx);
     auto *ExitTy = FunctionType::get(Type::getVoidTy(Ctx), {I32}, false);
     FunctionCallee Exit = M.getOrInsertFunction("exit", ExitTy);
     if (auto *ExitFn = dyn_cast<Function>(Exit.getCallee()))
       ExitFn->addFnAttr(Attribute::NoReturn);
     B.CreateCall(Exit, {ConstantInt::get(I32, 87)});
     B.CreateUnreachable();
-
-    return true;
+    appendToCompilerUsed(M, {Stub});
+    return Stub;
   }
 
   // Anti-patch sentinel: a private byte global holding a random magic value.
