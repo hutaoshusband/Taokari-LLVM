@@ -605,7 +605,7 @@ The binary should not leak project paths, compiler identifiers, helper names or 
 
 # 12. Dynamic Protections
 
-Current status: Level 1 done. Level 2 done (8/8). Level 3 partial (4/11). New
+Current status: Level 1 done. Level 2 done (8/8). Level 3 partial (5/11). New
 `DynamicProtection` pass inserts one runtime check at the entry of annotated
 functions: IsDebuggerPresent, a CheckRemoteDebuggerPresent probe (Windows
 process-state debugger check, safer than raw PEB gs access), or a
@@ -617,10 +617,11 @@ unfoldable opaque-false predicate seeded by a runtime nonce, a shared module
 tamper flag that the trap sets and every check reads (detection propagates
 across checks), and delayed check placement (the probe no longer always sits at
 the function entry). L3 adds: indirect probe functions hiding the real kernel32
-edge behind an internal call, and a full correctness/false-positive verifier
-suite. Also fixes a pre-existing bug in makeUnfoldableFalsePredicate (it
-returned always-true). L3 remaining: integrity integration, post-link hashing,
-sentinels, debugger-resistant control paths.
+edge behind an internal call, an anti-patch sentinel (a private byte the check
+verifies), and a full correctness/false-positive verifier suite. Also fixes a
+pre-existing bug in makeUnfoldableFalsePredicate (it returned always-true). L3
+remaining: integrity integration, post-link hashing, randomized placement,
+debugger-resistant control paths.
 These must be optional and off by default.
 
 ## Level 1 — Basic Runtime Checks
@@ -654,7 +655,7 @@ These must be optional and off by default.
 * [ ] Add randomized check placement
 * [x] Add check-call indirection
 * [x] Add tamper response policy
-* [ ] Add anti-patch sentinel
+* [x] Add anti-patch sentinel
 * [ ] Add debugger-resistant control paths
 * [x] Add full correctness test suite
 * [x] Add false-positive benchmark

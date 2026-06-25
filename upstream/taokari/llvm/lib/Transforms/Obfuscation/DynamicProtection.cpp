@@ -173,18 +173,25 @@ struct DynamicProtection : public FunctionPass {
     // flag starts at 0, so Tripped == Detected on a clean run; but the branch
     // condition cannot be folded to the raw check output, and once any check
     // in the module trips (setting the flag) every later check trips too.
+    // L3: also fold in an anti-patch sentinel -- a private byte whose value is
+    // baked in; patching it (or the bytes around it) trips the check.
     if (Level >= 2) {
       auto *I64 = Type::getInt64Ty(Ctx);
       Value *Seed = taokari::makeContextSeed(
           F, B, I64, RNG, taokari::OpaqueSeedKind::RuntimeNonce);
       Value *OpaqueFalse = taokari::makeUnfoldableFalsePredicate(B, Seed, RNG);
       Value *Mixed = B.CreateOr(Detected, OpaqueFalse, "dyn.mix");
+      Value *Tripped = Mixed;
+      if (Level >= 3) {
+        Value *SentinelTripped = emitSentinelCheck(M, B);
+        Tripped = B.CreateOr(Tripped, SentinelTripped, "dyn.sent");
+      }
       GlobalVariable *Flag = getTamperFlag(M);
       auto *I8 = Type::getInt8Ty(Ctx);
       Value *FlagVal = B.CreateLoad(I8, Flag, "dyn.flag");
       Value *FlagSet = B.CreateICmpNE(FlagVal, ConstantInt::get(I8, 0),
                                       "dyn.flagset");
-      Value *Tripped = B.CreateOr(Mixed, FlagSet, "dyn.trip");
+      Tripped = B.CreateOr(Tripped, FlagSet, "dyn.trip");
       B.CreateCondBr(Tripped, Trap, OrigCode);
     } else {
       B.CreateCondBr(Detected, Trap, OrigCode);
@@ -206,6 +213,28 @@ struct DynamicProtection : public FunctionPass {
     B.CreateUnreachable();
 
     return true;
+  }
+
+  // Anti-patch sentinel: a private byte global holding a random magic value.
+  // The check reads it and trips if the byte no longer matches. Patching the
+  // sentinel (or the surrounding bytes a reverser might sweep when NOP-patching
+  // the check) breaks the match. Returns i1 true => tampered. Always false on
+  // an untouched build.
+  Value *emitSentinelCheck(Module &M, IRBuilder<> &B) {
+    auto &Ctx = M.getContext();
+    auto *I8 = Type::getInt8Ty(Ctx);
+    uint8_t Magic = static_cast<uint8_t>(RNG() & 0xff);
+    if (!Magic)
+      Magic = 0x5a;
+    auto *Sentinel = new GlobalVariable(
+        M, I8, false, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I8, Magic), "__taokari_dyn_sentinel");
+    Sentinel->setAlignment(Align(1));
+    Sentinel->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+    Sentinel->addMetadata("noobf", *MDNode::get(Ctx, {}));
+    appendToCompilerUsed(M, {Sentinel});
+    Value *Val = B.CreateLoad(I8, Sentinel, "dyn.sval");
+    return B.CreateICmpNE(Val, ConstantInt::get(I8, Magic), "dyn.scmp");
   }
 
   // Build (or reuse) a private internal probe function that runs the chosen
