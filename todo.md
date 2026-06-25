@@ -210,7 +210,7 @@ This is one of the most important differentiators against plain Arkari.
 * [x] Add fake loops
 * [x] Add fake switch structures
 * [x] Add fake error paths
-* [ ] Add fake cleanup paths
+* [x] Add fake cleanup paths
 * [ ] Add fake exception-looking regions where safe
 * [x] Add fake block merging
 * [ ] Add integration with dispatcher fake cases

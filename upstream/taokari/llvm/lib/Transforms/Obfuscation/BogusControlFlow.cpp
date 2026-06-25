@@ -180,18 +180,21 @@ struct BogusControlFlow : public FunctionPass {
       auto *Sw = GuardIR.CreateSwitch(Sel, Fake, 1);
       Sw->addCase(ConstantInt::get(I32, 1), &BB);
       Function *ErrStub = getOrCreateErrorStub(M);
+      Function *CleanupStub = getOrCreateCleanupStub(M);
       unsigned Extra = 1 + (FuncRNG() % 3);
       for (unsigned I = 0; I < Extra; ++I) {
-        // Fake error path: call an internal error-reporting stub then rejoin
-        // the real block. Looks like real error handling to a static analyzer
-        // but control always continues to BB (the case is never selected at
-        // runtime).
-        BasicBlock *Err = BasicBlock::Create(
-            Ctx, BB.getName() + ".bcf.errpath", &F, &BB);
-        IRBuilder<> E(Err);
-        E.CreateCall(FunctionType::get(Type::getVoidTy(Ctx), false), ErrStub);
+        // Fake error/cleanup path: call an internal stub then rejoin the real
+        // block. Alternating between an error-reporting stub and a
+        // resource-cleanup stub makes the dead cases look like a mix of real
+        // error handling and real cleanup rather than one obvious pattern.
+        // Control always continues to BB (the case is never selected).
+        BasicBlock *Path = BasicBlock::Create(
+            Ctx, BB.getName() + ".bcf.fakepath", &F, &BB);
+        IRBuilder<> E(Path);
+        Function *Stub = (FuncRNG() & 1) ? ErrStub : CleanupStub;
+        E.CreateCall(FunctionType::get(Type::getVoidTy(Ctx), false), Stub);
         E.CreateBr(&BB);
-        Sw->addCase(ConstantInt::get(I32, static_cast<uint32_t>(2 + I)), Err);
+        Sw->addCase(ConstantInt::get(I32, static_cast<uint32_t>(2 + I)), Path);
       }
     } else {
       GuardIR.CreateCondBr(Opaque, &BB, Fake);
@@ -232,6 +235,32 @@ struct BogusControlFlow : public FunctionPass {
     B.CreateStore(ConstantInt::get(I8, 1), Flag);
     B.CreateRetVoid();
     appendToCompilerUsed(M, {Stub, Flag});
+    return Stub;
+  }
+
+  // A private internal stub that reads like resource cleanup: it zeros a
+  // private "resource" global and returns. Pairs with the error stub so the
+  // fake switch cases alternate between error-handling and cleanup-looking
+  // shapes. Never reached at runtime.
+  static Function *getOrCreateCleanupStub(Module &M) {
+    if (auto *Existing = M.getFunction("__taokari_bcf_cleanup"))
+      return Existing;
+    auto &Ctx = M.getContext();
+    auto *I8 = Type::getInt8Ty(Ctx);
+    auto *FTy = FunctionType::get(Type::getVoidTy(Ctx), false);
+    auto *Stub = Function::Create(FTy, GlobalValue::InternalLinkage,
+                                  "__taokari_bcf_cleanup", M);
+    Stub->addFnAttr(Attribute::NoInline);
+    auto *Slot = new GlobalVariable(M, I8, false, GlobalValue::PrivateLinkage,
+                                    ConstantInt::get(I8, 0x5a),
+                                    "__taokari_bcf_resource");
+    Slot->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+    Slot->setAlignment(Align(1));
+    BasicBlock *BB = BasicBlock::Create(Ctx, "entry", Stub);
+    IRBuilder<> B(BB);
+    B.CreateStore(ConstantInt::get(I8, 0), Slot);
+    B.CreateRetVoid();
+    appendToCompilerUsed(M, {Stub, Slot});
     return Stub;
   }
 
