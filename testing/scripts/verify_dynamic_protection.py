@@ -255,6 +255,28 @@ def main() -> int:
                   file=sys.stderr)
             return 1
 
+        # Predicate-family registry: -taokari-opaq-family selects the dyn
+        # check's mixing predicate. With family=algebraic the predicate folds
+        # over the runtime seed; with family=nested it carries a two-level
+        # chain. Either way a clean run must round-trip (the opaque side is
+        # always false at runtime). Compile two builds and confirm the flag is
+        # accepted and both produce correct output.
+        for fam in ("algebraic", "unfoldable", "nested"):
+            exe_f = tmp / f"dyn_fam_{fam}.exe"
+            res = run([str(CLANG), str(l3_src), "-O2",
+                       "-mllvm", "-taokari", "-mllvm", "-taokari-dyn",
+                       "-mllvm", f"-taokari-opaq-family={fam}",
+                       "-o", str(exe_f)])
+            if res.returncode:
+                print(f"family={fam}: compile failed", file=sys.stderr)
+                print(res.stderr, end="", file=sys.stderr)
+                return res.returncode
+            ran = run([str(exe_f)])
+            if ran.returncode or ran.stdout != ref_run.stdout:
+                print(f"family={fam}: clean run drifted "
+                      f"({ran.stdout!r} vs {ref_run.stdout!r})", file=sys.stderr)
+                return 1
+
     print("dyn: PASS")
     return 0
 
