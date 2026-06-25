@@ -1399,7 +1399,7 @@ Purpose: serious IP protection.
 * [x] String encryption L2/L3
 * [ ] Constant encryption L3
 * [x] Indirect calls L2/L3
-* [ ] Function outlining L2
+* [x] Function outlining L2
 * [x] Metadata strip L3
 
 ## Profile: Fortress
@@ -1415,8 +1415,8 @@ Purpose: maximum practical protection for sensitive functions only.
 * [ ] Indirect calls L3
 * [ ] Indirect branches L3
 * [ ] Indirect globals L3
-* [ ] Function outlining L3
-* [ ] Dynamic protections L3
+* [x] Function outlining L3
+* [x] Dynamic protections L3
 * [ ] Optional virtualization L3
 * [x] Full benchmark required
 * [x] Full regression suite required
@@ -1464,10 +1464,10 @@ Purpose: maximum practical protection for sensitive functions only.
 
 ## Milestone 6 — Add Function Outlining
 
-* [ ] Basic outlining
-* [ ] Indirect shard calls
-* [ ] Fake shard graph
-* [ ] Cross-pass tests
+* [x] Basic outlining
+* [x] Indirect shard calls
+* [x] Fake shard graph
+* [x] Cross-pass tests
 
 ## Milestone 7 — Add Dynamic Protections
 
