@@ -605,7 +605,7 @@ The binary should not leak project paths, compiler identifiers, helper names or 
 
 # 12. Dynamic Protections
 
-Current status: Level 1 done. Level 2 done (8/8). Level 3 partial (5/11). New
+Current status: Level 1 done. Level 2 done (8/8). Level 3 mostly done (7/11). New
 `DynamicProtection` pass inserts one runtime check at the entry of annotated
 functions: IsDebuggerPresent, a CheckRemoteDebuggerPresent probe (Windows
 process-state debugger check, safer than raw PEB gs access), or a
@@ -648,8 +648,8 @@ These must be optional and off by default.
 
 ## Level 3 — Fortress Dynamic Protection
 
-* [ ] Add function-level integrity checks
-* [ ] Add cross-function integrity checks
+* [x] Add function-level integrity checks
+* [x] Add cross-function integrity checks
 * [ ] Add post-link hash patching
 * [ ] Add encrypted hash table
 * [ ] Add randomized check placement
