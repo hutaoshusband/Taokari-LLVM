@@ -130,6 +130,31 @@ struct IndirectGlobalVariable : public FunctionPass {
         RNG, static_cast<unsigned>(GlobalVariables.size()));
 
     createPageTable(createPageTableArgs);
+
+    // L3+: emit entirely separate decoy global pools -- private internal
+    // arrays of random bytes that look like real data storage but are never
+    // referenced by real code. They pollute the global-variable view so a
+    // reverser cannot tell the real globals from the decoys by listing them.
+    if (ArgsOptions->indGvOpt()->level() >= 3) {
+      auto &Ctx = M.getContext();
+      auto *I64 = Type::getInt64Ty(Ctx);
+      unsigned Pools = 1 + (RNG() % 3);
+      for (unsigned P = 0; P < Pools; ++P) {
+        unsigned Words = 2 + (RNG() % 4);
+        SmallVector<Constant *, 8> Vals;
+        for (unsigned W = 0; W < Words; ++W)
+          Vals.push_back(ConstantInt::get(I64, RNG()));
+        auto *ArrTy = ArrayType::get(I64, Words);
+        auto *Pool = new GlobalVariable(M, ArrTy, true,
+                                        GlobalValue::PrivateLinkage,
+                                        ConstantArray::get(ArrTy, Vals),
+                                        M.getName() + "_IndirectGV_fakepool");
+        Pool->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+        Pool->setAlignment(Align(8));
+        Pool->addMetadata("noobf", *MDNode::get(Ctx, {}));
+        appendToCompilerUsed(M, {Pool});
+      }
+    }
     return false;
   }
 
