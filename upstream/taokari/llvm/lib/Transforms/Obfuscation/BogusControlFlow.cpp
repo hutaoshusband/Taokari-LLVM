@@ -8,6 +8,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/RandomNumberGenerator.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
@@ -178,13 +179,19 @@ struct BogusControlFlow : public FunctionPass {
       Value *Sel = GuardIR.CreateTrunc(Real, I32, "bcf.sel");
       auto *Sw = GuardIR.CreateSwitch(Sel, Fake, 1);
       Sw->addCase(ConstantInt::get(I32, 1), &BB);
+      Function *ErrStub = getOrCreateErrorStub(M);
       unsigned Extra = 1 + (FuncRNG() % 3);
       for (unsigned I = 0; I < Extra; ++I) {
-        BasicBlock *Junk = BasicBlock::Create(
-            Ctx, BB.getName() + ".bcf.swcase", &F, &BB);
-        IRBuilder<> J(Junk);
-        J.CreateUnreachable();
-        Sw->addCase(ConstantInt::get(I32, static_cast<uint32_t>(2 + I)), Junk);
+        // Fake error path: call an internal error-reporting stub then rejoin
+        // the real block. Looks like real error handling to a static analyzer
+        // but control always continues to BB (the case is never selected at
+        // runtime).
+        BasicBlock *Err = BasicBlock::Create(
+            Ctx, BB.getName() + ".bcf.errpath", &F, &BB);
+        IRBuilder<> E(Err);
+        E.CreateCall(FunctionType::get(Type::getVoidTy(Ctx), false), ErrStub);
+        E.CreateBr(&BB);
+        Sw->addCase(ConstantInt::get(I32, static_cast<uint32_t>(2 + I)), Err);
       }
     } else {
       GuardIR.CreateCondBr(Opaque, &BB, Fake);
@@ -200,6 +207,32 @@ struct BogusControlFlow : public FunctionPass {
                                   Init, "__taokari_bcf_nonce");
     GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
     return GV;
+  }
+
+  // A private internal stub that reads like an error reporter: it writes a
+  // nonzero value into a private "error flag" global and returns. Used by the
+  // fake error-path cases so the CFG carries convincing error-handling edges.
+  // Never reached at runtime; its only purpose is visual noise.
+  static Function *getOrCreateErrorStub(Module &M) {
+    if (auto *Existing = M.getFunction("__taokari_bcf_err"))
+      return Existing;
+    auto &Ctx = M.getContext();
+    auto *I8 = Type::getInt8Ty(Ctx);
+    auto *FTy = FunctionType::get(Type::getVoidTy(Ctx), false);
+    auto *Stub = Function::Create(FTy, GlobalValue::InternalLinkage,
+                                  "__taokari_bcf_err", M);
+    Stub->addFnAttr(Attribute::NoInline);
+    auto *Flag = new GlobalVariable(M, I8, false, GlobalValue::PrivateLinkage,
+                                    ConstantInt::get(I8, 0),
+                                    "__taokari_bcf_errflag");
+    Flag->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+    Flag->setAlignment(Align(1));
+    BasicBlock *BB = BasicBlock::Create(Ctx, "entry", Stub);
+    IRBuilder<> B(BB);
+    B.CreateStore(ConstantInt::get(I8, 1), Flag);
+    B.CreateRetVoid();
+    appendToCompilerUsed(M, {Stub, Flag});
+    return Stub;
   }
 
   static AllocaInst *createEntrySlot(Function &F, Type *Ty) {

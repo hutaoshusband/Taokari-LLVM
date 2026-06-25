@@ -209,7 +209,7 @@ This is one of the most important differentiators against plain Arkari.
 * [ ] Add multi-layer bogus graphs
 * [x] Add fake loops
 * [x] Add fake switch structures
-* [ ] Add fake error paths
+* [x] Add fake error paths
 * [ ] Add fake cleanup paths
 * [ ] Add fake exception-looking regions where safe
 * [x] Add fake block merging
