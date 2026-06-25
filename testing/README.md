@@ -40,6 +40,27 @@ python testing\run_obfuscation_tests.py --keep-going
 `--benchmark-out report.csv` compiles each case plain and obfuscated and records
 compile time, runtime and binary-size overhead.
 
+## Release gates
+
+After the case matrix, the harness runs a set of standalone verifier scripts
+(see `RELEASE_GATES` in `run_obfuscation_tests.py`) that prove specific
+hardening properties end-to-end. Each runs the locally built clang and exits
+0/nonzero:
+
+- `verify_function_outlining.py` — Section 10 function outlining (L1/L2/L3
+  callout fortress + opt-in cross-shard pools).
+- `verify_dynamic_protection.py` — Section 12 dynamic anti-reversing checks
+  (L1/L2/L3 probes, opaque mixing, tamper flag, indirect probes, sentinel).
+- `verify_outline_dyn_fortress_compose.py` — the full IR stack (outline + dyn +
+  fla + bcf + mba + indirects + string/constant encryption) round-trips on one
+  sensitive function.
+- `verify_max_build_no_vmp_hang.py` / `verify_max_build_vmp_budgeted.py` —
+  `-taokari-max` builds do not hang (VMP budget caps).
+- `verify_vmp_full_virtualization.py` / `verify_vmp_dll_load.py` — VMP coverage.
+
+All gate scripts skip cleanly (exit 0) when their precondition is absent, so
+they sit harmlessly in CI until the toolchain is ready.
+
 ## MIR Budget
 
 Run the Level-3 MIR budget gate:
