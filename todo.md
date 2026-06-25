@@ -1410,7 +1410,7 @@ Purpose: maximum practical protection for sensitive functions only.
 * [x] BCF L3
 * [x] MBA L3
 * [x] String encryption L3
-* [ ] Constant encryption L3
+* [x] Constant encryption L3
 * [x] Indirect calls L3
 * [x] Indirect branches L3
 * [x] Indirect globals L3
