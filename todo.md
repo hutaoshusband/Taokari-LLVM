@@ -208,11 +208,11 @@ This is one of the most important differentiators against plain Arkari.
 
 * [ ] Add multi-layer bogus graphs
 * [x] Add fake loops
-* [ ] Add fake switch structures
+* [x] Add fake switch structures
 * [ ] Add fake error paths
 * [ ] Add fake cleanup paths
 * [ ] Add fake exception-looking regions where safe
-* [ ] Add fake block merging
+* [x] Add fake block merging
 * [ ] Add integration with dispatcher fake cases
 * [x] Add decompiler visual-noise mode
 * [x] Add benchmark for CFG explosion

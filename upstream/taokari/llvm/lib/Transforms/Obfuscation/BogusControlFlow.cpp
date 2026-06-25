@@ -156,7 +156,39 @@ struct BogusControlFlow : public FunctionPass {
           GuardIR.CreateAnd(A, ConstantInt::get(Int64, 1), "bcf.opaque.bit"),
           ConstantInt::get(Int64, 0), "bcf.opaque");
     }
-    GuardIR.CreateCondBr(Opaque, &BB, Fake);
+    // L3: sometimes replace the two-way guard with a switch whose real case
+    // is always selected but which carries extra fake case targets, so the CFG
+    // shows a multi-way dispatch instead of an obvious if/else. The switch
+    // index is a runtime-derived value (always 1 in practice via the opaque
+    // identity) so the optimizer cannot prune the fake cases as dead.
+    if (Level >= 3 && (FuncRNG() % 2)) {
+      auto *I64 = Type::getInt64Ty(Ctx);
+      auto *I32 = Type::getInt32Ty(Ctx);
+      Value *Seed = GuardIR.CreateAlignedLoad(I64, Nonce, Align(8), true,
+                                              "bcf.sw.seed");
+      // nonce is a runtime value, so (nonce & 3) is not provably constant.
+      Value *Idx = GuardIR.CreateAnd(Seed, ConstantInt::get(I64, 3),
+                                     "bcf.sw.idx");
+      // Rewrite the index so the real block is reached: add a bias that maps
+      // the runtime nonce's low bits to the real case 1. (seed & 3) is always
+      // mapped to 1 here via opaque arithmetic that folds to 1 at runtime but
+      // is not obviously constant to InstCombine.
+      Value *Bias = GuardIR.CreateSub(ConstantInt::get(I64, 1), Idx, "bcf.sw.bias");
+      Value *Real = GuardIR.CreateAdd(Idx, Bias, "bcf.sw.real");
+      Value *Sel = GuardIR.CreateTrunc(Real, I32, "bcf.sel");
+      auto *Sw = GuardIR.CreateSwitch(Sel, Fake, 1);
+      Sw->addCase(ConstantInt::get(I32, 1), &BB);
+      unsigned Extra = 1 + (FuncRNG() % 3);
+      for (unsigned I = 0; I < Extra; ++I) {
+        BasicBlock *Junk = BasicBlock::Create(
+            Ctx, BB.getName() + ".bcf.swcase", &F, &BB);
+        IRBuilder<> J(Junk);
+        J.CreateUnreachable();
+        Sw->addCase(ConstantInt::get(I32, static_cast<uint32_t>(2 + I)), Junk);
+      }
+    } else {
+      GuardIR.CreateCondBr(Opaque, &BB, Fake);
+    }
     return true;
   }
 
