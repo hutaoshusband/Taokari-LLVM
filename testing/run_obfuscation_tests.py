@@ -100,6 +100,10 @@ RELEASE_GATES = [
     # escape hatch when VMP is off entirely.
     ReleaseGate("max_build_no_vmp_hang", TESTING / "scripts" / "verify_max_build_no_vmp_hang.py"),
     ReleaseGate("max_build_vmp_budgeted", TESTING / "scripts" / "verify_max_build_vmp_budgeted.py"),
+    # Section 10/12: the new opt-in passes and their full-stack compose.
+    ReleaseGate("function_outlining", TESTING / "scripts" / "verify_function_outlining.py"),
+    ReleaseGate("dynamic_protection", TESTING / "scripts" / "verify_dynamic_protection.py"),
+    ReleaseGate("outline_dyn_fortress_compose", TESTING / "scripts" / "verify_outline_dyn_fortress_compose.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
