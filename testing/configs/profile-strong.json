@@ -33,6 +33,11 @@
     "probability": 60,
     "functionProbability": 100
   },
+  "outline": {
+    "enable": true,
+    "level": 2,
+    "maxBlocks": 6
+  },
   "cse": {
     "enable": true,
     "level": 2,
