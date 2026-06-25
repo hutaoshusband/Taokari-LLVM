@@ -316,10 +316,22 @@ mathematically impossible. The full living list is in [`todo.md`](todo.md).
   anti-debug/anti-trace behavior inside the interpreter loop, cross-function VM state,
   and devirtualization sample gates are still work.
 
+**Now implemented (newly landed):**
+
+- **Function outlining / callout obfuscation** — splits basic-block tails into internal
+  shard helpers (L1), then hardens the shard layer with opaque names, per-arg/return XOR
+  scrambling, fake shards and a max-insts guardrail (L2), and a fortress callout with
+  multi-layer split, token-switched dispatcher, integrity-check guard and fake call graph
+  (L3). Shard calls route through the icall page table for free when both passes are on.
+  Opt in via `+outline` / `-taokari-outline`.
+- **Dynamic / anti-debug runtime protections** — opt-in per-function debugger/timing
+  probes (IsDebuggerPresent / CheckRemoteDebuggerPresent / QueryPerformanceCounter) with
+  opaque-predicate result mixing, a runtime-nonce seed, a shared module tamper flag,
+  delayed placement, indirect probe functions and an anti-patch sentinel. Off by default
+  (kept out of `-taokari-max`). Opt in via `+dyn` / `-taokari-dyn`.
+
 **Backlog (not implemented — will be implemented):**
 
-- Function outlining / callout obfuscation.
-- Dynamic / anti-debug runtime protections.
 - Full symbol/debug-info cleanup beyond the current metadata hygiene pass.
 - Release profiles (`dev` / `balanced` / `strong` / `fortress`).
 - AArch64 MIR port; new-PM migration of the IR passes.
