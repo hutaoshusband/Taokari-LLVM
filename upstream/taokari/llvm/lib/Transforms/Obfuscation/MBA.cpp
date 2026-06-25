@@ -255,15 +255,26 @@ struct MBA : public FunctionPass {
     return true;
   }
 
-  // a ^ b = (a | b) - (a & b)
+  // a ^ b = (a | b) - (a & b)  OR  (a & ~b) | (~a & b)  (polymorphic)
   static bool substituteXor(BinaryOperator &BO, uint32_t Level,
                             std::mt19937_64 &FuncRNG) {
     IRBuilder<NoFolder> IRB(&BO);
+    Type *Ty = BO.getType();
     Value *A = BO.getOperand(0);
     Value *B = BO.getOperand(1);
-    Value *Or = IRB.CreateOr(A, B, BO.getName() + ".mba.or");
-    Value *And = IRB.CreateAnd(A, B, BO.getName() + ".mba.and");
-    Value *Res = IRB.CreateSub(Or, And, BO.getName() + ".mba.sub");
+    Value *Res = nullptr;
+    if (FuncRNG() & 1) {
+      Value *Or = IRB.CreateOr(A, B, BO.getName() + ".mba.or");
+      Value *And = IRB.CreateAnd(A, B, BO.getName() + ".mba.and");
+      Res = IRB.CreateSub(Or, And, BO.getName() + ".mba.sub");
+    } else {
+      Value *AllOnes = ConstantInt::getAllOnesValue(Ty);
+      Value *NB = IRB.CreateXor(B, AllOnes, BO.getName() + ".mba.nb");
+      Value *NA = IRB.CreateXor(A, AllOnes, BO.getName() + ".mba.na");
+      Value *L = IRB.CreateAnd(A, NB, BO.getName() + ".mba.l");
+      Value *R = IRB.CreateAnd(NA, B, BO.getName() + ".mba.r");
+      Res = IRB.CreateOr(L, R, BO.getName() + ".mba.or");
+    }
     Res = hardenResult(BO, IRB, Res, Level, FuncRNG);
     BO.replaceAllUsesWith(Res);
     BO.eraseFromParent();
@@ -291,19 +302,28 @@ struct MBA : public FunctionPass {
   }
 
   // a | b = ~(~a & ~b)  (De Morgan)
+  // a | b = ~(~a & ~b) (De Morgan)  OR  a + b - (a & b)  (polymorphic)
   static bool substituteOr(BinaryOperator &BO, uint32_t Level,
                            std::mt19937_64 &FuncRNG) {
     IRBuilder<NoFolder> IRB(&BO);
     Type *Ty = BO.getType();
     Value *A = BO.getOperand(0);
     Value *B = BO.getOperand(1);
-    Value *NA = IRB.CreateXor(A, ConstantInt::getAllOnesValue(Ty),
-                              BO.getName() + ".mba.na");
-    Value *NB = IRB.CreateXor(B, ConstantInt::getAllOnesValue(Ty),
-                              BO.getName() + ".mba.nb");
-    Value *And = IRB.CreateAnd(NA, NB, BO.getName() + ".mba.and");
-    Value *Res = IRB.CreateXor(And, ConstantInt::getAllOnesValue(Ty),
-                               BO.getName() + ".mba.not");
+    Value *Res = nullptr;
+    if (FuncRNG() & 1) {
+      Value *NA = IRB.CreateXor(A, ConstantInt::getAllOnesValue(Ty),
+                                BO.getName() + ".mba.na");
+      Value *NB = IRB.CreateXor(B, ConstantInt::getAllOnesValue(Ty),
+                                BO.getName() + ".mba.nb");
+      Value *And = IRB.CreateAnd(NA, NB, BO.getName() + ".mba.and");
+      Res = IRB.CreateXor(And, ConstantInt::getAllOnesValue(Ty),
+                          BO.getName() + ".mba.not");
+    } else {
+      // a | b = a + b - (a & b)
+      Value *And = IRB.CreateAnd(A, B, BO.getName() + ".mba.and");
+      Value *Sum = IRB.CreateAdd(A, B, BO.getName() + ".mba.sum");
+      Res = IRB.CreateSub(Sum, And, BO.getName() + ".mba.sub");
+    }
     Res = hardenResult(BO, IRB, Res, Level, FuncRNG);
     BO.replaceAllUsesWith(Res);
     BO.eraseFromParent();
