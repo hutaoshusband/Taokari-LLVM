@@ -310,6 +310,45 @@ def main() -> int:
                   file=sys.stderr)
             return 1
 
+        # Cross-shard constant pool (opt-in). With -taokari-outline-cross-pool,
+        # integer constants move out of shard bodies into a shared encrypted
+        # pool. Compile WITHOUT MBA (the documented incompatibility) and verify
+        # the pool appears and the program still round-trips.
+        pool_ir = tmp / "outline_pool.ll"
+        res = run([str(CLANG), str(src), "-O0", "-fno-discard-value-names",
+                   "-mllvm", "-taokari", "-mllvm", "-taokari-outline",
+                   "-mllvm", "-taokari-level-outline=3",
+                   "-mllvm", "-taokari-outline-prob=100",
+                   "-mllvm", "-taokari-outline-max-shards=8",
+                   "-mllvm", "-taokari-outline-cross-pool",
+                   "-S", "-emit-llvm", "-o", str(pool_ir)])
+        if res.returncode:
+            print(res.stdout, end="")
+            print(res.stderr, end="", file=sys.stderr)
+            return res.returncode
+        pool_text = pool_ir.read_text(encoding="utf-8", errors="ignore")
+        if ".cpool" not in pool_text:
+            print("L3: cross-shard constant pool not emitted with -cross-pool",
+                  file=sys.stderr)
+            return 1
+        pool_exe = tmp / "outline_pool.exe"
+        res = run([str(CLANG), str(src), "-O2", "-fno-discard-value-names",
+                   "-mllvm", "-taokari", "-mllvm", "-taokari-outline",
+                   "-mllvm", "-taokari-level-outline=3",
+                   "-mllvm", "-taokari-outline-prob=100",
+                   "-mllvm", "-taokari-outline-max-shards=8",
+                   "-mllvm", "-taokari-outline-cross-pool",
+                   "-o", str(pool_exe)])
+        if res.returncode:
+            print(res.stdout, end="")
+            print(res.stderr, end="", file=sys.stderr)
+            return res.returncode
+        pool_ran = run([str(pool_exe)])
+        if pool_ran.returncode or pool_ran.stdout != ref_run.stdout:
+            print(f"L3 cross-pool output drift: {pool_ran.stdout!r} vs {ref_run.stdout!r}",
+                  file=sys.stderr)
+            return 1
+
         # Outline + fla + bcf + mba fortress compose must round-trip.
         full_exe = tmp / "outline_full.exe"
         res = run([str(CLANG), str(src), "-O2", "-fno-discard-value-names",

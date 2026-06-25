@@ -1,6 +1,7 @@
 #include "llvm/Transforms/Obfuscation/FunctionOutlining.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
@@ -44,6 +45,13 @@ static cl::opt<uint32_t> OutlineScramble(
     "taokari-outline-scramble", cl::init(1), cl::NotHidden,
     cl::desc("L2: XOR-scramble integer shard arguments and the return value "
              "with a per-call key. 0 disables."));
+static cl::opt<bool> OutlineCrossPool(
+    "taokari-outline-cross-pool", cl::init(false), cl::NotHidden,
+    cl::desc("L3: move integer constants out of shard bodies into a shared "
+             "encrypted cross-shard pool. OFF BY DEFAULT: rewriting shard "
+             "operands into runtime loads is not compatible with MBA on the "
+             "same functions (MBA cannot analyse the rewritten shape). Enable "
+             "only on functions that are outlined but not MBA-substituted."));
 
 namespace {
 struct FunctionOutlining : public FunctionPass {
@@ -145,6 +153,8 @@ struct FunctionOutlining : public FunctionPass {
     }
 
   finish:
+    if (Changed && Level >= 3 && OutlineCrossPool)
+      buildCrossShardPool(F, FuncRNG);
     return Changed;
   }
 
@@ -625,6 +635,137 @@ struct FunctionOutlining : public FunctionPass {
     NewCall->setCallingConv(CallToSub->getCallingConv());
     CallToSub->replaceAllUsesWith(NewCall);
     CallToSub->eraseFromParent();
+  }
+
+  // A constant operand is safe to move into the cross-shard pool only if it is
+  // real data, not a control token: skip operands of comparisons, branches,
+  // calls (args must keep matching the callee) and GEP indices. Only operands
+  // of plain arithmetic/store instructions are pooled so later passes (notably
+  // MBA) still see a shape they can analyse.
+  static bool isPoolableUse(const Use &U) {
+    auto *User = dyn_cast<Instruction>(U.getUser());
+    if (!User)
+      return false;
+    if (isa<ICmpInst>(User) || isa<FCmpInst>(User))
+      return false;
+    if (User->isTerminator())
+      return false;
+    if (isa<CallBase>(User) || isa<GetElementPtrInst>(User))
+      return false;
+    return true;
+  }
+
+  // Move integer constants out of the real computation shards into a single
+  // private encrypted pool global, then rewrite each shard's data use of such a
+  // constant into a load + XOR-decrypt from the pool. The constants no longer
+  // sit inline in any shard body. OPT-IN: rewriting operands into runtime loads
+  // is not MBA-compatible on the same functions.
+  void buildCrossShardPool(Function &F, std::mt19937_64 &FuncRNG) {
+    Module &M = *F.getParent();
+    auto &Ctx = M.getContext();
+    auto *I64 = Type::getInt64Ty(Ctx);
+
+    // Gather shards transitively reachable from F's shard calls. Skip
+    // dispatchers (i32 token first arg) -- their token literal must stay inline
+    // or it desyncs from the caller's token.
+    SmallPtrSet<Function *, 32> Seen;
+    SmallVector<Function *, 32> Work;
+    auto PushCallees = [&](Function *Caller) {
+      for (BasicBlock &CBB : *Caller)
+        for (Instruction &I : CBB)
+          if (auto *CI = dyn_cast<CallInst>(&I))
+            if (auto *Callee = CI->getCalledFunction())
+              if (Callee->getName().starts_with("__taokari_sh_"))
+                if (Seen.insert(Callee).second)
+                  Work.push_back(Callee);
+    };
+    PushCallees(&F);
+    for (unsigned I = 0; I < Work.size(); ++I)
+      PushCallees(Work[I]);
+
+    SmallVector<Function *, 16> Targets;
+    for (Function *Sh : Work) {
+      if (Sh->empty() || Sh->isDeclaration())
+        continue;
+      if (!Sh->arg_empty() && Sh->getArg(0)->getType()->isIntegerTy(32))
+        continue;
+      Targets.push_back(Sh);
+    }
+    if (Targets.empty())
+      return;
+
+    MapVector<uint64_t, unsigned> ConstIndex;
+    for (Function *Sh : Targets)
+      for (BasicBlock &BB : *Sh)
+        for (Instruction &I : BB)
+          for (Use &Op : I.operands()) {
+            auto *C = dyn_cast<ConstantInt>(Op.get());
+            if (!C || C->getBitWidth() > 64 || C->getBitWidth() < 8)
+              continue;
+            if (!isPoolableUse(Op))
+              continue;
+            uint64_t V = C->getZExtValue();
+            if (V <= 1)
+              continue;
+            if (!ConstIndex.count(V))
+              ConstIndex[V] = 0;
+          }
+    if (ConstIndex.empty())
+      return;
+
+    uint64_t Key = nextNonZero(FuncRNG);
+    auto *ArrTy = ArrayType::get(I64, ConstIndex.size());
+    SmallVector<Constant *, 16> Encoded;
+    unsigned Idx = 0;
+    for (auto &KV : ConstIndex) {
+      KV.second = Idx++;
+      Encoded.push_back(ConstantInt::get(I64, KV.first ^ Key));
+    }
+    auto *PoolGV = new GlobalVariable(M, ArrTy, true, GlobalValue::PrivateLinkage,
+                                      ConstantArray::get(ArrTy, Encoded),
+                                      F.getName() + ".cpool");
+    PoolGV->setAlignment(Align(8));
+    auto *KeyGV = new GlobalVariable(M, I64, false, GlobalValue::PrivateLinkage,
+                                     ConstantInt::get(I64, Key),
+                                     F.getName() + ".cpool.key");
+    KeyGV->setAlignment(Align(8));
+    appendToCompilerUsed(M, {PoolGV, KeyGV});
+
+    for (Function *Sh : Targets)
+      rewriteConstUses(*Sh, PoolGV, KeyGV, I64, ConstIndex);
+  }
+
+  void rewriteConstUses(Function &Shard, GlobalVariable *PoolGV,
+                        GlobalVariable *KeyGV, Type *I64,
+                        const MapVector<uint64_t, unsigned> &ConstIndex) {
+    SmallVector<std::pair<Use *, unsigned>, 32> ToRewrite;
+    for (BasicBlock &BB : Shard)
+      for (Instruction &I : BB)
+        for (Use &Op : I.operands()) {
+          auto *C = dyn_cast<ConstantInt>(Op.get());
+          if (!C || C->getBitWidth() > 64 || C->getBitWidth() < 8)
+            continue;
+          if (!isPoolableUse(Op))
+            continue;
+          auto It = ConstIndex.find(C->getZExtValue());
+          if (It == ConstIndex.end())
+            continue;
+          ToRewrite.emplace_back(&Op, It->second);
+        }
+    for (auto &P : ToRewrite) {
+      Use *U = P.first;
+      unsigned Idx = P.second;
+      auto *User = cast<Instruction>(U->getUser());
+      IRBuilder<> B(User);
+      Value *GEP = B.CreateConstInBoundsGEP2_64(PoolGV->getValueType(),
+                                                PoolGV, 0, Idx, "cpool.gep");
+      Value *Enc = B.CreateAlignedLoad(I64, GEP, Align(8), true, "cpool.enc");
+      Value *Key = B.CreateAlignedLoad(I64, KeyGV, Align(8), true, "cpool.key");
+      Value *Dec = B.CreateXor(Enc, Key, "cpool.dec");
+      auto *OrigTy = cast<ConstantInt>(U->get())->getType();
+      Value *Narrow = OrigTy == I64 ? Dec : B.CreateTrunc(Dec, OrigTy, "cpool.t");
+      U->set(Narrow);
+    }
   }
 };
 } // namespace
