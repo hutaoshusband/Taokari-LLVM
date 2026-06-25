@@ -651,7 +651,7 @@ These must be optional and off by default.
 * [x] Add cross-function integrity checks
 * [ ] Add post-link hash patching
 * [x] Add encrypted hash table
-* [ ] Add randomized check placement
+* [x] Add randomized check placement
 * [x] Add check-call indirection
 * [x] Add tamper response policy
 * [x] Add anti-patch sentinel

@@ -113,7 +113,10 @@ struct DynamicProtection : public FunctionPass {
     // entries; the check still runs early in the function.
     Instruction *SplitBefore = &*OrigEntry.getFirstInsertionPt();
     if (Level >= 2) {
-      unsigned Lead = RNG() % 4; // 0..3 real instructions of headroom
+      // L2: 0..3 instructions of headroom; L3 widens to 0..8 so the probe
+      // lands further into the body on some builds, not just off the first
+      // instruction.
+      unsigned Lead = (Level >= 3) ? (RNG() % 9) : (RNG() % 4);
       unsigned Seen = 0;
       for (Instruction &I : OrigEntry) {
         if (I.isTerminator())
