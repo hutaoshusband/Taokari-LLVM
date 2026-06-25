@@ -253,22 +253,49 @@ struct DynamicProtection : public FunctionPass {
   // The check reads it and trips if the byte no longer matches. Patching the
   // sentinel (or the surrounding bytes a reverser might sweep when NOP-patching
   // the check) breaks the match. Returns i1 true => tampered. Always false on
-  // an untouched build.
+  // an untouched build. Uses a small XOR-encrypted sentinel table (an encrypted
+  // hash table): each entry is stored as plain XOR key, decrypted at runtime
+  // and compared to its expected plaintext, so a single static value does not
+  // identify the sentinel and patching any entry trips the check.
   Value *emitSentinelCheck(Module &M, IRBuilder<> &B) {
     auto &Ctx = M.getContext();
     auto *I8 = Type::getInt8Ty(Ctx);
-    uint8_t Magic = static_cast<uint8_t>(RNG() & 0xff);
-    if (!Magic)
-      Magic = 0x5a;
+    auto *ArrTy = ArrayType::get(I8, 4);
+    SmallVector<Constant *, 4> Encoded;
+    SmallVector<uint8_t, 4> Plain;
+    SmallVector<uint8_t, 4> Keys;
+    for (unsigned I = 0; I < 4; ++I) {
+      uint8_t P = static_cast<uint8_t>(RNG() & 0xff);
+      uint8_t K = static_cast<uint8_t>(RNG() & 0xff);
+      if (!K)
+        K = 0x5a;
+      if (!P)
+        P = 0x3c;
+      Plain.push_back(P);
+      Keys.push_back(K);
+      Encoded.push_back(ConstantInt::get(I8, static_cast<uint8_t>(P ^ K)));
+    }
     auto *Sentinel = new GlobalVariable(
-        M, I8, false, GlobalValue::PrivateLinkage,
-        ConstantInt::get(I8, Magic), "__taokari_dyn_sentinel");
+        M, ArrTy, false, GlobalValue::PrivateLinkage,
+        ConstantArray::get(ArrTy, Encoded), "__taokari_dyn_sentinel");
     Sentinel->setAlignment(Align(1));
     Sentinel->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
     Sentinel->addMetadata("noobf", *MDNode::get(Ctx, {}));
     appendToCompilerUsed(M, {Sentinel});
-    Value *Val = B.CreateLoad(I8, Sentinel, "dyn.sval");
-    return B.CreateICmpNE(Val, ConstantInt::get(I8, Magic), "dyn.scmp");
+
+    // Decrypt each entry and OR-in any mismatch: Tripped is true iff any
+    // decrypted entry differs from its expected plaintext.
+    Value *Tripped = B.getFalse();
+    for (unsigned I = 0; I < 4; ++I) {
+      Value *Slot = B.CreateConstInBoundsGEP2_64(ArrTy, Sentinel, 0, I,
+                                                 "dyn.sgep");
+      Value *Enc = B.CreateLoad(I8, Slot, "dyn.senc");
+      Value *Dec = B.CreateXor(Enc, ConstantInt::get(I8, Keys[I]), "dyn.sdec");
+      Value *Mismatch = B.CreateICmpNE(
+          Dec, ConstantInt::get(I8, Plain[I]), "dyn.scmp");
+      Tripped = B.CreateOr(Tripped, Mismatch, "dyn.sor");
+    }
+    return Tripped;
   }
 
   // Build (or reuse) a private internal probe function that runs the chosen
