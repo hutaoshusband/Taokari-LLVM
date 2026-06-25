@@ -44,6 +44,9 @@ struct IndirectGlobalVariable : public FunctionPass {
 
   std::mt19937_64 RNG;
   uint64_t        PtrEncKey = 0;
+  // Module-seeded PAC discriminator material (AArch64 only; mirrors icall).
+  uint64_t        ModulePacSeed = 0;
+  uint64_t        ModulePacSalt = 0;
   bool            RunOnFuncChanged = false;
 
   IndirectGlobalVariable(ObfuscationOptions *argsOptions) : FunctionPass(ID) {
@@ -60,6 +63,24 @@ struct IndirectGlobalVariable : public FunctionPass {
 
   StringRef getPassName() const override {
     return {"IndirectGlobalVariable"};
+  }
+
+  uint64_t nextNonZeroKey() {
+    uint64_t K = RNG();
+    while (!K)
+      K = RNG();
+    return K;
+  }
+
+  // Per-global PAC discriminator (AArch64 only). Mixes the module seed, the
+  // global's page-table key, and a name hash so each global gets a distinct
+  // signing context -- a signed pointer forged for one global does not
+  // authenticate for another.
+  uint64_t pacDiscriminator(Function &Fn, GlobalVariable *GV) const {
+    uint64_t H = ModulePacSeed ^ GVKeys.lookup(GV);
+    H ^= static_cast<uint64_t>(hash_value(GV->getName())) << 1;
+    H ^= ModulePacSalt;
+    return H ? H : ModulePacSalt;
   }
 
   void NumberGlobalVariable(Module &M) {
@@ -118,6 +139,8 @@ struct IndirectGlobalVariable : public FunctionPass {
     }
 
     PtrEncKey = RNG();
+    ModulePacSeed = nextNonZeroKey();
+    ModulePacSalt = nextNonZeroKey();
 
     CreatePageTableArgs createPageTableArgs;
     createPageTableArgs.CountLoop = chooseModulePageTableDepth(RNG);
@@ -268,7 +291,7 @@ struct IndirectGlobalVariable : public FunctionPass {
         buildDecrypt.UseMBA = opt.level() > 1;
         buildDecrypt.IntegrityCheck = opt.level() > 1;
         buildDecrypt.PtrAuthKey = T.isAArch64() ? 2 : -1;
-        buildDecrypt.PtrAuthDisc = 0;
+        buildDecrypt.PtrAuthDisc = pacDiscriminator(Fn, GV);
         auto        GVPtr = buildPageTableDecryptIR(buildDecrypt);
         IRBuilder<> SIB(DecryptPt);
         SIB.CreateAlignedStore(GVPtr, KV.second, Align{1}, true);
@@ -316,7 +339,7 @@ struct IndirectGlobalVariable : public FunctionPass {
             buildDecrypt.PtrEncKey = PtrEncKey;
             Triple T(M.getTargetTriple());
             buildDecrypt.PtrAuthKey = T.isAArch64() ? 2 : -1;
-            buildDecrypt.PtrAuthDisc = 0;
+            buildDecrypt.PtrAuthDisc = pacDiscriminator(Fn, GV);
             GVPtr = buildPageTableDecryptIR(buildDecrypt);
           }
 
