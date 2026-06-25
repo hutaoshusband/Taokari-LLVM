@@ -637,7 +637,7 @@ These must be optional and off by default.
 
 * [x] Insert checks in multiple functions
 * [x] Guard checks with opaque predicates
-* [ ] Hide checks behind indirect calls
+* [x] Hide checks behind indirect calls
 * [x] Add fake checks
 * [x] Add check result mixing
 * [ ] Add delayed checks
