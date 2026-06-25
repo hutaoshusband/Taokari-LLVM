@@ -492,7 +492,7 @@ Main weakness: should become more polymorphic and better tested.
 ## Level 3 — Fortress Globals
 
 * [ ] Add split global storage
-* [ ] Add encrypted global pools
+* [x] Add encrypted global pools
 * [x] Add fake global pools
 * [ ] Add per-use global decrypt option
 * [ ] Add pointer-auth discriminator for globals
