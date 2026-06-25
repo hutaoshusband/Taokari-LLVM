@@ -205,29 +205,50 @@ struct MBA : public FunctionPass {
     Type *Ty = BO.getType();
     Value *A = BO.getOperand(0);
     Value *B = BO.getOperand(1);
-    Value *Xor = IRB.CreateXor(A, B, BO.getName() + ".mba.xor");
-    Value *And = IRB.CreateAnd(A, B, BO.getName() + ".mba.and");
-    Value *Carry =
-        IRB.CreateShl(And, ConstantInt::get(Ty, 1), BO.getName() + ".mba.carry");
-    Value *Res = IRB.CreateAdd(Xor, Carry, BO.getName() + ".mba.add");
+    Value *Res = nullptr;
+    // Polymorphic templates: the same a+b expands differently per use so a
+    // reverser cannot match one signature. Both forms are algebraically
+    // exact for all integer widths under wraparound.
+    if (FuncRNG() & 1) {
+      // a + b = (a ^ b) + 2 * (a & b)
+      Value *Xor = IRB.CreateXor(A, B, BO.getName() + ".mba.xor");
+      Value *And = IRB.CreateAnd(A, B, BO.getName() + ".mba.and");
+      Value *Carry = IRB.CreateShl(And, ConstantInt::get(Ty, 1),
+                                   BO.getName() + ".mba.carry");
+      Res = IRB.CreateAdd(Xor, Carry, BO.getName() + ".mba.add");
+    } else {
+      // a + b = (a | b) + (a & b)
+      Value *Or = IRB.CreateOr(A, B, BO.getName() + ".mba.or");
+      Value *And = IRB.CreateAnd(A, B, BO.getName() + ".mba.and");
+      Res = IRB.CreateAdd(Or, And, BO.getName() + ".mba.add");
+    }
     Res = hardenResult(BO, IRB, Res, Level, FuncRNG);
     BO.replaceAllUsesWith(Res);
     BO.eraseFromParent();
     return true;
   }
 
-  // a - b = (a + ~b) + 1
+  // a - b = (a + ~b) + 1  OR  ~(~a + b)  (polymorphic, both exact)
   static bool substituteSub(BinaryOperator &BO, uint32_t Level,
                             std::mt19937_64 &FuncRNG) {
     IRBuilder<NoFolder> IRB(&BO);
     Type *Ty = BO.getType();
     Value *A = BO.getOperand(0);
     Value *B = BO.getOperand(1);
-    Value *NotB = IRB.CreateXor(B, ConstantInt::getAllOnesValue(Ty),
-                                BO.getName() + ".mba.not");
-    Value *Sum = IRB.CreateAdd(A, NotB, BO.getName() + ".mba.sum");
-    Value *Res = IRB.CreateAdd(Sum, ConstantInt::get(Ty, 1),
-                               BO.getName() + ".mba.add");
+    Value *Res = nullptr;
+    if (FuncRNG() & 1) {
+      Value *NotB = IRB.CreateXor(B, ConstantInt::getAllOnesValue(Ty),
+                                  BO.getName() + ".mba.not");
+      Value *Sum = IRB.CreateAdd(A, NotB, BO.getName() + ".mba.sum");
+      Res = IRB.CreateAdd(Sum, ConstantInt::get(Ty, 1),
+                          BO.getName() + ".mba.add");
+    } else {
+      Value *NotA = IRB.CreateXor(A, ConstantInt::getAllOnesValue(Ty),
+                                  BO.getName() + ".mba.nota");
+      Value *Sum = IRB.CreateAdd(NotA, B, BO.getName() + ".mba.sum");
+      Res = IRB.CreateXor(Sum, ConstantInt::getAllOnesValue(Ty),
+                          BO.getName() + ".mba.not");
+    }
     Res = hardenResult(BO, IRB, Res, Level, FuncRNG);
     BO.replaceAllUsesWith(Res);
     BO.eraseFromParent();
