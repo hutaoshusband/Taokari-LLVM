@@ -1398,7 +1398,7 @@ Purpose: serious IP protection.
 * [x] BCF L2
 * [x] MBA L2
 * [x] String encryption L2/L3
-* [ ] Constant encryption L3
+* [x] Constant encryption L3
 * [x] Indirect calls L2/L3
 * [x] Function outlining L2
 * [x] Metadata strip L3
