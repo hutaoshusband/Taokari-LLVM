@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import tempfile
@@ -68,13 +69,13 @@ def run(command: list[str], *, cwd: Path = ROOT, input: str | None = None) -> su
     return subprocess.run(command, cwd=cwd, text=True, capture_output=True, input=input)
 
 
-def compile_ir(src: Path, out: Path) -> subprocess.CompletedProcess[str]:
+def compile_ir(src: Path, out: Path, *, level: int = 1) -> subprocess.CompletedProcess[str]:
     # -O0 so the IR keeps the outlining call structure before later opts fold it.
     return run([
         str(CLANG), str(src), "-O0", "-fno-discard-value-names",
         "-mllvm", "-taokari",
         "-mllvm", "-taokari-outline",
-        "-mllvm", "-taokari-level-outline=1",
+        "-mllvm", f"-taokari-level-outline={level}",
         "-mllvm", "-taokari-outline-prob=100",
         "-mllvm", "-taokari-outline-max-shards=8",
         "-S", "-emit-llvm",
@@ -82,12 +83,13 @@ def compile_ir(src: Path, out: Path) -> subprocess.CompletedProcess[str]:
     ])
 
 
-def compile_exe(src: Path, out: Path, *, max_shards: int) -> subprocess.CompletedProcess[str]:
+def compile_exe(src: Path, out: Path, *, max_shards: int,
+                level: int = 1) -> subprocess.CompletedProcess[str]:
     return run([
         str(CLANG), str(src), "-O2", "-fno-discard-value-names",
         "-mllvm", "-taokari",
         "-mllvm", "-taokari-outline",
-        "-mllvm", "-taokari-level-outline=1",
+        "-mllvm", f"-taokari-level-outline={level}",
         "-mllvm", "-taokari-outline-prob=100",
         "-mllvm", f"-taokari-outline-max-shards={max_shards}",
         "-o", str(out),
@@ -116,24 +118,24 @@ def main() -> int:
         src = tmp / "outline.c"
         src.write_text(SOURCE, encoding="utf-8")
 
+        # L1: at level 1 shards keep the readable .shard suffix.
         ir = tmp / "outline.ll"
-        res = compile_ir(src, ir)
+        res = compile_ir(src, ir, level=1)
         if res.returncode:
             print(res.stdout, end="")
             print(res.stderr, end="", file=sys.stderr)
             return res.returncode
         text = ir.read_text(encoding="utf-8", errors="ignore")
-        if ".shard" not in text:
-            print("no .shard helpers emitted in IR", file=sys.stderr)
+        if ".shard" not in text and "__taokari_sh_" not in text:
+            print("no shard helpers emitted in IR (L1)", file=sys.stderr)
             return 1
         if "sensitive.shard" not in text and "plain.shard" not in text:
-            # At least one source function must have been split.
-            print("no per-function shard name in IR", file=sys.stderr)
+            print("no per-function shard name in IR (L1)", file=sys.stderr)
             return 1
 
         # Global outlining via flag must produce a shard in `plain` too.
         exe = tmp / "outline.exe"
-        res = compile_exe(src, exe, max_shards=8)
+        res = compile_exe(src, exe, max_shards=8, level=1)
         if res.returncode:
             print(res.stdout, end="")
             print(res.stderr, end="", file=sys.stderr)
@@ -142,7 +144,6 @@ def main() -> int:
         if ran.returncode:
             print(f"runtime failed: {ran.stdout}{ran.stderr}", file=sys.stderr)
             return ran.returncode
-        # Recompute the reference without obfuscation to avoid hand-arithmetic drift.
         ref_exe = tmp / "ref.exe"
         ref = run([str(CLANG), str(src), "-O2", "-o", str(ref_exe)])
         if ref.returncode:
@@ -156,7 +157,7 @@ def main() -> int:
 
         # Budget: a max-shards=0 build must not emit any shard and still run.
         budget_exe = tmp / "budget.exe"
-        res = compile_exe(src, budget_exe, max_shards=0)
+        res = compile_exe(src, budget_exe, max_shards=0, level=1)
         if res.returncode:
             print(res.stdout, end="")
             print(res.stderr, end="", file=sys.stderr)
@@ -168,6 +169,51 @@ def main() -> int:
                             "-taokari-outline-max-shards=0", "-S", "-emit-llvm",
                             "-o", str(tmp / "budget.ll")]).stdout:
             print("max-shards=0 still emitted a shard", file=sys.stderr)
+            return 1
+
+        # L2: opaque shard names (no source-function-name leak), arg/return
+        # scramble XORs, and decoy fake shards in compiler.used. Output must
+        # still match the reference, proving the scramble round-trips.
+        l2_ir = tmp / "outline_l2.ll"
+        res = run([str(CLANG), str(src), "-O0", "-fno-discard-value-names",
+                   "-mllvm", "-taokari", "-mllvm", "-taokari-outline",
+                   "-mllvm", "-taokari-level-outline=2",
+                   "-mllvm", "-taokari-outline-prob=100",
+                   "-mllvm", "-taokari-outline-max-shards=8",
+                   "-mllvm", "-taokari-outline-fakes=2",
+                   "-S", "-emit-llvm", "-o", str(l2_ir)])
+        if res.returncode:
+            print(res.stdout, end="")
+            print(res.stderr, end="", file=sys.stderr)
+            return res.returncode
+        l2_text = l2_ir.read_text(encoding="utf-8", errors="ignore")
+        if "__taokari_sh_" not in l2_text:
+            print("L2: no opaque shard name emitted", file=sys.stderr)
+            return 1
+        if "sensitive.shard" in l2_text:
+            print("L2: source function name leaked into shard name", file=sys.stderr)
+            return 1
+        # Scramble: the shard entry must contain at least one big-constant xor.
+        if not re.search(r"xor i\d+ %[\w$.]+, -?\d{6,}", l2_text):
+            print("L2: no argument scramble xor found in shard", file=sys.stderr)
+            return 1
+        # Fakes: more shard-shaped defines than there are real call targets.
+        shard_defs = len(re.findall(r"define.*__taokari_sh_", l2_text))
+        if shard_defs < 2:
+            print(f"L2: expected fake shards, found {shard_defs} shard defs", file=sys.stderr)
+            return 1
+        l2_exe = tmp / "outline_l2.exe"
+        res = compile_exe(src, l2_exe, max_shards=8, level=2)
+        if res.returncode:
+            print(res.stdout, end="")
+            print(res.stderr, end="", file=sys.stderr)
+            return res.returncode
+        l2_ran = run([str(l2_exe)])
+        if l2_ran.returncode:
+            print(f"L2 runtime failed: {l2_ran.stdout}{l2_ran.stderr}", file=sys.stderr)
+            return l2_ran.returncode
+        if l2_ran.stdout != ref_run.stdout:
+            print(f"L2 output drift:\n  obf: {l2_ran.stdout!r}\n  ref: {ref_run.stdout!r}", file=sys.stderr)
             return 1
 
     print("outline: PASS")
