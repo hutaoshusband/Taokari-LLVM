@@ -216,6 +216,97 @@ def main() -> int:
             print(f"L2 output drift:\n  obf: {l2_ran.stdout!r}\n  ref: {ref_run.stdout!r}", file=sys.stderr)
             return 1
 
+        # L3: fortress callout. The shard layer gains an integrity check (private
+        # token global + icmp guard), a multi-layer split (more shard defs than
+        # L2 at the same max-shards), and must still round-trip. The full
+        # fortress compose (outline + fla + bcf + mba) must also stay correct.
+        l3_ir = tmp / "outline_l3.ll"
+        res = run([str(CLANG), str(src), "-O0", "-fno-discard-value-names",
+                   "-mllvm", "-taokari", "-mllvm", "-taokari-outline",
+                   "-mllvm", "-taokari-level-outline=3",
+                   "-mllvm", "-taokari-outline-prob=100",
+                   "-mllvm", "-taokari-outline-max-shards=8",
+                   "-mllvm", "-taokari-outline-fakes=1",
+                   "-S", "-emit-llvm", "-o", str(l3_ir)])
+        if res.returncode:
+            print(res.stdout, end="")
+            print(res.stderr, end="", file=sys.stderr)
+            return res.returncode
+        l3_text = l3_ir.read_text(encoding="utf-8", errors="ignore")
+        # Integrity check: at least one private token global + an icmp eq guard
+        # feeding a branch.
+        if not re.search(r"__taokari_sh_[0-9a-f]+\.ic\.tok", l3_text):
+            print("L3: no integrity-check token global found", file=sys.stderr)
+            return 1
+        if not re.search(r"icmp eq i\d+ ", l3_text):
+            print("L3: no integrity icmp guard found", file=sys.stderr)
+            return 1
+        # Multi-layer: at least one shard must be called by another shard,
+        # proving the body was split across a chained caller/sub-shard pair
+        # rather than emitted as a single flat body. (Counts alone are not a
+        # reliable signal: fake shards inflate L2 too.)
+        callers = set(re.findall(r"call[^@]*@(__taokari_sh_[0-9a-f]+)", l3_text))
+        callees = set(re.findall(r"define[^@]*@(__taokari_sh_[0-9a-f]+)", l3_text))
+        if not (callers & callees):
+            print("L3: no shard-to-shard call edge (multi-layer) found",
+                  file=sys.stderr)
+            return 1
+        l3_shard_defs = len(callees)
+        # Decompile-quality gate: the sensitive function's original arithmetic
+        # (mul by 17) must no longer sit inline in its body; it has been pushed
+        # into shards, so a decompiler cannot read it as one clean body.
+        sens_body = re.search(r"define[^@]*@sensitive\(.*?\n\}",
+                              l3_text, re.S)
+        if sens_body and re.search(r"mul .*17", sens_body.group(0)):
+            print("L3: sensitive body still carries inline arithmetic (not split)",
+                  file=sys.stderr)
+            return 1
+
+        l3_exe = tmp / "outline_l3.exe"
+        res = run([str(CLANG), str(src), "-O2", "-fno-discard-value-names",
+                   "-mllvm", "-taokari", "-mllvm", "-taokari-outline",
+                   "-mllvm", "-taokari-level-outline=3",
+                   "-mllvm", "-taokari-outline-prob=100",
+                   "-mllvm", "-taokari-outline-max-shards=4",
+                   "-o", str(l3_exe)])
+        if res.returncode:
+            print(res.stdout, end="")
+            print(res.stderr, end="", file=sys.stderr)
+            return res.returncode
+        l3_ran = run([str(l3_exe)])
+        if l3_ran.returncode:
+            print(f"L3 runtime failed: {l3_ran.stdout}{l3_ran.stderr}", file=sys.stderr)
+            return l3_ran.returncode
+        if l3_ran.stdout != ref_run.stdout:
+            print(f"L3 output drift:\n  obf: {l3_ran.stdout!r}\n  ref: {ref_run.stdout!r}",
+                  file=sys.stderr)
+            return 1
+
+        # Outline + fla + bcf + mba fortress compose must round-trip.
+        full_exe = tmp / "outline_full.exe"
+        res = run([str(CLANG), str(src), "-O2", "-fno-discard-value-names",
+                   "-mllvm", "-taokari", "-mllvm", "-taokari-outline",
+                   "-mllvm", "-taokari-level-outline=3",
+                   "-mllvm", "-taokari-outline-prob=100",
+                   "-mllvm", "-taokari-outline-max-shards=4",
+                   "-mllvm", "-taokari-fla", "-mllvm", "-taokari-level-fla=2",
+                   "-mllvm", "-taokari-bcf", "-mllvm", "-taokari-level-bcf=2",
+                   "-mllvm", "-taokari-mba", "-mllvm", "-taokari-level-mba=2",
+                   "-o", str(full_exe)])
+        if res.returncode:
+            print(res.stdout, end="")
+            print(res.stderr, end="", file=sys.stderr)
+            return res.returncode
+        full_ran = run([str(full_exe)])
+        if full_ran.returncode:
+            print(f"fortress compose runtime failed: {full_ran.stdout}{full_ran.stderr}",
+                  file=sys.stderr)
+            return full_ran.returncode
+        if full_ran.stdout != ref_run.stdout:
+            print(f"fortress compose output drift:\n  obf: {full_ran.stdout!r}\n  ref: {ref_run.stdout!r}",
+                  file=sys.stderr)
+            return 1
+
     print("outline: PASS")
     return 0
 

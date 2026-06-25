@@ -250,6 +250,8 @@ struct FunctionOutlining : public FunctionPass {
       if (OutlineFakes.getValue())
         emitFakeShards(M, Shard->getFunctionType(), FuncRNG);
     }
+    if (Level >= 3)
+      fortressShard(M, *Shard, FuncRNG);
     return true;
   }
 
@@ -370,6 +372,153 @@ struct FunctionOutlining : public FunctionPass {
         B.CreateRet(Constant::getNullValue(RetTy));
       appendToCompilerUsed(M, {Fake});
     }
+  }
+
+  // Fortress hardening for a single shard (level >= 3). Adds three layers so a
+  // decompiler can no longer read the shard as one clean body:
+  //   1. Multi-layer split: the shard's own body tail is extracted into a
+  //      sub-shard, so the work is spread across a chained caller/sub-shard pair
+  //      instead of a single static body.
+  //   2. Entry integrity check: the shard verifies a private checksum before
+  //      running real code; a mismatch diverts to a dead junk block.
+  //   3. A fake call edge to a sibling fake shard, polluting xref walks so the
+  //      real control flow is not distinguishable from the decoy graph.
+  void fortressShard(Module &M, Function &Shard, std::mt19937_64 &FuncRNG) {
+    if (Shard.empty())
+      return;
+    splitShardIntoLayers(M, Shard, FuncRNG);
+    addIntegrityCheck(Shard, FuncRNG);
+    addFakeCallEdge(M, Shard, FuncRNG);
+  }
+
+  // Build a private global holding a random 64-bit token, then guard the shard
+  // entry on (a^salt)==(b^salt) where a and b both load that global. The
+  // predicate is always true at runtime, but the comparison + branch to a dead
+  // junk block reads as a tamper check in a decompiler and adds a CFG edge that
+  // never executes.
+  void addIntegrityCheck(Function &Shard, std::mt19937_64 &FuncRNG) {
+    Module &M = *Shard.getParent();
+    auto &Ctx = Shard.getContext();
+    auto *I64 = Type::getInt64Ty(Ctx);
+    uint64_t Token = nextNonZero(FuncRNG);
+    uint64_t Salt = nextNonZero(FuncRNG);
+
+    auto *TokenGV = new GlobalVariable(
+        M, I64, false, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64, Token), Shard.getName() + ".ic.tok");
+    TokenGV->setAlignment(Align(8));
+
+    BasicBlock &Entry = Shard.getEntryBlock();
+    // Split before the first real (non-alloca, non-debug) instruction so the
+    // integrity check runs in the fresh entry and real code lands in Real.
+    Instruction *RealStart = &Entry.front();
+    for (Instruction &I : Entry) {
+      if (isa<AllocaInst>(&I) || I.isDebugOrPseudoInst())
+        continue;
+      RealStart = &I;
+      break;
+    }
+    BasicBlock *Real = Entry.splitBasicBlock(RealStart->getIterator(),
+                                             Shard.getName() + ".ic.real");
+    BasicBlock *Junk = BasicBlock::Create(Ctx, Shard.getName() + ".ic.junk",
+                                          &Shard, Real);
+
+    // splitBasicBlock appended an unconditional branch Entry -> Real; drop it so
+    // the integrity predicate drives the branch instead.
+    Entry.getTerminator()->eraseFromParent();
+
+    IRBuilder<> B(&Entry, Entry.getFirstInsertionPt());
+    // Load the token twice and compare both XOR-salted copies. Both loads read
+    // the same private global, so (a^salt)==(b^salt) is always true at runtime,
+    // but a decompiler reads it as a checksum verification guarding real work.
+    Value *A = B.CreateAlignedLoad(I64, TokenGV, Align(8), true, "ic.a");
+    Value *Bv = B.CreateAlignedLoad(I64, TokenGV, Align(8), true, "ic.b");
+    auto *SaltC = ConstantInt::get(I64, Salt);
+    Value *L = B.CreateXor(A, SaltC, "ic.l");
+    Value *R = B.CreateXor(Bv, SaltC, "ic.r");
+    Value *Pred = B.CreateICmpEQ(L, R, "ic.p");
+    B.CreateCondBr(Pred, Real, Junk);
+
+    // Junk block: dead-end so a tampered shard cannot fall through to real
+    // work. Unreachable keeps the ABI intact for later passes.
+    IRBuilder<> J(Junk);
+    J.CreateUnreachable();
+    appendToCompilerUsed(M, {TokenGV});
+  }
+
+  // Insert a call to a freshly-created fake shard at the shard entry, then drop
+  // the result. The fake has the shard's own signature so the static call graph
+  // shows the real shard calling a plausible sibling that does nothing.
+  void addFakeCallEdge(Module &M, Function &Shard, std::mt19937_64 &FuncRNG) {
+    auto *FTy = Shard.getFunctionType();
+    auto *Fake = Function::Create(FTy, GlobalValue::InternalLinkage,
+                                  shardName(FuncRNG), M);
+    Fake->addFnAttr(Attribute::NoInline);
+    BasicBlock *FBB = BasicBlock::Create(M.getContext(), "entry", Fake);
+    IRBuilder<> FB(FBB);
+    Type *RetTy = FTy->getReturnType();
+    if (RetTy->isVoidTy())
+      FB.CreateRetVoid();
+    else
+      FB.CreateRet(Constant::getNullValue(RetTy));
+    appendToCompilerUsed(M, {Fake});
+
+    BasicBlock &Entry = Shard.getEntryBlock();
+    IRBuilder<> B(&Entry, Entry.getFirstInsertionPt());
+    SmallVector<Value *, 8> Args;
+    for (Argument &A : Shard.args())
+      Args.push_back(&A);
+    B.CreateCall(Fake, Args);
+  }
+
+  // Extract the shard's own tail into a sub-shard so the body is split across a
+  // chained pair. Runs only when the shard is still a single straight-line
+  // block; later fortress steps (integrity check) add more blocks afterwards.
+  void splitShardIntoLayers(Module &M, Function &Shard,
+                            std::mt19937_64 &FuncRNG) {
+    if (Shard.size() != 1)
+      return;
+    BasicBlock *BB = &Shard.getEntryBlock();
+    if (!hasOutlinableTail(*BB, OutlineMinSize.getValue(),
+                           OutlineMaxInsts.getValue()))
+      return;
+
+    DominatorTree DT(Shard);
+    AssumptionCache AC(Shard);
+    CodeExtractorAnalysisCache CEAC(Shard);
+
+    Instruction *Anchor = nullptr;
+    Instruction *SplitPt = nullptr;
+    for (Instruction &I : *BB) {
+      if (I.isTerminator() || I.isDebugOrPseudoInst() || isa<AllocaInst>(&I))
+        continue;
+      if (!Anchor) {
+        Anchor = &I;
+        continue;
+      }
+      SplitPt = &I;
+      break;
+    }
+    if (!SplitPt)
+      return;
+
+    BasicBlock *Tail =
+        SplitBlock(BB, SplitPt, &DT, nullptr, nullptr,
+                   BB->getName() + ".layer.tail");
+    if (!Tail)
+      return;
+
+    SmallVector<BasicBlock *, 1> Blocks{Tail};
+    CodeExtractor Ext(Blocks, &DT, false, nullptr, nullptr, &AC, false, false,
+                      nullptr, ".layer", false);
+    if (!Ext.isEligible())
+      return;
+    Function *Sub = Ext.extractCodeRegion(CEAC);
+    if (!Sub)
+      return;
+    Sub->setLinkage(GlobalValue::InternalLinkage);
+    Sub->addFnAttr(Attribute::NoInline);
+    Sub->setName(shardName(FuncRNG));
   }
 };
 } // namespace
