@@ -106,8 +106,30 @@ struct DynamicProtection : public FunctionPass {
     IRBuilder<> B(Ctx);
 
     BasicBlock &OrigEntry = F.getEntryBlock();
-    BasicBlock *OrigCode = OrigEntry.splitBasicBlock(
-        OrigEntry.getFirstInsertionPt(), "dyn.orig");
+    // Delayed placement (L2+): instead of always guarding the very first
+    // instruction, let a small random prefix of real instructions run first,
+    // then split and insert the check. This moves the check off the obvious
+    // entry point so a reverser cannot find every probe by scanning function
+    // entries; the check still runs early in the function.
+    Instruction *SplitBefore = &*OrigEntry.getFirstInsertionPt();
+    if (Level >= 2) {
+      unsigned Lead = RNG() % 4; // 0..3 real instructions of headroom
+      unsigned Seen = 0;
+      for (Instruction &I : OrigEntry) {
+        if (I.isTerminator())
+          break;
+        if (isa<AllocaInst>(&I) || I.isDebugOrPseudoInst())
+          continue;
+        if (Seen >= Lead) {
+          SplitBefore = &I;
+          break;
+        }
+        ++Seen;
+        SplitBefore = &I;
+      }
+    }
+    BasicBlock *OrigCode =
+        OrigEntry.splitBasicBlock(SplitBefore->getIterator(), "dyn.orig");
     OrigEntry.getTerminator()->eraseFromParent();
 
     BasicBlock *Trap = BasicBlock::Create(Ctx, "dyn.trap", &F);
