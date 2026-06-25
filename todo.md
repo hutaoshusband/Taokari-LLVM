@@ -1406,15 +1406,15 @@ Purpose: serious IP protection.
 
 Purpose: maximum practical protection for sensitive functions only.
 
-* [ ] Flattening L3
-* [ ] Opaque predicates L3
-* [ ] BCF L3
-* [ ] MBA L3
-* [ ] String encryption L3
+* [x] Flattening L3
+* [x] Opaque predicates L3
+* [x] BCF L3
+* [x] MBA L3
+* [x] String encryption L3
 * [ ] Constant encryption L3
-* [ ] Indirect calls L3
-* [ ] Indirect branches L3
-* [ ] Indirect globals L3
+* [x] Indirect calls L3
+* [x] Indirect branches L3
+* [x] Indirect globals L3
 * [x] Function outlining L3
 * [x] Dynamic protections L3
 * [ ] Optional virtualization L3
