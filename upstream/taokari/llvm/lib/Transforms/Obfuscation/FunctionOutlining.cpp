@@ -153,8 +153,10 @@ struct FunctionOutlining : public FunctionPass {
     }
 
   finish:
-    if (Changed && Level >= 3 && OutlineCrossPool)
+    if (Changed && Level >= 3 && OutlineCrossPool) {
       buildCrossShardPool(F, FuncRNG);
+      buildCrossShardStringPool(F, FuncRNG);
+    }
     return Changed;
   }
 
@@ -765,6 +767,123 @@ struct FunctionOutlining : public FunctionPass {
       auto *OrigTy = cast<ConstantInt>(U->get())->getType();
       Value *Narrow = OrigTy == I64 ? Dec : B.CreateTrunc(Dec, OrigTy, "cpool.t");
       U->set(Narrow);
+    }
+  }
+
+  // Cross-shard string pool: route references to internal/private globals
+  // (string literals, constant data) through a separate encrypted pool so the
+  // shard bodies hold no direct global address. Each pooled global is stored
+  // as an XOR-encrypted ptrtoint; the shard rewrites its use to
+  // inttoptr(poolload ^ key). OPT-IN like the constant pool (MBA-incompatible
+  // on the same functions).
+  void buildCrossShardStringPool(Function &F, std::mt19937_64 &FuncRNG) {
+    Module &M = *F.getParent();
+    auto &Ctx = M.getContext();
+    auto *I64 = Type::getInt64Ty(Ctx);
+    auto *PtrTy = PointerType::get(Ctx, 0);
+
+    // Gather shards transitively reachable from F (same walk as the constant
+    // pool). Skip dispatchers (i32 token first arg).
+    SmallPtrSet<Function *, 32> Seen;
+    SmallVector<Function *, 32> Work;
+    auto PushCallees = [&](Function *Caller) {
+      for (BasicBlock &CBB : *Caller)
+        for (Instruction &I : CBB)
+          if (auto *CI = dyn_cast<CallInst>(&I))
+            if (auto *Callee = CI->getCalledFunction())
+              if (Callee->getName().starts_with("__taokari_sh_"))
+                if (Seen.insert(Callee).second)
+                  Work.push_back(Callee);
+    };
+    PushCallees(&F);
+    for (unsigned I = 0; I < Work.size(); ++I)
+      PushCallees(Work[I]);
+
+    SmallVector<Function *, 16> Targets;
+    for (Function *Sh : Work) {
+      if (Sh->empty() || Sh->isDeclaration())
+        continue;
+      if (!Sh->arg_empty() && Sh->getArg(0)->getType()->isIntegerTy(32))
+        continue;
+      Targets.push_back(Sh);
+    }
+    if (Targets.empty())
+      return;
+
+    // Collect distinct internal/private globals referenced by the shards.
+    // Only local/hidden globals are safe to pool: their address is fixed
+    // within the TU and the inttoptr rewrite stays valid.
+    MapVector<GlobalValue *, unsigned> StrIndex;
+    for (Function *Sh : Targets)
+      for (BasicBlock &BB : *Sh)
+        for (Instruction &I : BB)
+          for (Use &Op : I.operands()) {
+            if (!isPoolableUse(Op))
+              continue;
+            auto *GV = dyn_cast<GlobalValue>(Op.get());
+            if (!GV)
+              continue;
+            if (GV->isDeclaration())
+              continue;
+            if (!GV->hasLocalLinkage() && !GV->hasHiddenVisibility())
+              continue;
+            if (!StrIndex.count(GV))
+              StrIndex[GV] = 0;
+          }
+    if (StrIndex.empty())
+      return;
+
+    uint64_t Key = nextNonZero(FuncRNG);
+    auto *ArrTy = ArrayType::get(I64, StrIndex.size());
+    SmallVector<Constant *, 16> Encoded;
+    unsigned Idx = 0;
+    for (auto &KV : StrIndex) {
+      KV.second = Idx++;
+      // ADD not XOR: ptrtoint + offset is a valid static reloc on COFF/MSVC
+      // (the address-plus-offset form the linker can patch), whereas
+      // ptrtoint XOR const is not. The runtime decrypt uses SUB.
+      Constant *Addr = ConstantExpr::getPtrToInt(KV.first, I64);
+      Encoded.push_back(
+          ConstantExpr::getAdd(Addr, ConstantInt::get(I64, Key)));
+    }
+    auto *PoolGV =
+        new GlobalVariable(M, ArrTy, true, GlobalValue::PrivateLinkage,
+                           ConstantArray::get(ArrTy, Encoded),
+                           F.getName() + ".spool");
+    PoolGV->setAlignment(Align(8));
+    auto *KeyGV = new GlobalVariable(M, I64, false, GlobalValue::PrivateLinkage,
+                                     ConstantInt::get(I64, Key),
+                                     F.getName() + ".spool.key");
+    KeyGV->setAlignment(Align(8));
+    appendToCompilerUsed(M, {PoolGV, KeyGV});
+
+    for (Function *Sh : Targets) {
+      SmallVector<std::pair<Use *, unsigned>, 16> ToRewrite;
+      for (BasicBlock &BB : *Sh)
+        for (Instruction &I : BB)
+          for (Use &Op : I.operands()) {
+            if (!isPoolableUse(Op))
+              continue;
+            auto It = StrIndex.find(dyn_cast_or_null<GlobalValue>(Op.get()));
+            if (It == StrIndex.end())
+              continue;
+            ToRewrite.emplace_back(&Op, It->second);
+          }
+      for (auto &P : ToRewrite) {
+        Use *U = P.first;
+        unsigned I2 = P.second;
+        auto *User = cast<Instruction>(U->getUser());
+        IRBuilder<> B(User);
+        Value *GEP = B.CreateConstInBoundsGEP2_64(PoolGV->getValueType(),
+                                                  PoolGV, 0, I2, "spool.gep");
+        Value *Enc =
+            B.CreateAlignedLoad(I64, GEP, Align(8), true, "spool.enc");
+        Value *K = B.CreateAlignedLoad(I64, KeyGV, Align(8), true, "spool.key");
+        // SUB decrypt matches the ADD encoding (offset-based reloc).
+        Value *Dec = B.CreateSub(Enc, K, "spool.dec");
+        Value *Ptr = B.CreateIntToPtr(Dec, PtrTy, "spool.ptr");
+        U->set(Ptr);
+      }
     }
   }
 };

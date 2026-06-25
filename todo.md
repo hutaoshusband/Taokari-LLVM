@@ -507,19 +507,17 @@ Sensitive global references should not look like direct global accesses in the d
 
 # 10. Function Outlining / Callout Obfuscation
 
-Current status: Level 1 + Level 2 done. Level 3 mostly done (9/10). L1 splits
+Current status: Level 1 + Level 2 done. Level 3 done (10/10). L1 splits
 via CodeExtractor (`outline` ObfOpt annotation, `-taokari-outline-max-shards` /
 `-taokari-outline-prob`, `.shard` re-outlining guard). L2 hardens the shard
 layer: opaque `__taokari_sh_` names, per-arg/return XOR scrambling, fake shard
 functions, `-taokari-outline-max-insts` guardrail, and free routing through the
 IndirectCall page table when both passes are on. L3 fortress: multi-layer shard
 split, token-switched dispatcher hiding the real edge, integrity-check guard at
-shard entry, fake call-edge graph, an opt-in cross-shard constant pool
-(`-taokari-outline-cross-pool`, MBA-incompatible on the same functions), and
-verified compose with fla/BCF/MBA. Only cross-shard string pools remain (string
-encryption is covered by the dedicated cse pass in composition). Definition of
-Done met: a sensitive function no longer exists as one clean static function
-body.
+shard entry, fake call-edge graph, and opt-in cross-shard constant + string
+pools (`-taokari-outline-cross-pool`, ADD-encoded so COFF/MSVC accepts the
+reloc; MBA-incompatible on the same functions). Definition of Done met: a
+sensitive function no longer exists as one clean static function body.
 This is a major differentiator from base Arkari.
 
 ## Level 1 — Basic Function Splitting
@@ -550,7 +548,7 @@ This is a major differentiator from base Arkari.
 * [x] Add fake shard graph
 * [x] Add shard integrity checks
 * [x] Add cross-shard constant pools
-* [ ] Add cross-shard string pools
+* [x] Add cross-shard string pools
 * [x] Add outline + flattening mode
 * [x] Add outline + BCF mode
 * [x] Add outline + MBA mode
