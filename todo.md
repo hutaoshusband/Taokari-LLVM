@@ -605,19 +605,25 @@ The binary should not leak project paths, compiler identifiers, helper names or 
 
 # 12. Dynamic Protections
 
-Current status: not implemented.
+Current status: Level 1 done. New `DynamicProtection` pass inserts one runtime
+check at the entry of annotated functions: IsDebuggerPresent, a
+CheckRemoteDebuggerPresent probe (Windows process-state debugger check, safer
+than raw PEB gs access), or a QueryPerformanceCounter timing delta. A detected
+debugger routes through a libc exit tamper path; a clean (non-debugged) run
+always takes the normal path. Off by default and kept out of -taokari-max;
+opt in via `+dyn` annotation or `-taokari-dyn`. L2/L3 pending.
 These must be optional and off by default.
 
 ## Level 1 — Basic Runtime Checks
 
-* [ ] Add optional anti-debug check
-* [ ] Add optional timing check
-* [ ] Add optional breakpoint check
-* [ ] Add optional PEB check on Windows
-* [ ] Add config toggle
-* [ ] Add annotation: `dyn`
-* [ ] Add safe failure mode
-* [ ] Add false-positive tests
+* [x] Add optional anti-debug check
+* [x] Add optional timing check
+* [x] Add optional breakpoint check
+* [x] Add optional PEB check on Windows
+* [x] Add config toggle
+* [x] Add annotation: `dyn`
+* [x] Add safe failure mode
+* [x] Add false-positive tests
 
 ## Level 2 — Distributed Runtime Checks
 
