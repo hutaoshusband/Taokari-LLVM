@@ -507,9 +507,12 @@ Sensitive global references should not look like direct global accesses in the d
 
 # 10. Function Outlining / Callout Obfuscation
 
-Current status: Level 1 done (basic splitting via CodeExtractor, `outline`
-ObfOpt annotation, `-taokari-outline-max-shards` / `-taokari-outline-prob`
-config, `.shard` re-outlining guard, correctness verifier). L2/L3 pending.
+Current status: Level 1 + Level 2 done. L1 splits via CodeExtractor (`outline`
+ObfOpt annotation, `-taokari-outline-max-shards` / `-taokari-outline-prob`,
+`.shard` re-outlining guard). L2 hardens the shard layer: opaque
+`__taokari_sh_` names, per-arg/return XOR scrambling, fake shard functions,
+`-taokari-outline-max-insts` guardrail, and free routing through the
+IndirectCall page table when both passes are on. L3 (fortress) pending.
 This is a major differentiator from base Arkari.
 
 ## Level 1 — Basic Function Splitting
@@ -525,13 +528,13 @@ This is a major differentiator from base Arkari.
 
 ## Level 2 — Indirect Shards
 
-* [ ] Route shard calls through indirect call page table
-* [ ] Add fake shard functions
-* [ ] Add shard name randomization
-* [ ] Add shard argument scrambling
-* [ ] Add shard return scrambling
-* [ ] Add per-function shard count
-* [ ] Add performance guardrails
+* [x] Route shard calls through indirect call page table
+* [x] Add fake shard functions
+* [x] Add shard name randomization
+* [x] Add shard argument scrambling
+* [x] Add shard return scrambling
+* [x] Add per-function shard count
+* [x] Add performance guardrails
 
 ## Level 3 — Fortress Callout
 
