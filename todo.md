@@ -494,7 +494,7 @@ Main weakness: should become more polymorphic and better tested.
 * [ ] Add split global storage
 * [x] Add encrypted global pools
 * [x] Add fake global pools
-* [ ] Add per-use global decrypt option
+* [x] Add per-use global decrypt option
 * [ ] Add pointer-auth discriminator for globals
 * [x] Add global access integrity check
 * [x] Add cross-pass test with string encryption

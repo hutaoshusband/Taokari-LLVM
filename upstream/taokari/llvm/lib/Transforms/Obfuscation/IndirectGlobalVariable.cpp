@@ -24,6 +24,11 @@ static cl::opt<uint32_t> IndGvMinSize(
     cl::desc("Only indirect globals whose storage is at least this many bytes. "
              "0 = all eligible globals. Skips low-value small globals so the "
              "page-table cost lands on the sensitive (larger) ones."));
+static cl::opt<bool> IndGvNoDedup(
+    "taokari-indgv-no-dedup", cl::init(false), cl::NotHidden,
+    cl::desc("Per-use global decrypt: skip the entry-block dedup cache so "
+             "every access to a global gets its own decrypt sequence. More "
+             "resilient (no shared slot to patch) at the cost of larger code."));
 
 namespace {
 struct IndirectGlobalVariable : public FunctionPass {
@@ -224,7 +229,9 @@ struct IndirectGlobalVariable : public FunctionPass {
     Instruction *AllocaInsertPt = &*EntryBB.begin();
     auto *PtrTy = PointerType::getUnqual(Fn.getContext());
     for (auto &KV : GVUseCount) {
-      if (KV.second <= 1)
+      // Per-use decrypt option: skip the dedup cache so every global access
+      // gets its own decrypt (no shared slot a reverser can patch once).
+      if (IndGvNoDedup || KV.second <= 1)
         continue;
       IRBuilder<> AIB(AllocaInsertPt);
       GVDedupCache[KV.first] = AIB.CreateAlloca(PtrTy, nullptr);
