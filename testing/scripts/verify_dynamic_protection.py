@@ -180,6 +180,19 @@ def main() -> int:
         if "dyn.mix" not in l2_text and "or i1" not in l2_text:
             print("L2: no opaque-predicate result mixing", file=sys.stderr)
             return 1
+        # Tamper flag: a shared module global that every check reads and the
+        # trap sets, so detection propagates across checks.
+        if "__taokari_dyn_tamper" not in l2_text:
+            print("L2: no shared tamper flag emitted", file=sys.stderr)
+            return 1
+        if not re.search(r"load i8, .*__taokari_dyn_tamper", l2_text):
+            print("L2: tamper flag is not read by the check", file=sys.stderr)
+            return 1
+        # Runtime nonce: the mix predicate must depend on a runtime-unfoldable
+        # seed (a volatile global load), not a constant.
+        if "load volatile" not in l2_text:
+            print("L2: no runtime-unfoldable nonce seed found", file=sys.stderr)
+            return 1
         l2_exe = tmp / "dyn_l2.exe"
         res = run([str(CLANG), str(l2_src), "-O2", "-mllvm", "-taokari",
                    "-mllvm", "-taokari-dyn", "-o", str(l2_exe)])

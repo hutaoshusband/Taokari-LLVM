@@ -605,18 +605,18 @@ The binary should not leak project paths, compiler identifiers, helper names or 
 
 # 12. Dynamic Protections
 
-Current status: Level 1 done. Level 2 partial (4/8). New `DynamicProtection`
+Current status: Level 1 done. Level 2 mostly done (6/8). New `DynamicProtection`
 pass inserts one runtime check at the entry of annotated functions:
 IsDebuggerPresent, a CheckRemoteDebuggerPresent probe (Windows process-state
 debugger check, safer than raw PEB gs access), or a QueryPerformanceCounter
 timing delta. A detected debugger routes through a libc exit tamper path; a
 clean (non-debugged) run always takes the normal path. Off by default and kept
 out of -taokari-max; opt in via `+dyn` annotation or `-taokari-dyn`. L2 adds:
-decoy fake check calls, and result mixing with an unfoldable opaque-false
-predicate so the branch condition is not the raw check output. Also fixes a
-pre-existing bug in makeUnfoldableFalsePredicate (it returned always-true).
-L2 remaining: indirect/delayed checks, runtime nonce, tamper propagation. L3
-pending.
+decoy fake check calls, result mixing with an unfoldable opaque-false
+predicate seeded by a runtime nonce, and a shared module tamper flag that the
+trap sets and every check reads (detection propagates across checks). Also
+fixes a pre-existing bug in makeUnfoldableFalsePredicate (it returned
+always-true). L2 remaining: indirect/delayed checks. L3 pending.
 These must be optional and off by default.
 
 ## Level 1 — Basic Runtime Checks
@@ -638,8 +638,8 @@ These must be optional and off by default.
 * [x] Add fake checks
 * [x] Add check result mixing
 * [ ] Add delayed checks
-* [ ] Add runtime nonce dependency
-* [ ] Add tamper flag propagation
+* [x] Add runtime nonce dependency
+* [x] Add tamper flag propagation
 
 ## Level 3 — Fortress Dynamic Protection
 

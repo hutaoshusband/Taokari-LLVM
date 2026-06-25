@@ -3,6 +3,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Pass.h"
@@ -42,6 +43,10 @@ struct DynamicProtection : public FunctionPass {
   static char ID;
   ObfuscationOptions *ArgsOptions;
   std::mt19937_64 RNG;
+  // Module-level tamper flag shared across every dyn check in the module: any
+  // check that trips sets it, and every check also reads it, so removing one
+  // check does not fully disable detection (the flag persists for the others).
+  GlobalVariable *TamperFlag = nullptr;
 
   DynamicProtection(ObfuscationOptions *argsOptions)
       : FunctionPass(ID), ArgsOptions(argsOptions) {
@@ -50,6 +55,22 @@ struct DynamicProtection : public FunctionPass {
       report_fatal_error(Twine("failed to seed DynamicProtection RNG: ") +
                          EC.message());
     RNG = std::mt19937_64(Seed);
+  }
+
+  // Lazily create the module-private tamper flag (i8, init 0). Once any check
+  // trips it becomes nonzero; all subsequent checks read it back and trip too.
+  GlobalVariable *getTamperFlag(Module &M) {
+    if (TamperFlag && TamperFlag->getParent() == &M)
+      return TamperFlag;
+    auto *I8 = Type::getInt8Ty(M.getContext());
+    TamperFlag = new GlobalVariable(M, I8, false, GlobalValue::PrivateLinkage,
+                                    ConstantInt::get(I8, 0),
+                                    "__taokari_dyn_tamper");
+    TamperFlag->setAlignment(Align(1));
+    TamperFlag->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+    TamperFlag->addMetadata("noobf", *MDNode::get(M.getContext(), {}));
+    appendToCompilerUsed(M, {TamperFlag});
+    return TamperFlag;
   }
 
   StringRef getPassName() const override { return {"DynamicProtection"}; }
@@ -111,21 +132,36 @@ struct DynamicProtection : public FunctionPass {
       break;
     }
 
-    // L2: mix the detection result with an unfoldable opaque-false predicate.
-    // At runtime the opaque side is always false, so Tripped == Detected, but
-    // a decompiler cannot fold the branch condition to the raw check output.
+    // L2: mix the detection result with an unfoldable opaque-false predicate
+    // whose seed is a runtime nonce (frameaddress-derived), and with the
+    // shared tamper flag. At runtime the opaque side is always false and the
+    // flag starts at 0, so Tripped == Detected on a clean run; but the branch
+    // condition cannot be folded to the raw check output, and once any check
+    // in the module trips (setting the flag) every later check trips too.
     if (Level >= 2) {
       auto *I64 = Type::getInt64Ty(Ctx);
-      Value *Seed = taokari::makeSeedFromFlags(F, B, I64, RNG);
+      Value *Seed = taokari::makeContextSeed(
+          F, B, I64, RNG, taokari::OpaqueSeedKind::RuntimeNonce);
       Value *OpaqueFalse = taokari::makeUnfoldableFalsePredicate(B, Seed, RNG);
       Value *Mixed = B.CreateOr(Detected, OpaqueFalse, "dyn.mix");
-      B.CreateCondBr(Mixed, Trap, OrigCode);
+      GlobalVariable *Flag = getTamperFlag(M);
+      auto *I8 = Type::getInt8Ty(Ctx);
+      Value *FlagVal = B.CreateLoad(I8, Flag, "dyn.flag");
+      Value *FlagSet = B.CreateICmpNE(FlagVal, ConstantInt::get(I8, 0),
+                                      "dyn.flagset");
+      Value *Tripped = B.CreateOr(Mixed, FlagSet, "dyn.trip");
+      B.CreateCondBr(Tripped, Trap, OrigCode);
     } else {
       B.CreateCondBr(Detected, Trap, OrigCode);
     }
 
-    // Tamper path: libc exit with a non-zero code, marked NoReturn.
+    // Tamper path: set the shared tamper flag, then libc exit with a non-zero
+    // code, marked NoReturn.
     B.SetInsertPoint(Trap);
+    if (Level >= 2) {
+      GlobalVariable *Flag = getTamperFlag(M);
+      B.CreateStore(ConstantInt::get(Type::getInt8Ty(Ctx), 1), Flag);
+    }
     Type *I32 = Type::getInt32Ty(Ctx);
     auto *ExitTy = FunctionType::get(Type::getVoidTy(Ctx), {I32}, false);
     FunctionCallee Exit = M.getOrInsertFunction("exit", ExitTy);
