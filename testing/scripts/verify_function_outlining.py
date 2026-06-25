@@ -174,6 +174,29 @@ def main() -> int:
         # L2: opaque shard names (no source-function-name leak), arg/return
         # scramble XORs, and decoy fake shards in compiler.used. Output must
         # still match the reference, proving the scramble round-trips.
+
+        # Annotation-level parsing: enable + level via the annotation ALONE
+        # (no -taokari-outline enable flag, no -taokari-level-outline flag).
+        # The ^outline=2 form must set the level so opaque names appear.
+        ann_src = tmp / "outline_ann.c"
+        ann_src.write_text(SOURCE.replace('annotate("+outline")',
+                                          'annotate("+outline^outline=2")'),
+                           encoding="utf-8")
+        ann_ir = tmp / "outline_ann.ll"
+        res = run([str(CLANG), str(ann_src), "-O0", "-fno-discard-value-names",
+                   "-mllvm", "-taokari", "-mllvm", "-taokari-outline-prob=100",
+                   "-mllvm", "-taokari-outline-max-shards=8",
+                   "-S", "-emit-llvm", "-o", str(ann_ir)])
+        if res.returncode:
+            print(res.stdout, end="")
+            print(res.stderr, end="", file=sys.stderr)
+            return res.returncode
+        ann_text = ann_ir.read_text(encoding="utf-8", errors="ignore")
+        if "__taokari_sh_" not in ann_text:
+            print("annotation ^outline=2 did not set level 2 (no opaque names)",
+                  file=sys.stderr)
+            return 1
+
         l2_ir = tmp / "outline_l2.ll"
         res = run([str(CLANG), str(src), "-O0", "-fno-discard-value-names",
                    "-mllvm", "-taokari", "-mllvm", "-taokari-outline",
