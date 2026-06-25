@@ -1458,7 +1458,7 @@ Purpose: maximum practical protection for sensitive functions only.
 * [x] StringEnc L2
 * [x] StringEnc L3
 * [x] ConstantEnc L2
-* [ ] ConstantEnc L3
+* [x] ConstantEnc L3
 * [x] Metadata strip L3
 
 ## Milestone 6 — Add Function Outlining
