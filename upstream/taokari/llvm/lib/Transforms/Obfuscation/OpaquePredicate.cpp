@@ -25,6 +25,13 @@ static cl::opt<bool> OpaqUnfoldableFlag(
     "taokari-opaq-unfoldable",
     cl::desc("Use optimizer-resistant opaque predicates (Level 2)"),
     cl::init(false));
+static cl::opt<std::string> OpaqFamilyFlag(
+    "taokari-opaq-family",
+    cl::desc("Opaque predicate family registry selector. When a pass asks for a "
+             "true/false predicate via the registry, this picks the identity "
+             "family: algebraic (foldable L1), unfoldable (L2), or nested "
+             "(L3 two-level chain)."),
+    cl::init("unfoldable"));
 
 namespace {
 ConstantInt *randomInt(IntegerType *IntTy, std::mt19937_64 &RNG) {
@@ -222,6 +229,30 @@ OpaqueSeedKind resolveSeedKind() {
 }
 
 bool resolveUnfoldable() { return OpaqUnfoldableFlag; }
+
+// Predicate family registry: dispatch a true/false predicate request to the
+// identity family selected by -taokari-opaq-family. This is the Level-3
+// "selectable family" surface -- passes that want a configurable predicate
+// strength call these instead of a specific make*Predicate.
+Value *makeRegistryTruePredicate(IRBuilder<> &IRB, Value *Seed,
+                                 std::mt19937_64 &RNG, const Twine &Name) {
+  const std::string &F = OpaqFamilyFlag;
+  if (F == "algebraic")
+    return makeTruePredicate(IRB, Seed, RNG, Name);
+  if (F == "nested")
+    return makeNestedTruePredicate(IRB, Seed, RNG, Name);
+  return makeUnfoldableTruePredicate(IRB, Seed, RNG, Name);
+}
+
+Value *makeRegistryFalsePredicate(IRBuilder<> &IRB, Value *Seed,
+                                  std::mt19937_64 &RNG, const Twine &Name) {
+  const std::string &F = OpaqFamilyFlag;
+  if (F == "algebraic")
+    return makeFalsePredicate(IRB, Seed, RNG, Name);
+  if (F == "nested")
+    return makeNestedFalsePredicate(IRB, Seed, RNG, Name);
+  return makeUnfoldableFalsePredicate(IRB, Seed, RNG, Name);
+}
 
 Value *makeSeedFromFlags(Function &F, IRBuilder<> &IRB, IntegerType *IntTy,
                          std::mt19937_64 &RNG, const Twine &Name) {

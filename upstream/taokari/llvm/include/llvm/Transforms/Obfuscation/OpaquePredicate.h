@@ -96,6 +96,17 @@ Value *makeNestedFalsePredicate(IRBuilder<> &IRB, Value *Seed,
                                 std::mt19937_64 &RNG,
                                 const Twine &Name = "tao.opq.nfalse");
 
+/// Predicate family registry (Level 3). Dispatch a true/false predicate to the
+/// identity family selected by -taokari-opaq-family (algebraic | unfoldable |
+/// nested). Passes that want a configurable predicate strength call these
+/// instead of a specific make*Predicate.
+Value *makeRegistryTruePredicate(IRBuilder<> &IRB, Value *Seed,
+                                 std::mt19937_64 &RNG,
+                                 const Twine &Name = "tao.opq.rtrue");
+Value *makeRegistryFalsePredicate(IRBuilder<> &IRB, Value *Seed,
+                                  std::mt19937_64 &RNG,
+                                  const Twine &Name = "tao.opq.rfalse");
+
 } // namespace taokari
 } // namespace llvm
 

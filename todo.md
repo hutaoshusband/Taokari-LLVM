@@ -157,10 +157,10 @@ test is non-vacuous and that the unfoldable family is what closes the gap.
 
 ## Level 3 — Predicate Engine
 
-* [ ] Add predicate family registry
+* [x] Add predicate family registry
 * [x] Add random predicate selection
 * [x] Add predicate nesting
-* [ ] Add per-pass predicate style selection
+* [x] Add per-pass predicate style selection
 * [x] Add solver-resistance test cases
 * [x] Add SimplifyCFG survival tests
 * [x] Add InstCombine survival tests

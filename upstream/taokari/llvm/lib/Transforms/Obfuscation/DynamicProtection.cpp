@@ -179,7 +179,10 @@ struct DynamicProtection : public FunctionPass {
       auto *I64 = Type::getInt64Ty(Ctx);
       Value *Seed = taokari::makeContextSeed(
           F, B, I64, RNG, taokari::OpaqueSeedKind::RuntimeNonce);
-      Value *OpaqueFalse = taokari::makeUnfoldableFalsePredicate(B, Seed, RNG);
+      // Predicate family comes from the registry (-taokari-opaq-family) so the
+      // dyn check's mixing predicate strength is configurable.
+      Value *OpaqueFalse =
+          taokari::makeRegistryFalsePredicate(B, Seed, RNG, "dyn.opaq");
       Value *Mixed = B.CreateOr(Detected, OpaqueFalse, "dyn.mix");
       Value *Tripped = Mixed;
       if (Level >= 3) {
