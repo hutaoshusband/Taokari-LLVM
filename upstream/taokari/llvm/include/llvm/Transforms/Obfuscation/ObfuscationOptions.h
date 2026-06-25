@@ -238,6 +238,7 @@ protected:
   std::shared_ptr<ObfOpt> BcfOpt = nullptr;
   std::shared_ptr<ObfOpt> MbaOpt = nullptr;
   std::shared_ptr<ObfOpt> OutlineOpt = nullptr;
+  std::shared_ptr<ObfOpt> DynOpt = nullptr;
   std::shared_ptr<ObfOpt> RttiOpt = nullptr;
   std::shared_ptr<ObfOpt> MetaOpt = nullptr;
   std::shared_ptr<ObfOpt> VmpOpt = nullptr;
@@ -273,6 +274,7 @@ public:
                      const std::shared_ptr<ObfOpt> &bcfOpt,
                      const std::shared_ptr<ObfOpt> &mbaOpt,
                      const std::shared_ptr<ObfOpt> &outlineOpt,
+                     const std::shared_ptr<ObfOpt> &dynOpt,
                      const std::shared_ptr<ObfOpt> &rttiOpt,
                      const std::shared_ptr<ObfOpt> &metaOpt,
                      const std::shared_ptr<ObfOpt> &vmpOpt) {
@@ -286,6 +288,7 @@ public:
     this->BcfOpt = bcfOpt;
     this->MbaOpt = mbaOpt;
     this->OutlineOpt = outlineOpt;
+    this->DynOpt = dynOpt;
     this->RttiOpt = rttiOpt;
     this->MetaOpt = metaOpt;
     this->VmpOpt = vmpOpt;
@@ -302,6 +305,7 @@ public:
                            std::make_shared<ObfOpt>("bcf"),
                            std::make_shared<ObfOpt>("mba"),
                            std::make_shared<ObfOpt>("outline"),
+                           std::make_shared<ObfOpt>("dyn"),
                            std::make_shared<ObfOpt>("rtti"),
                            std::make_shared<ObfOpt>("meta"),
                            std::make_shared<ObfOpt>("vmp")} {}
@@ -325,6 +329,8 @@ public:
   auto mbaOpt() const { return MbaOpt; }
 
   auto outlineOpt() const { return OutlineOpt; }
+
+  auto dynOpt() const { return DynOpt; }
 
   auto rttiOpt() const { return RttiOpt; }
 

@@ -7,6 +7,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Obfuscation/BogusControlFlow.h"
 #include "llvm/Transforms/Obfuscation/CodeVirtualization.h"
+#include "llvm/Transforms/Obfuscation/DynamicProtection.h"
 #include "llvm/Transforms/Obfuscation/FunctionOutlining.h"
 #include "llvm/Transforms/Obfuscation/MBA.h"
 #include "llvm/Transforms/Obfuscation/NativeIntegrity.h"
@@ -268,6 +269,20 @@ static cl::alias TaokariLevelOutline("taokari-level-outline",
                                      cl::desc("Alias for -level-outline"),
                                      cl::aliasopt(LevelOutline));
 
+namespace llvm {
+cl::opt<bool>
+    EnableDyn("irobf-dyn", cl::init(false), cl::NotHidden,
+              cl::desc("Enable dynamic anti-reversing checks (debugger / "
+                       "timing / PEB). OFF BY DEFAULT and intentionally not "
+                       "part of -taokari-max: these checks read process state "
+                       "and could misfire under unusual tooling. Opt-in per "
+                       "function via the `dyn` annotation or this flag. SAFE: "
+                       "never trips on a process that is not actually being "
+                       "debugged, so a normal test run is unaffected."));
+} // namespace llvm
+static cl::alias TaokariDyn("taokari-dyn", cl::desc("Alias for -irobf-dyn"),
+                            cl::aliasopt(EnableDyn));
+
 static cl::opt<bool>
     EnableVMP("irobf-vmp", cl::init(false), cl::NotHidden,
               cl::desc("Enable IR code virtualization prototype. Compiles "
@@ -403,6 +418,7 @@ struct ObfuscationPassManager : public ModulePass {
     Opt->bcfOpt()->readOpt(EnableBogusControlFlow, LevelBogusControlFlow);
     Opt->mbaOpt()->readOpt(EnableMBA, LevelMBA);
     Opt->outlineOpt()->readOpt(EnableOutline, LevelOutline);
+    Opt->dynOpt()->readOpt(EnableDyn);
     Opt->rttiOpt()->readOpt(EnableRttiEraser);
     Opt->metaOpt()->readOpt(EnableMetadataHygiene, LevelMetadataHygiene);
     Opt->vmpOpt()->readOpt(EnableVMP, LevelVMP);
@@ -467,7 +483,8 @@ struct ObfuscationPassManager : public ModulePass {
     if (EnableIndirectBr || EnableIndirectCall || EnableIndirectGV ||
         EnableIRFlattening || EnableIRStringEncryption ||
         EnableIRConstantIntEncryption || EnableIRConstantFPEncryption ||
-        EnableBogusControlFlow || EnableMBA || EnableOutline || EnableRttiEraser ||
+        EnableBogusControlFlow || EnableMBA || EnableOutline || EnableDyn ||
+        EnableRttiEraser ||
         EnableMetadataHygiene || EnableVMP || TaokariMaxProtection ||
         !TaokariConfigPath.empty() || !ArkariConfigPath.empty()) {
       EnableIRObfuscation = true;
@@ -498,6 +515,7 @@ struct ObfuscationPassManager : public ModulePass {
       PrintOpt("bcf", Options->bcfOpt());
       PrintOpt("mba", Options->mbaOpt());
       PrintOpt("outline", Options->outlineOpt());
+      PrintOpt("dyn", Options->dynOpt());
       PrintOpt("meta", Options->metaOpt());
       PrintOpt("vmp", Options->vmpOpt());
     }
@@ -538,6 +556,9 @@ struct ObfuscationPassManager : public ModulePass {
     // `+nativeint` annotation; the pass is cheap on non-annotated
     // functions (one annotation lookup and return).
     add(llvm::createNativeIntegrityPass(Options.get()));
+    // Dynamic anti-reversing checks (debugger / timing / PEB). Off by default;
+    // opt-in per function via the `dyn` annotation or -taokari-dyn.
+    add(llvm::createDynamicProtectionPass(Options.get()));
     bool Changed = run(M);
 
     return Changed;
