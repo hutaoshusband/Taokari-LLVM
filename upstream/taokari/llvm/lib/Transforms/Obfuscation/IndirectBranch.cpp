@@ -298,12 +298,19 @@ struct IndirectBranch : public FunctionPass {
     }
 
     auto *IntTy = getPageTableIntTy(M);
+    // Per-branch probability gate: caps how many conditional branches per
+    // function get rewritten, bounding compile time and binary size. The
+    // ObfOpt probability defaults to 101 (unset) meaning "convert all".
+    unsigned Prob = opt.probability() <= 100 ? opt.probability() : 100;
     for (auto BI : FuncBrs) {
       if (BI && BI->isConditional()) {
         if (isTrapLikeBlock(BI->getSuccessor(0)) ||
             isTrapLikeBlock(BI->getSuccessor(1))) {
           continue;
         }
+        if (Prob < 100 &&
+            std::uniform_int_distribution<unsigned>(1, 100)(RNG) > Prob)
+          continue;
         IRBuilder<> IRB(BI);
 
         auto Cond = BI->getCondition();

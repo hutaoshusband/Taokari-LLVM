@@ -51,6 +51,11 @@ static cl::alias TaokariIndirectBr("taokari-indbr",
 static cl::alias TaokariLevelIndirectBr("taokari-level-indbr",
                                         cl::desc("Alias for -level-indbr"),
                                         cl::aliasopt(LevelIndirectBr));
+static cl::opt<uint32_t> TaokariIndirectBrProbability(
+    "taokari-indbr-prob", cl::init(101), cl::NotHidden,
+    cl::desc("Indirect branch conversion probability, 0..100. Caps how many "
+             "conditional branches per function get rewritten as page-table "
+             "indirect branches, bounding compile time and binary size."));
 
 static cl::opt<bool>
     EnableIndirectCall("irobf-icall", cl::init(false), cl::NotHidden,
@@ -394,6 +399,8 @@ struct ObfuscationPassManager : public ModulePass {
         TaokariConfigPath.empty() ? ArkariConfigPath : TaokariConfigPath);
 
     Opt->indBrOpt()->readOpt(EnableIndirectBr, LevelIndirectBr);
+    if (TaokariIndirectBrProbability.getNumOccurrences())
+      Opt->indBrOpt()->setProbability(TaokariIndirectBrProbability);
     Opt->iCallOpt()->readOpt(EnableIndirectCall, LevelIndirectCall);
     if (TaokariIndirectCallProbability.getNumOccurrences())
       Opt->iCallOpt()->setProbability(TaokariIndirectCallProbability);
