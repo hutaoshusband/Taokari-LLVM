@@ -8,6 +8,7 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/IR/NoFolder.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
@@ -21,6 +22,11 @@
 using namespace llvm;
 
 namespace {
+static cl::opt<bool> CIENoDedup(
+    "taokari-cie-no-dedup", cl::init(false), cl::NotHidden,
+    cl::desc("Per-use decrypt: skip the entry-block dedup cache so every use "
+             "of a constant gets its own decrypt sequence. More resilient "
+             "(no shared slot to patch) at the cost of larger code."));
 
 struct ConstantIntEncryption : public FunctionPass {
   static char         ID;
@@ -142,7 +148,9 @@ struct ConstantIntEncryption : public FunctionPass {
     auto &EntryBB = F.getEntryBlock();
     Instruction *AllocaInsertPt = &*EntryBB.begin();
     for (auto &KV : ConstUseCount) {
-      if (KV.second <= 1)
+      // Per-use decrypt option: skip the dedup cache entirely so every use
+      // gets its own decrypt (no shared slot a reverser can patch once).
+      if (CIENoDedup || KV.second <= 1)
         continue;
       auto *CTI = KV.first;
       auto *Ty = CTI->getType();

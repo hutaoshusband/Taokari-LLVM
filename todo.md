@@ -308,7 +308,7 @@ Main weakness: pure constant-expression transformations can sometimes be folded 
 
 * [ ] Add opaque constant pass
 * [ ] Add context-dependent constants
-* [ ] Add per-use decrypt option
+* [x] Add per-use decrypt option
 * [ ] Add per-function constant pool
 * [ ] Add encrypted constant pool
 * [ ] Add page-table-backed constants
