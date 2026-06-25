@@ -70,9 +70,6 @@ struct FunctionOutlining : public FunctionPass {
 
   StringRef getPassName() const override { return "FunctionOutlining"; }
 
-  // Opaque shard name. Deliberately drops the source-function name so a
-  // decompiler cannot reconstruct the original call structure from symbol
-  // strings alone.
   std::string shardName(std::mt19937_64 &FuncRNG) {
     std::string S;
     raw_string_ostream OS(S);
@@ -91,17 +88,11 @@ struct FunctionOutlining : public FunctionPass {
   bool runOnFunction(Function &F) override {
     if (F.isDeclaration() || F.isIntrinsic())
       return false;
-    // Never re-outline anything this pass emitted, otherwise each shard becomes
-    // an outlining target itself and the call graph explodes exponentially.
-    // Covers real shards, fake shards, and scramble helpers.
     if (F.getName().starts_with("__taokari_sh_") ||
         F.getName().contains(".shard"))
       return false;
-    // Outlining a function that participates in EH splits funclet colouring
-    // and breaks codegen; leave EH functions alone.
     if (F.hasPersonalityFn())
       return false;
-    // CodeExtractor rewrites varargs handling; only safe on fixed-arity.
     if (F.isVarArg())
       return false;
 
@@ -194,8 +185,6 @@ struct FunctionOutlining : public FunctionPass {
     uint32_t Size = realSize(BB);
     if (Size < MinSize + 1)
       return false;
-    // Guardrail: a single huge block dragged wholesale into a shard bloats the
-    // binary and compile time without adding call-graph value.
     if (MaxInsts && Size > MaxInsts)
       return false;
 
@@ -234,22 +223,27 @@ struct FunctionOutlining : public FunctionPass {
       return false;
 
     SmallVector<BasicBlock *, 1> Blocks{Tail};
-    CodeExtractor Ext(Blocks, &DT, /*AggregateArgs=*/false, nullptr, nullptr,
-                      &AC, /*AllowVarArgs=*/false, /*AllowAlloca=*/false,
-                      /*AllocationBlock=*/nullptr,
-                      /*Suffix=*/".outline",
-                      /*ArgsInZeroAddressSpace=*/false);
-    if (!Ext.isEligible())
+    CodeExtractor Ext(Blocks, &DT, false, nullptr, nullptr,
+                      &AC, false, false,
+                      nullptr,
+                      ".outline",
+                      false);
+    if (!Ext.isEligible()) {
+      MergeBlockIntoPredecessor(Tail, nullptr, nullptr, nullptr, nullptr, false,
+                                &DT);
       return false;
+    }
 
     Function *Shard = Ext.extractCodeRegion(CEAC);
-    if (!Shard)
+    if (!Shard) {
+      if (Tail->getParent())
+        MergeBlockIntoPredecessor(Tail, nullptr, nullptr, nullptr, nullptr,
+                                  false, &DT);
       return false;
+    }
 
     Shard->setLinkage(GlobalValue::InternalLinkage);
     Shard->addFnAttr(Attribute::NoInline);
-    // L1 keeps a readable name (easier to debug); L2 swaps it for an opaque
-    // token so the source-function name no longer leaks into the symbol table.
     if (Level >= 2)
       Shard->setName(shardName(FuncRNG));
     else
@@ -267,16 +261,11 @@ struct FunctionOutlining : public FunctionPass {
     return true;
   }
 
-  // XOR-wrap every integer shard parameter at the call site, unwrap inside the
-  // shard entry, and XOR the shard's return value (unwrapped at the caller).
-  // The shard signature itself is unchanged, so later passes (icall page table,
-  // flattening) keep working; only the data on the edge is masked.
   void scrambleShard(Function &Caller, Function &Shard,
                      std::mt19937_64 &FuncRNG) {
     auto &Ctx = Caller.getContext();
     auto *I64 = Type::getInt64Ty(Ctx);
 
-    // Per-parameter keys: a real key for ints, zero (identity) otherwise.
     SmallVector<uint64_t> Keys;
     for (Argument &A : Shard.args()) {
       Type *Ty = A.getType();
@@ -286,9 +275,6 @@ struct FunctionOutlining : public FunctionPass {
         Keys.push_back(0);
     }
 
-    // Unwrap each integer parameter at shard entry: arg becomes
-    // trunc(zext(arg) ^ key). Snapshot the real users of the argument first so
-    // the freshly-built unwrap chain is not folded onto itself.
     BasicBlock &Entry = Shard.getEntryBlock();
     for (size_t I = 0; I < Keys.size(); ++I) {
       if (!Keys[I])
@@ -309,8 +295,6 @@ struct FunctionOutlining : public FunctionPass {
           U->set(Narrow);
     }
 
-    // Wrap each integer argument at every call site so the shard's unwrap
-    // recovers the original value.
     SmallVector<CallInst *, 4> Calls;
     for (User *U : Shard.users())
       if (auto *CI = dyn_cast<CallInst>(U))
@@ -331,8 +315,6 @@ struct FunctionOutlining : public FunctionPass {
       }
     }
 
-    // Rewrap the return value, then unwrap at every call site. Same
-    // build-snapshot-RAUW-fixup pattern as the parameter case.
     Type *RetTy = Shard.getReturnType();
     if (!RetTy->isIntegerTy() || RetTy->getIntegerBitWidth() > 64)
       return;
@@ -364,10 +346,6 @@ struct FunctionOutlining : public FunctionPass {
     }
   }
 
-  // Emit decpy shard-shaped functions that take the same type but return a
-  // neutral value. They are never reachable from real code, so the binary only
-  // pays size; the static call graph gains plausible-but-dead targets that
-  // distract a decompiler's cross-reference walk.
   void emitFakeShards(Module &M, FunctionType *FTy,
                       std::mt19937_64 &FuncRNG) {
     unsigned Count = OutlineFakes.getValue();
@@ -386,15 +364,6 @@ struct FunctionOutlining : public FunctionPass {
     }
   }
 
-  // Fortress hardening for a single shard (level >= 3). Adds three layers so a
-  // decompiler can no longer read the shard as one clean body:
-  //   1. Multi-layer split: the shard's own body tail is extracted into a
-  //      sub-shard, so the work is spread across a chained caller/sub-shard pair
-  //      instead of a single static body.
-  //   2. Entry integrity check: the shard verifies a private checksum before
-  //      running real code; a mismatch diverts to a dead junk block.
-  //   3. A fake call edge to a sibling fake shard, polluting xref walks so the
-  //      real control flow is not distinguishable from the decoy graph.
   void fortressShard(Module &M, Function &Shard, std::mt19937_64 &FuncRNG) {
     if (Shard.empty())
       return;
@@ -403,11 +372,6 @@ struct FunctionOutlining : public FunctionPass {
     addFakeCallEdge(M, Shard, FuncRNG);
   }
 
-  // Build a private global holding a random 64-bit token, then guard the shard
-  // entry on (a^salt)==(b^salt) where a and b both load that global. The
-  // predicate is always true at runtime, but the comparison + branch to a dead
-  // junk block reads as a tamper check in a decompiler and adds a CFG edge that
-  // never executes.
   void addIntegrityCheck(Function &Shard, std::mt19937_64 &FuncRNG) {
     Module &M = *Shard.getParent();
     auto &Ctx = Shard.getContext();
@@ -421,8 +385,6 @@ struct FunctionOutlining : public FunctionPass {
     TokenGV->setAlignment(Align(8));
 
     BasicBlock &Entry = Shard.getEntryBlock();
-    // Split before the first real (non-alloca, non-debug) instruction so the
-    // integrity check runs in the fresh entry and real code lands in Real.
     Instruction *RealStart = &Entry.front();
     for (Instruction &I : Entry) {
       if (isa<AllocaInst>(&I) || I.isDebugOrPseudoInst())
@@ -435,14 +397,9 @@ struct FunctionOutlining : public FunctionPass {
     BasicBlock *Junk = BasicBlock::Create(Ctx, Shard.getName() + ".ic.junk",
                                           &Shard, Real);
 
-    // splitBasicBlock appended an unconditional branch Entry -> Real; drop it so
-    // the integrity predicate drives the branch instead.
     Entry.getTerminator()->eraseFromParent();
 
     IRBuilder<> B(&Entry, Entry.getFirstInsertionPt());
-    // Load the token twice and compare both XOR-salted copies. Both loads read
-    // the same private global, so (a^salt)==(b^salt) is always true at runtime,
-    // but a decompiler reads it as a checksum verification guarding real work.
     Value *A = B.CreateAlignedLoad(I64, TokenGV, Align(8), true, "ic.a");
     Value *Bv = B.CreateAlignedLoad(I64, TokenGV, Align(8), true, "ic.b");
     auto *SaltC = ConstantInt::get(I64, Salt);
@@ -451,16 +408,11 @@ struct FunctionOutlining : public FunctionPass {
     Value *Pred = B.CreateICmpEQ(L, R, "ic.p");
     B.CreateCondBr(Pred, Real, Junk);
 
-    // Junk block: dead-end so a tampered shard cannot fall through to real
-    // work. Unreachable keeps the ABI intact for later passes.
     IRBuilder<> J(Junk);
     J.CreateUnreachable();
     appendToCompilerUsed(M, {TokenGV});
   }
 
-  // Insert a call to a freshly-created fake shard at the shard entry, then drop
-  // the result. The fake has the shard's own signature so the static call graph
-  // shows the real shard calling a plausible sibling that does nothing.
   void addFakeCallEdge(Module &M, Function &Shard, std::mt19937_64 &FuncRNG) {
     auto *FTy = Shard.getFunctionType();
     auto *Fake = Function::Create(FTy, GlobalValue::InternalLinkage,
@@ -483,14 +435,8 @@ struct FunctionOutlining : public FunctionPass {
     B.CreateCall(Fake, Args);
   }
 
-  // Extract the shard's own tail into a sub-shard so the body is split across a
-  // chained pair. Runs only when the shard is still a single straight-line
-  // block; later fortress steps (integrity check) add more blocks afterwards.
   void splitShardIntoLayers(Module &M, Function &Shard,
                             std::mt19937_64 &FuncRNG) {
-    // Pick the block with the most real code (the work usually lives in a
-    // non-entry block after CodeExtractor splits allocas/stores off). Splitting
-    // that block spreads the work across a chained caller/sub-shard pair.
     BasicBlock *Best = nullptr;
     uint32_t BestSize = 0;
     for (BasicBlock &BB : Shard) {
@@ -535,11 +481,18 @@ struct FunctionOutlining : public FunctionPass {
     SmallVector<BasicBlock *, 1> Blocks{Tail};
     CodeExtractor Ext(Blocks, &DT, false, nullptr, nullptr, &AC, false, false,
                       nullptr, ".layer", false);
-    if (!Ext.isEligible())
+    if (!Ext.isEligible()) {
+      MergeBlockIntoPredecessor(Tail, nullptr, nullptr, nullptr, nullptr, false,
+                                &DT);
       return;
+    }
     Function *Sub = Ext.extractCodeRegion(CEAC);
-    if (!Sub)
+    if (!Sub) {
+      if (Tail->getParent())
+        MergeBlockIntoPredecessor(Tail, nullptr, nullptr, nullptr, nullptr,
+                                  false, &DT);
       return;
+    }
     Sub->setLinkage(GlobalValue::InternalLinkage);
     Sub->addFnAttr(Attribute::NoInline);
     Sub->setName(shardName(FuncRNG));
@@ -547,13 +500,8 @@ struct FunctionOutlining : public FunctionPass {
     wrapWithDispatcher(M, Shard, Sub, FuncRNG);
   }
 
-  // Insert a token-switched dispatcher between the parent shard and the sub-shard
-  // it just extracted. The parent no longer calls the sub-shard directly; it
-  // calls a dispatcher that switches on a token between the real sub-shard and a
-  // fake, so the real edge is hidden behind an indirect dispatch.
   void wrapWithDispatcher(Module &M, Function &Parent, Function *Sub,
                           std::mt19937_64 &FuncRNG) {
-    // Find the call site inside the parent that targets the sub-shard.
     CallInst *CallToSub = nullptr;
     for (BasicBlock &BB : Parent) {
       for (Instruction &I : BB) {
@@ -573,7 +521,6 @@ struct FunctionOutlining : public FunctionPass {
     auto *I32 = Type::getInt32Ty(Ctx);
     auto *FTy = Sub->getFunctionType();
 
-    // Fake target with the sub-shard's signature.
     auto *Fake = Function::Create(FTy, GlobalValue::InternalLinkage,
                                   shardName(FuncRNG), M);
     Fake->addFnAttr(Attribute::NoInline);
@@ -586,7 +533,6 @@ struct FunctionOutlining : public FunctionPass {
       FB.CreateRet(Constant::getNullValue(RetTy));
     appendToCompilerUsed(M, {Fake});
 
-    // Dispatcher(i32 token, <sub-shard args>): switch token -> real | default fake.
     SmallVector<Type *, 8> DispArgTys;
     DispArgTys.push_back(I32);
     for (Type *Ty : FTy->params())
@@ -607,7 +553,6 @@ struct FunctionOutlining : public FunctionPass {
                                   "disp.tok");
     DE.CreateCondBr(Pred, RealBB, FakeBB);
 
-    // Real branch forwards args to the sub-shard.
     IRBuilder<> RB(RealBB);
     SmallVector<Value *, 8> RealArgs;
     for (unsigned A = 1; A < Disp->arg_size(); ++A)
@@ -618,7 +563,6 @@ struct FunctionOutlining : public FunctionPass {
     else
       RB.CreateRet(RealRes);
 
-    // Fake branch forwards args to the fake shard.
     IRBuilder<> FKB(FakeBB);
     SmallVector<Value *, 8> FakeArgs(RealArgs);
     Value *FakeRes = FKB.CreateCall(Fake, FakeArgs);
@@ -627,7 +571,6 @@ struct FunctionOutlining : public FunctionPass {
     else
       FKB.CreateRet(FakeRes);
 
-    // Rewrite the parent's call: disp(realToken, <original args>).
     SmallVector<Value *, 8> NewArgs;
     NewArgs.push_back(ConstantInt::get(I32, RealToken));
     for (unsigned A = 0; A < CallToSub->arg_size(); ++A)
@@ -639,11 +582,6 @@ struct FunctionOutlining : public FunctionPass {
     CallToSub->eraseFromParent();
   }
 
-  // A constant operand is safe to move into the cross-shard pool only if it is
-  // real data, not a control token: skip operands of comparisons, branches,
-  // calls (args must keep matching the callee) and GEP indices. Only operands
-  // of plain arithmetic/store instructions are pooled so later passes (notably
-  // MBA) still see a shape they can analyse.
   static bool isPoolableUse(const Use &U) {
     auto *User = dyn_cast<Instruction>(U.getUser());
     if (!User)
@@ -657,19 +595,11 @@ struct FunctionOutlining : public FunctionPass {
     return true;
   }
 
-  // Move integer constants out of the real computation shards into a single
-  // private encrypted pool global, then rewrite each shard's data use of such a
-  // constant into a load + XOR-decrypt from the pool. The constants no longer
-  // sit inline in any shard body. OPT-IN: rewriting operands into runtime loads
-  // is not MBA-compatible on the same functions.
   void buildCrossShardPool(Function &F, std::mt19937_64 &FuncRNG) {
     Module &M = *F.getParent();
     auto &Ctx = M.getContext();
     auto *I64 = Type::getInt64Ty(Ctx);
 
-    // Gather shards transitively reachable from F's shard calls. Skip
-    // dispatchers (i32 token first arg) -- their token literal must stay inline
-    // or it desyncs from the caller's token.
     SmallPtrSet<Function *, 32> Seen;
     SmallVector<Function *, 32> Work;
     auto PushCallees = [&](Function *Caller) {
@@ -770,20 +700,12 @@ struct FunctionOutlining : public FunctionPass {
     }
   }
 
-  // Cross-shard string pool: route references to internal/private globals
-  // (string literals, constant data) through a separate encrypted pool so the
-  // shard bodies hold no direct global address. Each pooled global is stored
-  // as an XOR-encrypted ptrtoint; the shard rewrites its use to
-  // inttoptr(poolload ^ key). OPT-IN like the constant pool (MBA-incompatible
-  // on the same functions).
   void buildCrossShardStringPool(Function &F, std::mt19937_64 &FuncRNG) {
     Module &M = *F.getParent();
     auto &Ctx = M.getContext();
     auto *I64 = Type::getInt64Ty(Ctx);
     auto *PtrTy = PointerType::get(Ctx, 0);
 
-    // Gather shards transitively reachable from F (same walk as the constant
-    // pool). Skip dispatchers (i32 token first arg).
     SmallPtrSet<Function *, 32> Seen;
     SmallVector<Function *, 32> Work;
     auto PushCallees = [&](Function *Caller) {
@@ -810,9 +732,6 @@ struct FunctionOutlining : public FunctionPass {
     if (Targets.empty())
       return;
 
-    // Collect distinct internal/private globals referenced by the shards.
-    // Only local/hidden globals are safe to pool: their address is fixed
-    // within the TU and the inttoptr rewrite stays valid.
     MapVector<GlobalValue *, unsigned> StrIndex;
     for (Function *Sh : Targets)
       for (BasicBlock &BB : *Sh)
@@ -839,9 +758,6 @@ struct FunctionOutlining : public FunctionPass {
     unsigned Idx = 0;
     for (auto &KV : StrIndex) {
       KV.second = Idx++;
-      // ADD not XOR: ptrtoint + offset is a valid static reloc on COFF/MSVC
-      // (the address-plus-offset form the linker can patch), whereas
-      // ptrtoint XOR const is not. The runtime decrypt uses SUB.
       Constant *Addr = ConstantExpr::getPtrToInt(KV.first, I64);
       Encoded.push_back(
           ConstantExpr::getAdd(Addr, ConstantInt::get(I64, Key)));
@@ -879,7 +795,6 @@ struct FunctionOutlining : public FunctionPass {
         Value *Enc =
             B.CreateAlignedLoad(I64, GEP, Align(8), true, "spool.enc");
         Value *K = B.CreateAlignedLoad(I64, KeyGV, Align(8), true, "spool.key");
-        // SUB decrypt matches the ADD encoding (offset-based reloc).
         Value *Dec = B.CreateSub(Enc, K, "spool.dec");
         Value *Ptr = B.CreateIntToPtr(Dec, PtrTy, "spool.ptr");
         U->set(Ptr);
@@ -887,7 +802,7 @@ struct FunctionOutlining : public FunctionPass {
     }
   }
 };
-} // namespace
+}
 
 char FunctionOutlining::ID = 0;
 

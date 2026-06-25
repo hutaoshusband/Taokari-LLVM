@@ -46,7 +46,7 @@ struct BogusControlFlow : public FunctionPass {
   StringRef getPassName() const override { return "BogusControlFlow"; }
 
   bool runOnFunction(Function &F) override {
-    if (F.isDeclaration() || F.isIntrinsic() ||
+    if (F.isDeclaration() || F.isIntrinsic() || F.hasPersonalityFn() ||
         F.getName().starts_with("__taokari_bcf_"))
       return false;
 
@@ -83,7 +83,6 @@ struct BogusControlFlow : public FunctionPass {
   }
 
   static bool eligible(BasicBlock &BB) {
-    // no PHI repair yet; widen this when BCF must cover join blocks.
     if (isGeneratedBCFBlock(BB) || &BB == &BB.getParent()->getEntryBlock() ||
         BB.empty() || BB.isEHPad() || isa<PHINode>(BB.begin()))
       return false;
@@ -157,23 +156,13 @@ struct BogusControlFlow : public FunctionPass {
           GuardIR.CreateAnd(A, ConstantInt::get(Int64, 1), "bcf.opaque.bit"),
           ConstantInt::get(Int64, 0), "bcf.opaque");
     }
-    // L3: sometimes replace the two-way guard with a switch whose real case
-    // is always selected but which carries extra fake case targets, so the CFG
-    // shows a multi-way dispatch instead of an obvious if/else. The switch
-    // index is a runtime-derived value (always 1 in practice via the opaque
-    // identity) so the optimizer cannot prune the fake cases as dead.
     if (Level >= 3 && (FuncRNG() % 2)) {
       auto *I64 = Type::getInt64Ty(Ctx);
       auto *I32 = Type::getInt32Ty(Ctx);
       Value *Seed = GuardIR.CreateAlignedLoad(I64, Nonce, Align(8), true,
                                               "bcf.sw.seed");
-      // nonce is a runtime value, so (nonce & 3) is not provably constant.
       Value *Idx = GuardIR.CreateAnd(Seed, ConstantInt::get(I64, 3),
                                      "bcf.sw.idx");
-      // Rewrite the index so the real block is reached: add a bias that maps
-      // the runtime nonce's low bits to the real case 1. (seed & 3) is always
-      // mapped to 1 here via opaque arithmetic that folds to 1 at runtime but
-      // is not obviously constant to InstCombine.
       Value *Bias = GuardIR.CreateSub(ConstantInt::get(I64, 1), Idx, "bcf.sw.bias");
       Value *Real = GuardIR.CreateAdd(Idx, Bias, "bcf.sw.real");
       Value *Sel = GuardIR.CreateTrunc(Real, I32, "bcf.sel");
@@ -183,11 +172,6 @@ struct BogusControlFlow : public FunctionPass {
       Function *CleanupStub = getOrCreateCleanupStub(M);
       unsigned Extra = 1 + (FuncRNG() % 3);
       for (unsigned I = 0; I < Extra; ++I) {
-        // Fake error/cleanup path: call an internal stub then rejoin the real
-        // block. Alternating between an error-reporting stub and a
-        // resource-cleanup stub makes the dead cases look like a mix of real
-        // error handling and real cleanup rather than one obvious pattern.
-        // Control always continues to BB (the case is never selected).
         BasicBlock *Path = BasicBlock::Create(
             Ctx, BB.getName() + ".bcf.fakepath", &F, &BB);
         IRBuilder<> E(Path);
@@ -212,10 +196,6 @@ struct BogusControlFlow : public FunctionPass {
     return GV;
   }
 
-  // A private internal stub that reads like an error reporter: it writes a
-  // nonzero value into a private "error flag" global and returns. Used by the
-  // fake error-path cases so the CFG carries convincing error-handling edges.
-  // Never reached at runtime; its only purpose is visual noise.
   static Function *getOrCreateErrorStub(Module &M) {
     if (auto *Existing = M.getFunction("__taokari_bcf_err"))
       return Existing;
@@ -238,10 +218,6 @@ struct BogusControlFlow : public FunctionPass {
     return Stub;
   }
 
-  // A private internal stub that reads like resource cleanup: it zeros a
-  // private "resource" global and returns. Pairs with the error stub so the
-  // fake switch cases alternate between error-handling and cleanup-looking
-  // shapes. Never reached at runtime.
   static Function *getOrCreateCleanupStub(Module &M) {
     if (auto *Existing = M.getFunction("__taokari_bcf_cleanup"))
       return Existing;
@@ -309,17 +285,6 @@ struct BogusControlFlow : public FunctionPass {
                std::mt19937_64 &FuncRNG) {
     auto *Int64 = Type::getInt64Ty(Fake.getContext());
 
-    // L3+: wrap the junk chain in a real back-edge so the fake block
-    // reads as a loop to a static analyzer.
-    // The loop runs exactly `Loops` iterations via a counter compared
-    // against a runtime volatile-loaded bound; the body is the same
-    // xor/mul/add chain as the linear version, so the CFG now carries
-    // a fake loop header + latch in addition to the junk math.
-    // Skip the loop shape on functions that participate in EH (any
-    // funclet or personality): a cloned fake block in an EH function
-    // can inherit funclet colouring, and the extra back-edge then
-    // breaks liveness during codegen. The linear junk chain remains
-    // safe because it stays in one block.
     bool InEHFunction = Fake.getParent()->hasPersonalityFn();
     if (Level >= 3 && Loops > 1 && !InEHFunction) {
       addJunkLoop(Fake, Real, Nonce, JunkSlot, Loops, FuncRNG);
@@ -329,9 +294,6 @@ struct BogusControlFlow : public FunctionPass {
     IRBuilder<> IRB(&Fake);
     Value *V =
         IRB.CreateAlignedLoad(Int64, &Nonce, Align(8), true, "bcf.fake.nonce");
-    // L2+: add a volatile private-global load so dataflow analysis has
-    // a fake memory dependency to trace. The loaded value feeds the junk
-    // chain so it cannot be DCE'd.
     if (Level >= 2) {
       Module &Mod = *Fake.getModule();
       auto *FakeMemInit = ConstantInt::get(Int64, FuncRNG());
@@ -358,15 +320,6 @@ struct BogusControlFlow : public FunctionPass {
     IRB.CreateBr(&Real);
   }
 
-  // Build a fake-loop version of the junk chain. Layout:
-  //   Fake:        load nonce; counter = 0; br LoopHdr
-  //   LoopHdr:     if counter < bound br LoopBody else LoopExit
-  //   LoopBody:    xor/mul/add chain; counter++; br LoopHdr
-  //   LoopExit:    store result; br Real
-  // The bound is a fresh volatile-loaded global so the optimizer cannot
-  // unroll the loop away. The loop is semantically dead because the
-  // result only feeds the JunkSlot dead store, but it is a real CFG
-  // loop with a back-edge.
   void addJunkLoop(BasicBlock &Fake, BasicBlock &Real, GlobalVariable &Nonce,
                    AllocaInst &JunkSlot, uint32_t Loops,
                    std::mt19937_64 &FuncRNG) {
@@ -469,7 +422,7 @@ struct BogusControlFlow : public FunctionPass {
     return F;
   }
 };
-} // namespace
+}
 
 char BogusControlFlow::ID = 0;
 
