@@ -23,9 +23,11 @@ or by `noobf`.
 | `-mllvm -taokari-vmp`             | Enable code virtualisation (off by default).             |
 | `-mllvm -taokari-vmp-padding=N`   | Probability (0..100) of inserting pad opcodes in VM bytecode. |
 | `-mllvm -taokari-mir=<passes>`    | Comma-list of MIR passes (`dirtybytes,junk,sub,...`).    |
-| `-mllvm -taokari-level-<p>=N`     | Per-pass level override (0..4). `<p>` is one of `indbr`, `icall`, `indgv`, `fla`, `bcf`, `mba`, `cie`, `cfe`. |
+| `-mllvm -taokari-level-<p>=N`     | Per-pass level override (0..4). `<p>` is one of `indbr`, `icall`, `indgv`, `fla`, `bcf`, `mba`, `cie`, `cfe`, `outline`. |
 | `-mllvm -taokari-<p>-prob=N`      | Per-pass probability (0..100).                           |
 | `-mllvm -taokari-<p>-func-prob=N` | Per-pass per-function probability (0..100).              |
+| `-mllvm -taokari-outline`         | Enable function outlining (callout obfuscation).         |
+| `-mllvm -taokari-dyn`             | Enable dynamic anti-reversing checks (off by default; NOT part of `-taokari-max`). |
 
 ## Per-function annotations
 
@@ -46,6 +48,8 @@ single string.
 | `+strenc` / `+cse` | Force-enable string encryption.                                |
 | `+constenc` / `+cie` | Force-enable integer-constant encryption.                    |
 | `+vmp`         | Force-enable code virtualisation.                                  |
+| `+outline`     | Force-enable function outlining (callout obfuscation).             |
+| `+dyn`         | Force-enable dynamic anti-reversing checks.                        |
 | `+nativeint`   | Force-enable the per-function native integrity prototype.         |
 | `-nativeint`   | Force-disable the native integrity prototype (overrides Max mode).|
 | `+mir` / `+mir:dirtybytes` | Opt into specific MIR sub-passes.                       |
@@ -166,6 +170,40 @@ static int sensitive(int x) { ... }
 This forces MBA at level 3 and BCF on `sensitive`, while disabling
 flattening for it, regardless of the JSON config.
 
+### Function outlining (`outline`)
+
+Splits single-successor basic-block tails into internal helper ("shard")
+functions so a sensitive function no longer reads as one static body in a
+decompiler. Levels:
+
+| Level | Effect                                                                 |
+| ----- | ---------------------------------------------------------------------- |
+| 1     | Basic splitting via CodeExtractor; readable `.shard` names.            |
+| 2     | Opaque shard names, per-arg/return XOR scrambling, fake shard functions, and a max-insts guardrail. Shard calls route through the icall page table for free when both passes are on. |
+| 3     | Fortress: multi-layer shard split, token-switched dispatcher hiding the real edge, integrity-check guard at shard entry, fake call-edge graph. |
+
+Enable globally with `-mllvm -taokari-outline`, or per function with
+`__attribute__((annotate("+outline ^outline=3")))`.
+
+### Dynamic protection (`dyn`)
+
+Inserts a runtime anti-reversing check at the entry of annotated functions
+(IsDebuggerPresent / CheckRemoteDebuggerPresent / QueryPerformanceCounter
+timing). A detected debugger routes through a libc-exit tamper path; a clean
+(non-debugged) run always takes the normal path, so it cannot false-positive a
+normal test run. **Off by default and intentionally NOT part of `-taokari-max`**
+— these checks read process state and could misfire under unusual tooling.
+Levels:
+
+| Level | Effect                                                                 |
+| ----- | ---------------------------------------------------------------------- |
+| 1     | One check at entry; libc-exit tamper path.                             |
+| 2     | Decoy fake checks, opaque-predicate result mixing (runtime-nonce seeded), shared module tamper flag, delayed (non-entry) placement. |
+| 3     | Indirect probe function hiding the kernel32 edge, anti-patch sentinel. |
+
+Enable with `-mllvm -taokari-dyn`, or per function with
+`__attribute__((annotate("+dyn ^dyn=3")))`.
+
 ## Validation
 
 Unknown top-level nodes and unknown per-pass keys both emit a warning
@@ -228,8 +266,26 @@ under 100 ms:
 | `-taokari-cie` / `-taokari-cfe` | IR | ~5–15 ms each    | Level (2 ≫ 1), number of constants     |
 | `-taokari-cse`        | IR    | ~5–20 ms            | Number and length of string literals   |
 | `-taokari-icall` / `-taokari-indbr` / `-taokari-indgv` | IR | ~5–15 ms each | Level (3 ≫ 1)            |
+| `-taokari-outline`    | IR    | ~5–15 ms            | `-taokari-outline-max-shards`, level (3 ≫ 1) |
+| `-taokari-dyn`        | IR    | ~2–5 ms             | One kernel32 probe per annotated function; off by default |
 | `-taokari-meta`       | IR    | ~5–10 ms            | Level (3 ≫ 1), number of globals       |
 | `-taokari-mir=...`    | Codegen | ~200 ms (full set) | Binary size, not compile time          |
+
+### Per-pass budget flags
+
+Each pass that can explode code size or compile time has a budget knob so the
+overhead is predictable on large inputs:
+
+| Flag                                  | Caps                                                  |
+| ------------------------------------- | ----------------------------------------------------- |
+| `-taokari-outline-max-shards=N`       | Hard cap on outlined helper functions per source function. |
+| `-taokari-outline-max-insts=N`        | Skip blocks larger than N real instructions (0 = uncapped). |
+| `-taokari-mba-max-substitutions=N`    | Hard cap on MBA substitutions per function (0 = uncapped, probability alone controls density). |
+| `-taokari-indbr-prob=N`               | Fraction of conditional branches rewritten per function (101 = all). |
+| `-taokari-icall-prob=N`               | Fraction of call sites rewritten per function.        |
+| `-taokari-indgv-min-size=N`           | Only indirect globals whose storage is >= N bytes (0 = all). |
+| `-taokari-vmp-max-bytecode-words=N`   | Refuse VMP candidates whose bytecode exceeds N words. |
+| `-taokari-vmp-max-back-edges=N`       | Refuse VMP candidates with more than N loop back-edges. |
 
 ### Compile-time-expensive (avoid in tight loops)
 
