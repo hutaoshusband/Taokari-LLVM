@@ -140,7 +140,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 - [x] Add VM devirtualization test samples.
 - [x] Add anti-debug/anti-trace inside the interpreter loop through the DynamicProtection framework.
 - [x] Add anti-emulation checks suitable for protected commercial builds.
-- [ ] Add cross-function VM state.
+- [x] Add cross-function VM state.
 - [ ] Add per-build handler-table obfuscation seed verification.
 
 ## 1.5 Config / Build / Testing

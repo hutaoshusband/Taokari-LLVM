@@ -263,6 +263,7 @@ struct CodeVirtualization : public ModulePass {
   DenseMap<Function *, unsigned> CalleeIndex;
   SmallVector<Function *, 8> CalleeOrder;
   GlobalVariable *CalleeTable = nullptr;
+  GlobalVariable *VMState = nullptr;
   uint64_t CalleeTableKey = 0;
   unsigned IndirectCallStubCounter = 0;
   struct ScheduleConstants {
@@ -292,6 +293,7 @@ struct CodeVirtualization : public ModulePass {
     Tamper,
     Tag,
     OpcodeMap,
+    VMState,
     Key,
     Dummy
   };
@@ -1915,6 +1917,21 @@ struct CodeVirtualization : public ModulePass {
     return Salt;
   }
 
+  GlobalVariable *getOrCreateVMState(Module &M) {
+    if (VMState)
+      return VMState;
+    Type *I64 = Type::getInt64Ty(M.getContext());
+    SmallVector<Constant *, 4> Init;
+    for (unsigned I = 0; I < 4; ++I)
+      Init.push_back(ConstantInt::get(I64, nextNonZeroKey()));
+    auto *ArrayTy = ArrayType::get(I64, Init.size());
+    VMState = new GlobalVariable(M, ArrayTy, false, GlobalValue::PrivateLinkage,
+                                 ConstantArray::get(ArrayTy, Init),
+                                 "__taokari_vmp_xstate");
+    VMState->setAlignment(Align(8));
+    return VMState;
+  }
+
   Value *loadWord(IRBuilder<> &B, Type *I64, Value *BC, Value *PC,
                   Value *One) {
     Value *Addr = B.CreateGEP(I64, BC, PC);
@@ -1972,6 +1989,7 @@ struct CodeVirtualization : public ModulePass {
     Value *TamperFlag;
     Value *ExpectedTag;
     Value *OpcodeMap;
+    Value *VMState;
     Value *BytecodeKey;
     Value *PcKey;
     Value *StackKey;
@@ -1979,6 +1997,23 @@ struct CodeVirtualization : public ModulePass {
     BasicBlock *Bad;
     bool LittleEndian;
   };
+
+  void updateVMState(IRBuilder<> &B, InterpCtx &C, uint64_t Slot,
+                     uint64_t Salt) {
+    Value *Ptr =
+        B.CreateGEP(C.I64, C.VMState, ConstantInt::get(C.I64, Slot),
+                    "vmp.xstate.ptr");
+    auto *Old = B.CreateLoad(C.I64, Ptr, "vmp.xstate.old");
+    Old->setVolatile(true);
+    Value *Mixed =
+        mixRuntimeEntropy(B, C.I64, B.CreateXor(Old, C.BytecodeKey),
+                          "vmp.xstate.mix");
+    auto *Store = B.CreateStore(
+        B.CreateXor(Mixed, ConstantInt::get(C.I64, Salt),
+                    "vmp.xstate.next"),
+        Ptr);
+    Store->setVolatile(true);
+  }
 
   Value *stackSlot(IRBuilder<> &B, InterpCtx &C, Value *Idx) {
     Value *UseHead = B.CreateICmpULT(Idx, C.StackSplit);
@@ -2764,7 +2799,7 @@ struct CodeVirtualization : public ModulePass {
         InterpParam::BCLen,    InterpParam::PCMap,    InterpParam::PtrTable,
         InterpParam::PtrCount, InterpParam::Args,     InterpParam::ArgLen,
         InterpParam::Tamper,   InterpParam::Tag,      InterpParam::OpcodeMap,
-        InterpParam::Key};
+        InterpParam::VMState,  InterpParam::Key};
     for (unsigned I = ParamLayout.size() - 1; I > 0; --I)
       std::swap(ParamLayout[I], ParamLayout[RNG() % (I + 1)]);
     unsigned DummyCount = 1 + static_cast<unsigned>(RNG() % 4);
@@ -2782,6 +2817,7 @@ struct CodeVirtualization : public ModulePass {
       case InterpParam::Args:
       case InterpParam::Tamper:
       case InterpParam::OpcodeMap:
+      case InterpParam::VMState:
         ParamTypes.push_back(Ptr);
         break;
       case InterpParam::BCLen:
@@ -2817,6 +2853,7 @@ struct CodeVirtualization : public ModulePass {
     Value *TamperFlag = nullptr;
     Value *ExpectedTag = nullptr;
     Value *OpcodeMap = nullptr;
+    Value *VMStateArg = nullptr;
     Value *BytecodeKey = nullptr;
     for (unsigned I = 0; I < ParamLayout.size(); ++I) {
       Argument *Arg = F->getArg(I);
@@ -2868,6 +2905,10 @@ struct CodeVirtualization : public ModulePass {
       case InterpParam::OpcodeMap:
         OpcodeMap = Arg;
         OpcodeMap->setName("opcode.map");
+        break;
+      case InterpParam::VMState:
+        VMStateArg = Arg;
+        VMStateArg->setName("vmp.xstate");
         break;
       case InterpParam::Key:
         BytecodeKey = Arg;
@@ -2991,8 +3032,8 @@ struct CodeVirtualization : public ModulePass {
                      LocalsSplitValue, Frame, FrameTail, FrameSplitValue,
                      CallArgs, CalleeTable,
                      static_cast<unsigned>(CalleeOrder.size()), Args, ArgLen,
-                     TamperFlag, ExpectedTag, OpcodeMap, BytecodeKey, PcKey,
-                     StackKey, Dispatch, Bad,
+                     TamperFlag, ExpectedTag, OpcodeMap, VMStateArg,
+                     BytecodeKey, PcKey, StackKey, Dispatch, Bad,
                      M.getDataLayout().isLittleEndian()};
     Value *CurWord = loadBytecodeWord(B, TagCtx, CurTagI);
     Value *CurTag = B.CreateLoad(I64, Tag);
@@ -3022,6 +3063,7 @@ struct CodeVirtualization : public ModulePass {
     // survives the optimizer because the runtime hash depends on the
     // actual loaded bytes.
     B.SetInsertPoint(OpMapCheck);
+    updateVMState(B, TagCtx, RNG() % 4, nextNonZeroKey());
     auto *OpMapHash = B.CreateAlloca(I64, nullptr, "opmap.hash");
     auto *OpMapHashI = B.CreateAlloca(I64, nullptr, "opmap.hash.i");
     Value *ExpectedOpMapHashV =
@@ -3096,8 +3138,9 @@ struct CodeVirtualization : public ModulePass {
                  LocalsSplitValue, Frame, FrameTail, FrameSplitValue,
                  CallArgs, CalleeTable,
                  static_cast<unsigned>(CalleeOrder.size()), Args, ArgLen,
-                 TamperFlag, ExpectedTag, OpcodeMap, BytecodeKey, PcKey,
-                 StackKey, Dispatch, Bad, M.getDataLayout().isLittleEndian()};
+                 TamperFlag, ExpectedTag, OpcodeMap, VMStateArg, BytecodeKey,
+                 PcKey, StackKey, Dispatch, Bad,
+                 M.getDataLayout().isLittleEndian()};
     Value *MappedOp = fetchWord(B, IC);
     branchIfFalse(B, IC,
                   B.CreateICmpULT(MappedOp,
@@ -3324,6 +3367,10 @@ struct CodeVirtualization : public ModulePass {
     Value *BCPtr = B.CreateGEP(ArrayTy, Bytecode, {Zero, Zero});
     Value *PCMapPtr = B.CreateGEP(PCMapArrayTy, PCMap, {Zero, Zero});
     Value *OpcodeMapPtr = B.CreateGEP(OpcodeMapArrayTy, OpcodeMap, {Zero, Zero});
+    auto *VMStateGV = getOrCreateVMState(M);
+    auto *VMStateArrayTy = cast<ArrayType>(VMStateGV->getValueType());
+    Value *VMStatePtr =
+        B.CreateGEP(VMStateArrayTy, VMStateGV, {Zero, Zero}, "vmp.xstate.ptr");
     Type *Ptr = PointerType::getUnqual(Ctx);
     Value *PtrTablePtr = ConstantPointerNull::get(PointerType::getUnqual(Ctx));
     Value *PtrCount = ConstantInt::get(I64, 0);
@@ -3444,6 +3491,9 @@ struct CodeVirtualization : public ModulePass {
         break;
       case InterpParam::OpcodeMap:
         InterpArgs.push_back(OpcodeMapPtr);
+        break;
+      case InterpParam::VMState:
+        InterpArgs.push_back(VMStatePtr);
         break;
       case InterpParam::Key:
         InterpArgs.push_back(RuntimeKey);
@@ -3662,6 +3712,7 @@ struct CodeVirtualization : public ModulePass {
     CalleeIndex.clear();
     CalleeOrder.clear();
     CalleeTable = nullptr;
+    VMState = nullptr;
     CalleeTableKey = 0;
     IndirectCallStubCounter = 0;
     initScheduleConstants();

@@ -101,6 +101,7 @@ RELEASE_GATES = [
     ReleaseGate("vmp_handler_mba", TESTING / "scripts" / "verify_vmp_handler_mba.py"),
     ReleaseGate("vmp_handler_bcf", TESTING / "scripts" / "verify_vmp_handler_bcf.py"),
     ReleaseGate("vmp_cross_bytecode_integrity", TESTING / "scripts" / "verify_vmp_cross_bytecode_integrity.py"),
+    ReleaseGate("vmp_cross_function_state", TESTING / "scripts" / "verify_vmp_cross_function_state.py"),
     ReleaseGate("vmp_devirtualization_samples", TESTING / "scripts" / "verify_vmp_devirtualization_samples.py"),
     ReleaseGate("vmp_dynamic_loop", TESTING / "scripts" / "verify_vmp_dynamic_loop.py"),
     ReleaseGate("vmp_emulation_guard", TESTING / "scripts" / "verify_vmp_emulation_guard.py"),
