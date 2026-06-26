@@ -134,7 +134,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 - [x] Add polymorphic VM builds.
 - [x] Add per-function ISA randomization beyond opcode permutation.
 - [x] Add encrypted basic-block bytecode.
-- [ ] Add handler MBA.
+- [x] Add handler MBA.
 - [ ] Add handler BCF.
 - [ ] Add stronger rolling/cross-function bytecode integrity checks.
 - [ ] Add VM devirtualization test samples.

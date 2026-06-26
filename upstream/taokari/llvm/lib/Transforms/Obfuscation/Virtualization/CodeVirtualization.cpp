@@ -3147,11 +3147,13 @@ struct CodeVirtualization : public ModulePass {
       // arithmetic shape looks real to a decompiler. Written to the
       // private noise global so the store is not removable; the handler
       // semantics are untouched because nothing reads the global.
-      uint64_t K1 = RNG();
-      uint64_t K2 = RNG();
+      uint64_t K1 = nextNonZeroKey();
+      uint64_t K2 = nextNonZeroKey();
+      uint64_t K3 = nextNonZeroKey();
       Value *Sp = B.CreateLoad(I64, SP, "h.sp");
       Value *A = B.CreateXor(Sp, ConstantInt::get(I64, K1), "h.a");
-      Value *Bv = B.CreateXor(Sp, ConstantInt::get(I64, K2), "h.b");
+      Value *BSeed = B.CreateAdd(Sp, ConstantInt::get(I64, K2), "h.b.seed");
+      Value *Bv = B.CreateXor(BSeed, ConstantInt::get(I64, K3), "h.b");
       Value *And = B.CreateAnd(A, Bv, "h.and");
       Value *Shl = B.CreateShl(And, ConstantInt::get(I64, 1), "h.shl");
       Value *Xor = B.CreateXor(A, Bv, "h.xor");
