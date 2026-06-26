@@ -65,7 +65,7 @@ def ida_path() -> Path:
 def map_symbols(path: Path) -> dict[str, int]:
     symbols: dict[str, int] = {}
     for name, va in MAP_RE.findall(path.read_text(encoding="utf-8", errors="ignore")):
-        if name.startswith("__taokari_vmp_interp_i64"):
+        if name in {"victim", "_victim"} or name.startswith("__taokari_vmp_interp_i64"):
             symbols[name] = int(va, 16)
     return symbols
 
@@ -92,9 +92,16 @@ def main() -> int:
             str(CLANG), str(src), "-O1", "-gcodeview", "-o", str(exe),
             "-Wl,/DEBUG:FULL", f"-Wl,/MAP:{map_file}",
             "-mllvm", "-taokari", "-mllvm", "-taokari-vmp",
+            "-mllvm", "-verify-machineinstrs",
+            "-mllvm", "-taokari-mir=dirtybytes",
         ], use_vs_env=True)
         if build.returncode:
             sys.stderr.write(build.stdout + build.stderr)
+            return 1
+
+        result = run([str(exe)])
+        if result.returncode:
+            sys.stderr.write(result.stdout + result.stderr)
             return 1
 
         env = os.environ.copy()
