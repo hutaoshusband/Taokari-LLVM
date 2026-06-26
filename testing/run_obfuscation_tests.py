@@ -97,6 +97,7 @@ RELEASE_GATES = [
     ReleaseGate("vmp_overhead_budget", TESTING / "scripts" / "verify_vmp_benchmark.py"),
     ReleaseGate("vmp_polymorphic_builds", TESTING / "scripts" / "verify_vmp_polymorphic_builds.py"),
     ReleaseGate("vmp_isa_randomization", TESTING / "scripts" / "verify_vmp_isa_randomization.py"),
+    ReleaseGate("vmp_basic_block_bytecode", TESTING / "scripts" / "verify_vmp_basic_block_bytecode.py"),
     ReleaseGate("vmp_dll_load_and_manual_map", TESTING / "scripts" / "verify_vmp_dll_load.py"),
     ReleaseGate("semantic_memory_stress", TESTING / "scripts" / "verify_semantic_memory_stress.py"),
     # Section 22 Phase 1/7: prove -taokari-max + VMP no longer hangs.

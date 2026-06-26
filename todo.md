@@ -133,7 +133,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 - [x] 🧪 Add decompiler/IDA snapshot proof for runtime rekey and DirtyBytes guard shape when IDA is available.
 - [x] Add polymorphic VM builds.
 - [x] Add per-function ISA randomization beyond opcode permutation.
-- [ ] Add encrypted basic-block bytecode.
+- [x] Add encrypted basic-block bytecode.
 - [ ] Add handler MBA.
 - [ ] Add handler BCF.
 - [ ] Add stronger rolling/cross-function bytecode integrity checks.

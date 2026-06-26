@@ -227,6 +227,7 @@ struct Fixup {
 struct BytecodeProgram {
   SmallVector<int64_t, 64> Words;
   SmallVector<Fixup, 8> Fixups;
+  SmallVector<size_t, 8> BlockStarts;
   SmallVector<Constant *, 8> PointerConsts;
   DenseMap<const Value *, unsigned> PointerConstIndex;
 };
@@ -911,6 +912,7 @@ struct CodeVirtualization : public ModulePass {
 
     for (BasicBlock &BB : F) {
       BlockStart[&BB] = P.Words.size();
+      P.BlockStarts.push_back(P.Words.size());
       // pre-register PHI slots so any use of a PHI (including by
       // another PHI in the same block, or by an instruction before the PHI
       // list ends -- they're all at block top) resolves to the right slot.
@@ -1626,6 +1628,7 @@ struct CodeVirtualization : public ModulePass {
   }
 
   bool computePCMapFlags(const SmallVectorImpl<int64_t> &Words,
+                         ArrayRef<size_t> BlockStarts,
                          SmallVectorImpl<uint8_t> &Flags,
                          uint8_t RotationStep) const {
     SmallVector<uint8_t, 64> Starts(Words.size(), 0);
@@ -1644,6 +1647,10 @@ struct CodeVirtualization : public ModulePass {
     }
     if (I != Words.size())
       return false;
+
+    for (size_t Start : BlockStarts)
+      if (Start < Words.size() && Starts[Start])
+        Leaders[Start] = 1;
 
     I = 0;
     while (I < Words.size()) {
@@ -1722,6 +1729,17 @@ struct CodeVirtualization : public ModulePass {
     if (I != Old.size())
       return false;
 
+    SmallVector<size_t, 8> PaddedBlockStarts;
+    for (size_t Start : P.BlockStarts) {
+      auto It = Remap.find(Start);
+      if (It != Remap.end())
+        PaddedBlockStarts.push_back(It->second);
+    }
+    std::sort(PaddedBlockStarts.begin(), PaddedBlockStarts.end());
+    PaddedBlockStarts.erase(
+        std::unique(PaddedBlockStarts.begin(), PaddedBlockStarts.end()),
+        PaddedBlockStarts.end());
+
     I = 0;
     while (I < Padded.size()) {
       unsigned Immediates = 0;
@@ -1738,6 +1756,7 @@ struct CodeVirtualization : public ModulePass {
     }
 
     P.Words = std::move(Padded);
+    P.BlockStarts = std::move(PaddedBlockStarts);
     return checkStackDepth(P);
   }
 
@@ -3163,7 +3182,7 @@ struct CodeVirtualization : public ModulePass {
     SmallVector<int64_t, 64> EncodedWords(P.Words.begin(), P.Words.end());
     SmallVector<uint8_t, 64> PCFlags;
     uint8_t RotationStep = static_cast<uint8_t>((RNG() % 63) + 1);
-    if (!computePCMapFlags(P.Words, PCFlags, RotationStep))
+    if (!computePCMapFlags(P.Words, P.BlockStarts, PCFlags, RotationStep))
       return false;
     if (!mapOpcodeWords(EncodedWords, OpcodeEncode))
       return false;
