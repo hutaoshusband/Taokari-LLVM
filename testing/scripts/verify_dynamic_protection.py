@@ -110,6 +110,53 @@ def main() -> int:
                   file=sys.stderr)
             return 1
 
+        dynamic_apis = ("IsDebuggerPresent", "CheckRemoteDebuggerPresent",
+                        "QueryPerformanceCounter")
+        max_src = tmp / "dyn_max_off.c"
+        max_src.write_text(SOURCE.replace(
+            '__attribute__((noinline, annotate("+dyn")))',
+            '__attribute__((noinline))'), encoding="utf-8")
+        max_ir = tmp / "dyn_max_off.ll"
+        res = run([str(CLANG), str(max_src), "-O0", "-S", "-emit-llvm",
+                   "-mllvm", "-taokari", "-mllvm", "-taokari-max",
+                   "-mllvm", "-taokari-max-no-vmp",
+                   "-mllvm", "-taokari-report", "-o", str(max_ir)])
+        if res.returncode:
+            print(res.stdout, end="")
+            print(res.stderr, end="", file=sys.stderr)
+            return res.returncode
+        max_report = res.stdout + res.stderr
+        if "taokari-report: dyn enable=false" not in max_report:
+            print("-taokari-max enabled dyn without explicit selection",
+                  file=sys.stderr)
+            return 1
+        max_text = max_ir.read_text(encoding="utf-8", errors="ignore")
+        if "__taokari_dyn" in max_text or any(api in max_text
+                                              for api in dynamic_apis):
+            print("dyn IR emitted under bare -taokari-max", file=sys.stderr)
+            return 1
+
+        max_dyn_ir = tmp / "dyn_max_on.ll"
+        res = run([str(CLANG), str(max_src), "-O0", "-S", "-emit-llvm",
+                   "-mllvm", "-taokari", "-mllvm", "-taokari-max",
+                   "-mllvm", "-taokari-max-no-vmp",
+                   "-mllvm", "-taokari-dyn",
+                   "-mllvm", "-taokari-report", "-o", str(max_dyn_ir)])
+        if res.returncode:
+            print(res.stdout, end="")
+            print(res.stderr, end="", file=sys.stderr)
+            return res.returncode
+        max_dyn_report = res.stdout + res.stderr
+        if "taokari-report: dyn enable=true" not in max_dyn_report:
+            print("explicit -taokari-dyn did not survive -taokari-max",
+                  file=sys.stderr)
+            return 1
+        if not any(api in max_dyn_ir.read_text(
+                encoding="utf-8", errors="ignore") for api in dynamic_apis):
+            print("explicit -taokari-dyn emitted no dyn IR under max",
+                  file=sys.stderr)
+            return 1
+
         # Correctness: a clean run must match the unobfuscated reference.
         obf_exe = tmp / "dyn_obf.exe"
         res = run([str(CLANG), str(src), "-O2", "-mllvm", "-taokari",

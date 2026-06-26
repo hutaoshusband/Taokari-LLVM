@@ -429,6 +429,7 @@ struct ObfuscationPassManager : public ModulePass {
     Opt->rttiOpt()->readOpt(EnableRttiEraser);
     Opt->metaOpt()->readOpt(EnableMetadataHygiene, LevelMetadataHygiene);
     Opt->vmpOpt()->readOpt(EnableVMP, LevelVMP);
+    const bool DynSelected = Opt->dynOpt()->isEnabled();
 
     if (TaokariMaxProtection) {
       for (const auto &O : Opt->getAllOpt()) {
@@ -454,6 +455,8 @@ struct ObfuscationPassManager : public ModulePass {
       Opt->cieOpt()->setConstDecryptorMBA(true);
       Opt->cfeOpt()->setVolatileSeed(true);
       Opt->cfeOpt()->setConstDecryptorMBA(true);
+      if (!DynSelected)
+        Opt->dynOpt()->setEnable(false);
       Opt->metaOpt()->setReleaseStrip(true);
       Opt->metaOpt()->setRandomizeSections(true);
       if (Opt->randomSeed().empty())
