@@ -136,7 +136,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 - [x] Add encrypted basic-block bytecode.
 - [x] Add handler MBA.
 - [x] Add handler BCF.
-- [ ] Add stronger rolling/cross-function bytecode integrity checks.
+- [x] Add stronger rolling/cross-function bytecode integrity checks.
 - [ ] Add VM devirtualization test samples.
 - [ ] Add anti-debug/anti-trace inside the interpreter loop through the DynamicProtection framework.
 - [ ] Add anti-emulation checks suitable for protected commercial builds.

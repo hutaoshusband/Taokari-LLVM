@@ -230,6 +230,7 @@ struct BytecodeProgram {
   SmallVector<size_t, 8> BlockStarts;
   SmallVector<Constant *, 8> PointerConsts;
   DenseMap<const Value *, unsigned> PointerConstIndex;
+  uint64_t CrossTagSeed = 0;
 };
 
 // Handler descriptor. The interpreter builder iterates the table
@@ -1788,6 +1789,26 @@ struct CodeVirtualization : public ModulePass {
     return Count;
   }
 
+  uint64_t integrityHashStep(uint64_t Tag, uint64_t Value,
+                             uint64_t Index) const {
+    uint64_t Mix = Value + Index * Schedule.Step;
+    return (Tag ^ Mix) * Schedule.HashPrime;
+  }
+
+  uint64_t crossFunctionBytecodeSeed(
+      ArrayRef<std::pair<Function *, BytecodeProgram>> Encoded) const {
+    uint64_t Tag = integrityHashStep(Schedule.HashOffset, Encoded.size(), 0);
+    uint64_t Index = 1;
+    for (const auto &Entry : Encoded) {
+      for (char Ch : Entry.first->getName())
+        Tag = integrityHashStep(Tag, static_cast<unsigned char>(Ch), Index++);
+      Tag = integrityHashStep(Tag, Entry.second.Words.size(), Index++);
+      for (int64_t Word : Entry.second.Words)
+        Tag = integrityHashStep(Tag, static_cast<uint64_t>(Word), Index++);
+    }
+    return Tag ? Tag : Schedule.HashPrime;
+  }
+
   uint64_t bytecodeDomain(bool IsOpcodeWord) const {
     return IsOpcodeWord ? Schedule.OpcodeDomain : Schedule.OperandDomain;
   }
@@ -2725,6 +2746,7 @@ struct CodeVirtualization : public ModulePass {
 
   InterpreterInstance createInterpreter(Module &M, Function &Source,
                                         uint64_t ExpectedOpMapHash,
+                                        uint64_t BytecodeTagSeed,
                                         ArrayRef<int64_t> OpcodeRuntimeTokens) {
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
@@ -2951,7 +2973,7 @@ struct CodeVirtualization : public ModulePass {
     B.CreateStore(ConstantInt::get(I64, 0), HandlerState);
     auto *Tag = B.CreateAlloca(I64, nullptr, "tag");
     auto *TagI = B.CreateAlloca(I64, nullptr, "tag.i");
-    B.CreateStore(ConstantInt::get(I64, Schedule.HashOffset), Tag);
+    B.CreateStore(ConstantInt::get(I64, BytecodeTagSeed), Tag);
     B.CreateStore(ConstantInt::get(I64, 0), TagI);
     BasicBlock *TagHdr = BasicBlock::Create(Ctx, "tag.hdr", F);
     BasicBlock *TagBody = BasicBlock::Create(Ctx, "tag.body", F);
@@ -3273,8 +3295,11 @@ struct CodeVirtualization : public ModulePass {
           (ExpectedOpMapHash ^ Mix) * Schedule.HashPrime;
     }
 
+    uint64_t BytecodeTagSeed =
+        P.CrossTagSeed ? P.CrossTagSeed : Schedule.HashOffset;
     InterpreterInstance Interp =
-        createInterpreter(M, F, ExpectedOpMapHash, OpcodeRuntimeTokens);
+        createInterpreter(M, F, ExpectedOpMapHash, BytecodeTagSeed,
+                          OpcodeRuntimeTokens);
     F.removeFnAttr(Attribute::AlwaysInline);
     F.removeFnAttr(Attribute::InlineHint);
     F.addFnAttr(Attribute::NoInline);
@@ -3336,7 +3361,7 @@ struct CodeVirtualization : public ModulePass {
     auto *RekeyI = B.CreateAlloca(I64, nullptr, "vmp.rekey.i");
     auto *RuntimeTag = B.CreateAlloca(I64, nullptr, "vmp.rekey.tag");
     B.CreateStore(Zero, RekeyI);
-    B.CreateStore(ConstantInt::get(I64, Schedule.HashOffset), RuntimeTag);
+    B.CreateStore(ConstantInt::get(I64, BytecodeTagSeed), RuntimeTag);
     BasicBlock *RekeyHdr = BasicBlock::Create(Ctx, "vmp.rekey.hdr", &F);
     BasicBlock *RekeyBody = BasicBlock::Create(Ctx, "vmp.rekey.body", &F);
     BasicBlock *RekeyDone = BasicBlock::Create(Ctx, "vmp.rekey.done", &F);
@@ -3749,6 +3774,9 @@ struct CodeVirtualization : public ModulePass {
 
     // Phase 2: finalize the callee table now that all callees are known.
     finalizeCalleeTable(M);
+    uint64_t CrossTagSeed = crossFunctionBytecodeSeed(Encoded);
+    for (auto &Entry : Encoded)
+      Entry.second.CrossTagSeed = CrossTagSeed;
 
     // Phase 3: build the interpreter (uses CalleeTable) and replace bodies.
     bool Changed = false;
