@@ -40,6 +40,7 @@ struct NativeIntegrity : public FunctionPass {
   static char ID;
   ObfuscationOptions *ArgsOptions;
   std::mt19937_64 RNG;
+  GlobalVariable *TextHashSlot = nullptr;
 
   NativeIntegrity(ObfuscationOptions *argsOptions)
       : FunctionPass(ID), ArgsOptions(argsOptions) {
@@ -63,6 +64,31 @@ struct NativeIntegrity : public FunctionPass {
 
   uint64_t nextOddKey() {
     return nextNonZeroKey() | 1ULL;
+  }
+
+  GlobalVariable *getTextHashSlot(Module &M) {
+    if (TextHashSlot && TextHashSlot->getParent() == &M)
+      return TextHashSlot;
+
+    LLVMContext &Ctx = M.getContext();
+    Type *I8 = Type::getInt8Ty(Ctx);
+    SmallVector<Constant *, 32> Bytes;
+    const uint8_t Magic[] = {0xb6, 0x4f, 0x41, 0x29, 0x17, 0xc3, 0x5a, 0xe8,
+                             0x91, 0x0d, 0xfa, 0x72, 0x4c, 0x2b, 0x80, 0x6e};
+    for (uint8_t B : Magic)
+      Bytes.push_back(ConstantInt::get(I8, B));
+    for (unsigned I = 0; I < 16; ++I)
+      Bytes.push_back(ConstantInt::get(I8, 0));
+
+    auto *SlotTy = ArrayType::get(I8, Bytes.size());
+    TextHashSlot = new GlobalVariable(
+        M, SlotTy, true, GlobalValue::PrivateLinkage,
+        ConstantArray::get(SlotTy, Bytes), "__taokari_nativeint_text_hash");
+    TextHashSlot->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+    TextHashSlot->setAlignment(Align(8));
+    TextHashSlot->addMetadata("noobf", *MDNode::get(Ctx, {}));
+    appendToCompilerUsed(M, {TextHashSlot});
+    return TextHashSlot;
   }
 
   bool runOnFunction(Function &F) override {
@@ -99,6 +125,7 @@ struct NativeIntegrity : public FunctionPass {
     Type *I64 = Type::getInt64Ty(Ctx);
     Type *I32 = Type::getInt32Ty(Ctx);
     IRBuilder<> B(Ctx);
+    getTextHashSlot(M);
 
     // Emit a per-function private constant pool of N i64 words. N is
     // small (8) so the runtime hash loop is bounded; the values are
