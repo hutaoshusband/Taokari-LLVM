@@ -123,7 +123,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 
 - [x] Add post-link hash patching.
 - [x] Add whole-binary or section-range checksum after function-level integrity.
-- [ ] Add a verifier for final `.text` section hashing.
+- [x] Add a verifier for final `.text` section hashing.
 - [ ] Ensure dynamic protection remains optional and off by default unless explicitly selected by profile.
 
 ## 1.4 VM Remaining L2/L3 Items
