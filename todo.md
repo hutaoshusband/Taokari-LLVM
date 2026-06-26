@@ -122,7 +122,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 ## 1.3 Dynamic / Integrity
 
 - [x] Add post-link hash patching.
-- [ ] Add whole-binary or section-range checksum after function-level integrity.
+- [x] Add whole-binary or section-range checksum after function-level integrity.
 - [ ] Add a verifier for final `.text` section hashing.
 - [ ] Ensure dynamic protection remains optional and off by default unless explicitly selected by profile.
 
