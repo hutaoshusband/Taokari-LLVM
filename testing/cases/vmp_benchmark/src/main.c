@@ -38,9 +38,9 @@ VMP_CASE(loop_sum_case, {
   return s;
 })
 
-// clock() on Windows ticks at 1ms; 50M iterations keeps each case in the
-// tens-of-ms range so the 1ms quantization is a small fraction of the total.
+#ifndef ITERS
 #define ITERS 50000000
+#endif
 
 // volatile sink so the optimizer cannot delete the calls.
 static volatile int g_sink;

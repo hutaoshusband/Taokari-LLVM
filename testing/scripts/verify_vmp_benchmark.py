@@ -1,20 +1,7 @@
-"""VMP baseline benchmark (L1.5.4).
-
-Measures interpreter overhead vs native for each L1.5 IR feature. Builds the
-benchmark source twice (plain NATIVE and +vmp), runs each, parses per-case
-nanosecond timings from stdout, and reports the vmp/native overhead ratio.
-
-This is the baseline reference for the L2 benchmark -- it establishes the
-cost floor of virtualization before bytecode encryption / handler obfuscation
-layers land.
-
-Exit contract:
-  0  -- benchmark ran and ratios printed (always informational; no pass/fail)
-  1  -- build or run failure
-  2  -- missing clang / source
-"""
+"""Verify VMP per-function runtime overhead stays inside budget."""
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 import tempfile
@@ -27,9 +14,35 @@ SRC = ROOT / "testing" / "cases" / "vmp_benchmark" / "src" / "main.c"
 VSDEVCMD = Path(
     r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
 )
+DEFAULT_ITERS = 1_000_000
+MIN_NATIVE_NS = 1_000_000
+CASE_BUDGETS = {
+    "add_case": 2500.0,
+    "branch_case": 8000.0,
+    "div_case": 5000.0,
+    "loop_sum_case": 10000.0,
+    "mul_case": 2500.0,
+    "sub_case": 2500.0,
+    "xor_case": 2500.0,
+}
 
 
-def run(cmd: list[str], use_vs_env: bool = False) -> subprocess.CompletedProcess[str]:
+def run(cmd: list[str], use_vs_env: bool = False,
+        timeout: int = 180) -> subprocess.CompletedProcess[str]:
+    def invoke(actual: list[str]) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                actual, cwd=ROOT, text=True, capture_output=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+            stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+            return subprocess.CompletedProcess(
+                actual, 124, stdout,
+                stderr + f"\ntimeout after {timeout}s\n",
+            )
+
     if use_vs_env and VSDEVCMD.exists():
         with tempfile.NamedTemporaryFile(
             "w", suffix=".cmd", delete=False, encoding="utf-8"
@@ -42,28 +55,26 @@ def run(cmd: list[str], use_vs_env: bool = False) -> subprocess.CompletedProcess
                 "exit /b %ERRORLEVEL%\n"
             )
         try:
-            return subprocess.run(
-                ["cmd.exe", "/d", "/c", str(batch)],
-                cwd=ROOT,
-                text=True,
-                capture_output=True,
-            )
+            return invoke(["cmd.exe", "/d", "/c", str(batch)])
         finally:
             batch.unlink(missing_ok=True)
-    return subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True)
+    return invoke(cmd)
 
 
-def compile_exe(src: Path, out: Path, *, vmp: bool) -> None:
+def compile_exe(src: Path, out: Path, *, vmp: bool, iters: int) -> None:
     if vmp:
         case_attrs = r'-DVMP_CASE_ATTRS=__attribute__((noinline,annotate("+vmp")))'
         flags = [
-            str(CLANG), str(src), case_attrs,
+            str(CLANG), str(src), case_attrs, f"-DITERS={iters}",
             "-O2", "-mllvm", "-taokari", "-mllvm", "-taokari-vmp",
             "-o", str(out),
         ]
     else:
         case_attrs = r"-DVMP_CASE_ATTRS=__attribute__((noinline))"
-        flags = [str(CLANG), str(src), case_attrs, "-O2", "-o", str(out)]
+        flags = [
+            str(CLANG), str(src), case_attrs, f"-DITERS={iters}",
+            "-O2", "-o", str(out),
+        ]
     res = run(flags, use_vs_env=True)
     if res.returncode:
         sys.stderr.write(res.stdout + res.stderr)
@@ -87,7 +98,12 @@ def parse_timings(stdout: str) -> dict[str, tuple[int, int]]:
     return out
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--iters", type=int, default=DEFAULT_ITERS)
+    parser.add_argument("--max-overhead", type=float, default=None)
+    args = parser.parse_args(argv)
+
     if not CLANG.exists():
         print(f"missing clang: {CLANG}", file=sys.stderr)
         return 2
@@ -99,8 +115,8 @@ def main() -> int:
         tmpdir = Path(tmp)
         native_exe = tmpdir / "native.exe"
         vmp_exe = tmpdir / "vmp.exe"
-        compile_exe(SRC, native_exe, vmp=False)
-        compile_exe(SRC, vmp_exe, vmp=True)
+        compile_exe(SRC, native_exe, vmp=False, iters=args.iters)
+        compile_exe(SRC, vmp_exe, vmp=True, iters=args.iters)
 
         native_run = run([str(native_exe)])
         vmp_run = run([str(vmp_exe)])
@@ -116,14 +132,28 @@ def main() -> int:
 
     print(f"{'case':<18} {'native_ms':>10} {'vmp_ms':>10} {'overhead':>10}")
     print("-" * 52)
-    for case in sorted(set(native) & set(vmp)):
+    failures: list[str] = []
+    for case in sorted(CASE_BUDGETS):
+        if case not in native or case not in vmp:
+            failures.append(f"{case}: missing timing row")
+            continue
         n_ns, _ = native[case]
         v_ns, _ = vmp[case]
         n_ms = n_ns / 1e6
         v_ms = v_ns / 1e6
-        ratio = (v_ns / n_ns) if n_ns > 0 else float("inf")
-        print(f"{case:<18} {n_ms:>10.2f} {v_ms:>10.2f} {ratio:>9.1f}x")
-    print("\nvmp benchmark: baseline recorded")
+        ratio = v_ns / max(n_ns, MIN_NATIVE_NS)
+        budget = args.max_overhead if args.max_overhead else CASE_BUDGETS[case]
+        print(f"{case:<18} {n_ms:>10.2f} {v_ms:>10.2f} "
+              f"{ratio:>9.1f}x / {budget:.0f}x")
+        if ratio > budget:
+            failures.append(f"{case}: {ratio:.1f}x > {budget:.0f}x")
+
+    if failures:
+        for failure in failures:
+            print(f"vmp overhead budget: FAIL ({failure})", file=sys.stderr)
+        return 1
+
+    print("\nvmp overhead budget: ok")
     return 0
 
 

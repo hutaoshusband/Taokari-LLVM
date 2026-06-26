@@ -129,7 +129,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 ## 1.4 VM Remaining L2/L3 Items
 
 - [x] 🧪 Add decompiler-lift test for VMP functions.
-- [ ] Add per-function overhead budget for VMP.
+- [x] Add per-function overhead budget for VMP.
 - [ ] 🧪 Add decompiler/IDA snapshot proof for runtime rekey and DirtyBytes guard shape when IDA is available.
 - [ ] Add polymorphic VM builds.
 - [ ] Add per-function ISA randomization beyond opcode permutation.

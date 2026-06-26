@@ -94,6 +94,7 @@ def case_path(name: str) -> Path:
 RELEASE_GATES = [
     ReleaseGate("indirect_call_level3", TESTING / "scripts" / "verify_indirect_call_level3.py"),
     ReleaseGate("vmp_release_smoke", TESTING / "scripts" / "verify_vmp_level1.py"),
+    ReleaseGate("vmp_overhead_budget", TESTING / "scripts" / "verify_vmp_benchmark.py"),
     ReleaseGate("vmp_dll_load_and_manual_map", TESTING / "scripts" / "verify_vmp_dll_load.py"),
     ReleaseGate("semantic_memory_stress", TESTING / "scripts" / "verify_semantic_memory_stress.py"),
     # Section 22 Phase 1/7: prove -taokari-max + VMP no longer hangs.
