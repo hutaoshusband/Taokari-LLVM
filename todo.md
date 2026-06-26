@@ -135,7 +135,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 - [x] Add per-function ISA randomization beyond opcode permutation.
 - [x] Add encrypted basic-block bytecode.
 - [x] Add handler MBA.
-- [ ] Add handler BCF.
+- [x] Add handler BCF.
 - [ ] Add stronger rolling/cross-function bytecode integrity checks.
 - [ ] Add VM devirtualization test samples.
 - [ ] Add anti-debug/anti-trace inside the interpreter loop through the DynamicProtection framework.

@@ -3140,6 +3140,30 @@ struct CodeVirtualization : public ModulePass {
 
     for (auto [H, CaseBB, BodyBB, RouteToken] : HandlerBlocks) {
       B.SetInsertPoint(BodyBB);
+      BasicBlock *RealBody =
+          BasicBlock::Create(Ctx, H->Name + ".bcf.real", F);
+      BasicBlock *FakeBody =
+          BasicBlock::Create(Ctx, H->Name + ".bcf.fake", F);
+      Value *BcfSp = B.CreateLoad(I64, SP, "h.bcf.sp");
+      Value *BcfN = B.CreateXor(BcfSp, ConstantInt::get(I64, nextNonZeroKey()),
+                                "h.bcf.n");
+      Value *BcfNext = B.CreateAdd(BcfN, ConstantInt::get(I64, 1),
+                                   "h.bcf.next");
+      Value *BcfProd = B.CreateMul(BcfN, BcfNext, "h.bcf.prod");
+      Value *BcfBit = B.CreateAnd(BcfProd, ConstantInt::get(I64, 1),
+                                  "h.bcf.bit");
+      Value *BcfTakeReal =
+          B.CreateICmpEQ(BcfBit, ConstantInt::get(I64, 0), "h.bcf.cond");
+      B.CreateCondBr(BcfTakeReal, RealBody, FakeBody);
+
+      B.SetInsertPoint(FakeBody);
+      Value *FakeMix =
+          B.CreateXor(BcfProd, ConstantInt::get(I64, nextNonZeroKey()),
+                      "h.bcf.fake.mix");
+      B.CreateStore(FakeMix, HandlerNoiseGV);
+      B.CreateBr(RealBody);
+
+      B.SetInsertPoint(RealBody);
       // MBA noise on the live SP runs at the start of the body, before
       // the handler's real work. (sp ^ k1) + 2 * ((sp ^ k1) & (sp ^ k2))
       // is the MBA identity for a+b applied to two keyed copies of sp.
