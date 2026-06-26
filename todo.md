@@ -141,7 +141,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 - [x] Add anti-debug/anti-trace inside the interpreter loop through the DynamicProtection framework.
 - [x] Add anti-emulation checks suitable for protected commercial builds.
 - [x] Add cross-function VM state.
-- [ ] Add per-build handler-table obfuscation seed verification.
+- [x] Add per-build handler-table obfuscation seed verification.
 
 ## 1.5 Config / Build / Testing
 
