@@ -18,6 +18,7 @@ Value *emitDynamicDebuggerCheck(Module &M, IRBuilder<> &B);
 Value *emitDynamicRemoteDebuggerCheck(Module &M, IRBuilder<> &B);
 Value *emitDynamicTimingCheck(Module &M, IRBuilder<> &B,
                               uint64_t Threshold = 50000000ULL);
+Value *emitDynamicEmulationCheck(Module &M, IRBuilder<> &B);
 Value *emitDynamicRuntimeCheck(Module &M, IRBuilder<> &B, uint32_t Level);
 void markDynamicTamper(Module &M, IRBuilder<> &B);
 }

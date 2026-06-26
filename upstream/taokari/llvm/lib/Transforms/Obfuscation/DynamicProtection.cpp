@@ -94,6 +94,35 @@ Value *emitDynamicTimingCheck(Module &M, IRBuilder<> &B, uint64_t Threshold) {
   return B.CreateICmpUGT(Delta, ConstantInt::get(I64, Threshold));
 }
 
+Value *emitDynamicEmulationCheck(Module &M, IRBuilder<> &B) {
+  if (!supportsWindowsX64(M))
+    return B.getFalse();
+  auto &Ctx = M.getContext();
+  auto *I64 = Type::getInt64Ty(Ctx);
+  auto *PtrTy = PointerType::get(Ctx, 0);
+  auto *QpcTy = FunctionType::get(Type::getInt32Ty(Ctx), {PtrTy}, false);
+  FunctionCallee Qpc =
+      M.getOrInsertFunction("QueryPerformanceCounter", QpcTy);
+  auto *TickTy = FunctionType::get(I64, false);
+  FunctionCallee Tick = M.getOrInsertFunction("GetTickCount64", TickTy);
+  Value *T0 = B.CreateAlloca(I64);
+  Value *T1 = B.CreateAlloca(I64);
+  B.CreateCall(Qpc, {T0});
+  B.CreateCall(Qpc, {T1});
+  Value *V0 = B.CreateLoad(I64, T0);
+  Value *V1 = B.CreateLoad(I64, T1);
+  Value *Backwards = B.CreateICmpULT(V1, V0, "dyn.emu.qpc.backwards");
+  Value *TickValue = B.CreateCall(Tick);
+  Value *ZeroTick =
+      B.CreateICmpEQ(TickValue, ConstantInt::get(I64, 0), "dyn.emu.tick0");
+  Value *ZeroQpc = B.CreateAnd(
+      B.CreateICmpEQ(V0, ConstantInt::get(I64, 0), "dyn.emu.qpc0"),
+      B.CreateICmpEQ(V1, ConstantInt::get(I64, 0), "dyn.emu.qpc1"),
+      "dyn.emu.qpc.zero");
+  return B.CreateOr(Backwards, B.CreateAnd(ZeroTick, ZeroQpc),
+                    "dyn.emu.trip");
+}
+
 Value *emitDynamicRuntimeCheck(Module &M, IRBuilder<> &B, uint32_t Level) {
   auto *I8 = Type::getInt8Ty(M.getContext());
   Value *Tripped = emitDynamicDebuggerCheck(M, B);
@@ -103,6 +132,9 @@ Value *emitDynamicRuntimeCheck(Module &M, IRBuilder<> &B, uint32_t Level) {
   if (Level >= 3)
     Tripped = B.CreateOr(Tripped, emitDynamicTimingCheck(M, B),
                          "dyn.timing");
+  if (Level >= 4)
+    Tripped = B.CreateOr(Tripped, emitDynamicEmulationCheck(M, B),
+                         "dyn.emu");
   GlobalVariable *Flag = getOrCreateDynamicTamperFlag(M);
   Value *FlagVal = B.CreateLoad(I8, Flag, "dyn.flag");
   Value *FlagSet =
@@ -222,6 +254,10 @@ struct DynamicProtection : public FunctionPass {
           F, B, I64, RNG, taokari::OpaqueSeedKind::RuntimeNonce);
       Value *OpaqueFalse =
           taokari::makeRegistryFalsePredicate(B, Seed, RNG, "dyn.opaq");
+      if (Level >= 4) {
+        Value *Emu = taokari::emitDynamicEmulationCheck(M, B);
+        Detected = B.CreateOr(Detected, Emu, "dyn.emu");
+      }
       Value *Mixed = B.CreateOr(Detected, OpaqueFalse, "dyn.mix");
       Value *Tripped = Mixed;
       if (Level >= 3) {

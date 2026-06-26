@@ -139,7 +139,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 - [x] Add stronger rolling/cross-function bytecode integrity checks.
 - [x] Add VM devirtualization test samples.
 - [x] Add anti-debug/anti-trace inside the interpreter loop through the DynamicProtection framework.
-- [ ] Add anti-emulation checks suitable for protected commercial builds.
+- [x] Add anti-emulation checks suitable for protected commercial builds.
 - [ ] Add cross-function VM state.
 - [ ] Add per-build handler-table obfuscation seed verification.
 
