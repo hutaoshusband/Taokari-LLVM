@@ -205,32 +205,32 @@ Goal: make the VM harder to signature, harder to lift and safer to ship.
 
 ## B1. VM Polymorphism
 
-- [ ] Add per-build interpreter layout randomization.
-- [ ] Randomize alloca layout.
-- [ ] Randomize spill/register strategy where safe.
-- [ ] Randomize handler order and handler grouping per function.
-- [ ] Randomize operand encoding per function.
-- [ ] 🧪 Add two-build structural-diff verifier.
-- [ ] 🧪 Assert two builds do not share a VM signature.
+- [x] Add per-build interpreter layout randomization.
+- [x] Randomize alloca layout.
+- [x] Randomize spill/register strategy where safe.
+- [x] Randomize handler order and handler grouping per function.
+- [x] Randomize operand encoding per function.
+- [x] 🧪 Add two-build structural-diff verifier.
+- [x] 🧪 Assert two builds do not share a VM signature.
 
 ## B2. Per-Function ISA Randomization
 
-- [ ] Split stable VM opcodes into opcode families.
-- [ ] Allow equivalent handlers with different operand formats.
-- [ ] Add per-function opcode-set generation.
-- [ ] Add absent/decoy handlers so functions do not share the same ISA surface.
-- [ ] 🧪 Add verifier that two `+vmp` functions cannot reuse the same opcode map.
-- [ ] 🧪 Add differential harness coverage for each opcode family.
+- [x] Split stable VM opcodes into opcode families.
+- [x] Allow equivalent handlers with different operand formats.
+- [x] Add per-function opcode-set generation.
+- [x] Add absent/decoy handlers so functions do not share the same ISA surface.
+- [x] 🧪 Add verifier that two `+vmp` functions cannot reuse the same opcode map.
+- [x] 🧪 Add differential harness coverage for each opcode family.
 
 ## B3. Encrypted Basic-Block Bytecode
 
-- [ ] Add per-basic-block bytecode key.
-- [ ] Add per-basic-block integrity tag.
-- [ ] Decrypt block only on edge transfer.
-- [ ] Re-key state after each virtual edge.
-- [ ] Refuse malformed block transfers with a clean tamper path.
-- [ ] 🧪 Add bytecode block mutation fuzzer.
-- [ ] 🧪 Add optimizer survival test for per-block encryption.
+- [x] Add per-basic-block bytecode key.
+- [x] Add per-basic-block integrity tag.
+- [x] Decrypt block only on edge transfer.
+- [x] Re-key state after each virtual edge.
+- [x] Refuse malformed block transfers with a clean tamper path.
+- [x] 🧪 Add bytecode block mutation fuzzer.
+- [x] 🧪 Add optimizer survival test for per-block encryption.
 
 ## B4. Handler Obfuscation
 
