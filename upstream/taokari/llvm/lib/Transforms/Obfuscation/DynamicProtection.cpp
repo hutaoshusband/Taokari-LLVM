@@ -26,6 +26,97 @@ extern cl::opt<bool> TaokariMaxProtection;
 extern cl::opt<bool> EnableDyn;
 }
 
+namespace llvm::taokari {
+
+static bool supportsWindowsX64(Module &M) {
+  Triple T(M.getTargetTriple());
+  return T.isOSWindows() && T.getArch() == Triple::x86_64;
+}
+
+GlobalVariable *getOrCreateDynamicTamperFlag(Module &M) {
+  if (auto *Existing = M.getGlobalVariable("__taokari_dyn_tamper"))
+    return Existing;
+  auto *I8 = Type::getInt8Ty(M.getContext());
+  auto *Flag = new GlobalVariable(M, I8, false, GlobalValue::PrivateLinkage,
+                                  ConstantInt::get(I8, 0),
+                                  "__taokari_dyn_tamper");
+  Flag->setAlignment(Align(1));
+  Flag->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+  Flag->addMetadata("noobf", *MDNode::get(M.getContext(), {}));
+  appendToCompilerUsed(M, {Flag});
+  return Flag;
+}
+
+Value *emitDynamicDebuggerCheck(Module &M, IRBuilder<> &B) {
+  if (!supportsWindowsX64(M))
+    return B.getFalse();
+  auto *I32 = Type::getInt32Ty(M.getContext());
+  auto *FTy = FunctionType::get(I32, false);
+  FunctionCallee Fn = M.getOrInsertFunction("IsDebuggerPresent", FTy);
+  Value *R = B.CreateCall(Fn);
+  return B.CreateICmpNE(R, ConstantInt::get(I32, 0));
+}
+
+Value *emitDynamicRemoteDebuggerCheck(Module &M, IRBuilder<> &B) {
+  if (!supportsWindowsX64(M))
+    return B.getFalse();
+  auto &Ctx = M.getContext();
+  auto *I32 = Type::getInt32Ty(Ctx);
+  auto *PtrTy = PointerType::get(Ctx, 0);
+  auto *NoArgs = FunctionType::get(PtrTy, false);
+  FunctionCallee CurProc = M.getOrInsertFunction("GetCurrentProcess", NoArgs);
+  auto *OneArg = FunctionType::get(I32, {PtrTy, PtrTy}, false);
+  FunctionCallee Check =
+      M.getOrInsertFunction("CheckRemoteDebuggerPresent", OneArg);
+  Value *FlagSlot = B.CreateAlloca(I32);
+  B.CreateStore(ConstantInt::get(I32, 0), FlagSlot);
+  Value *Proc = B.CreateCall(CurProc);
+  B.CreateCall(Check, {Proc, FlagSlot});
+  Value *Flag = B.CreateLoad(I32, FlagSlot);
+  return B.CreateICmpNE(Flag, ConstantInt::get(I32, 0));
+}
+
+Value *emitDynamicTimingCheck(Module &M, IRBuilder<> &B, uint64_t Threshold) {
+  if (!supportsWindowsX64(M))
+    return B.getFalse();
+  auto &Ctx = M.getContext();
+  auto *I64 = Type::getInt64Ty(Ctx);
+  auto *PtrTy = PointerType::get(Ctx, 0);
+  auto *FTy = FunctionType::get(Type::getInt32Ty(Ctx), {PtrTy}, false);
+  FunctionCallee Qpc = M.getOrInsertFunction("QueryPerformanceCounter", FTy);
+  Value *T0 = B.CreateAlloca(I64);
+  Value *T1 = B.CreateAlloca(I64);
+  B.CreateCall(Qpc, {T0});
+  B.CreateCall(Qpc, {T1});
+  Value *V0 = B.CreateLoad(I64, T0);
+  Value *V1 = B.CreateLoad(I64, T1);
+  Value *Delta = B.CreateSub(V1, V0);
+  return B.CreateICmpUGT(Delta, ConstantInt::get(I64, Threshold));
+}
+
+Value *emitDynamicRuntimeCheck(Module &M, IRBuilder<> &B, uint32_t Level) {
+  auto *I8 = Type::getInt8Ty(M.getContext());
+  Value *Tripped = emitDynamicDebuggerCheck(M, B);
+  if (Level >= 2)
+    Tripped = B.CreateOr(Tripped, emitDynamicRemoteDebuggerCheck(M, B),
+                         "dyn.remote");
+  if (Level >= 3)
+    Tripped = B.CreateOr(Tripped, emitDynamicTimingCheck(M, B),
+                         "dyn.timing");
+  GlobalVariable *Flag = getOrCreateDynamicTamperFlag(M);
+  Value *FlagVal = B.CreateLoad(I8, Flag, "dyn.flag");
+  Value *FlagSet =
+      B.CreateICmpNE(FlagVal, ConstantInt::get(I8, 0), "dyn.flagset");
+  return B.CreateOr(Tripped, FlagSet, "dyn.trip");
+}
+
+void markDynamicTamper(Module &M, IRBuilder<> &B) {
+  B.CreateStore(ConstantInt::get(Type::getInt8Ty(M.getContext()), 1),
+                getOrCreateDynamicTamperFlag(M));
+}
+
+}
+
 namespace {
 
 enum CheckKind { CK_Debugger, CK_PEB, CK_Timing };
@@ -46,16 +137,7 @@ struct DynamicProtection : public FunctionPass {
   }
 
   GlobalVariable *getTamperFlag(Module &M) {
-    if (TamperFlag && TamperFlag->getParent() == &M)
-      return TamperFlag;
-    auto *I8 = Type::getInt8Ty(M.getContext());
-    TamperFlag = new GlobalVariable(M, I8, false, GlobalValue::PrivateLinkage,
-                                    ConstantInt::get(I8, 0),
-                                    "__taokari_dyn_tamper");
-    TamperFlag->setAlignment(Align(1));
-    TamperFlag->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
-    TamperFlag->addMetadata("noobf", *MDNode::get(M.getContext(), {}));
-    appendToCompilerUsed(M, {TamperFlag});
+    TamperFlag = taokari::getOrCreateDynamicTamperFlag(M);
     return TamperFlag;
   }
 
@@ -65,6 +147,8 @@ struct DynamicProtection : public FunctionPass {
     if (F.isDeclaration())
       return false;
     if (F.getName().starts_with("__taokari_dyn_"))
+      return false;
+    if (F.getName().starts_with("__taokari_vmp_interp_"))
       return false;
 
     auto Opt = ArgsOptions->toObfuscate(ArgsOptions->dynOpt(), &F);
@@ -283,49 +367,19 @@ struct DynamicProtection : public FunctionPass {
   Value *emitDebuggerCheck(Module &M, IRBuilder<> &B, bool Windows) {
     if (!Windows)
       return B.getFalse();
-    auto *I32 = Type::getInt32Ty(M.getContext());
-    auto *FTy = FunctionType::get(I32, false);
-    FunctionCallee Fn = M.getOrInsertFunction("IsDebuggerPresent", FTy);
-    Value *R = B.CreateCall(Fn);
-    return B.CreateICmpNE(R, ConstantInt::get(I32, 0));
+    return taokari::emitDynamicDebuggerCheck(M, B);
   }
 
   Value *emitPEBCheck(Module &M, IRBuilder<> &B, bool Windows) {
     if (!Windows)
       return B.getFalse();
-    auto &Ctx = M.getContext();
-    auto *I32 = Type::getInt32Ty(Ctx);
-    auto *PtrTy = PointerType::get(Ctx, 0);
-    auto *BoolTy = Type::getInt32Ty(Ctx);
-    auto *NoArgs = FunctionType::get(PtrTy, false);
-    FunctionCallee CurProc = M.getOrInsertFunction("GetCurrentProcess", NoArgs);
-    auto *OneArg = FunctionType::get(I32, {PtrTy, PtrTy}, false);
-    FunctionCallee Check =
-        M.getOrInsertFunction("CheckRemoteDebuggerPresent", OneArg);
-    Value *FlagSlot = B.CreateAlloca(BoolTy);
-    B.CreateStore(ConstantInt::get(BoolTy, 0), FlagSlot);
-    Value *Proc = B.CreateCall(CurProc);
-    B.CreateCall(Check, {Proc, FlagSlot});
-    Value *Flag = B.CreateLoad(BoolTy, FlagSlot);
-    return B.CreateICmpNE(Flag, ConstantInt::get(BoolTy, 0));
+    return taokari::emitDynamicRemoteDebuggerCheck(M, B);
   }
 
   Value *emitTimingCheck(Module &M, IRBuilder<> &B, bool Windows) {
     if (!Windows)
       return B.getFalse();
-    auto &Ctx = M.getContext();
-    auto *I64 = Type::getInt64Ty(Ctx);
-    auto *PtrTy = PointerType::get(Ctx, 0);
-    auto *FTy = FunctionType::get(Type::getInt32Ty(Ctx), {PtrTy}, false);
-    FunctionCallee Qpc = M.getOrInsertFunction("QueryPerformanceCounter", FTy);
-    Value *T0 = B.CreateAlloca(I64);
-    Value *T1 = B.CreateAlloca(I64);
-    B.CreateCall(Qpc, {T0});
-    B.CreateCall(Qpc, {T1});
-    Value *V0 = B.CreateLoad(I64, T0);
-    Value *V1 = B.CreateLoad(I64, T1);
-    Value *Delta = B.CreateSub(V1, V0);
-    return B.CreateICmpUGT(Delta, ConstantInt::get(I64, 50000000ULL));
+    return taokari::emitDynamicTimingCheck(M, B);
   }
 };
 

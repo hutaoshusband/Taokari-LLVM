@@ -1,4 +1,5 @@
 #include "llvm/Transforms/Obfuscation/CodeVirtualization.h"
+#include "llvm/Transforms/Obfuscation/DynamicProtection.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
@@ -2795,6 +2796,7 @@ struct CodeVirtualization : public ModulePass {
       }
     }
     auto *FTy = FunctionType::get(I64, ParamTypes, false);
+    auto DynOpt = ArgsOptions->toObfuscate(ArgsOptions->dynOpt(), &Source);
     std::string InterpName =
         ("__taokari_vmp_interp_i64_" + Source.getName()).str();
     InterpName += "_";
@@ -3056,6 +3058,16 @@ struct CodeVirtualization : public ModulePass {
         Dispatch, Bad);
 
     B.SetInsertPoint(Dispatch);
+    if (DynOpt.isEnabled()) {
+      BasicBlock *DynTrap = BasicBlock::Create(Ctx, "dyn.loop.trap", F);
+      BasicBlock *DynOk = BasicBlock::Create(Ctx, "dyn.loop.ok", F);
+      Value *DynHit = taokari::emitDynamicRuntimeCheck(M, B, DynOpt.level());
+      B.CreateCondBr(DynHit, DynTrap, DynOk);
+      B.SetInsertPoint(DynTrap);
+      taokari::markDynamicTamper(M, B);
+      B.CreateBr(Bad);
+      B.SetInsertPoint(DynOk);
+    }
     // Inline PC decrypt (PcKey is the alloca created above). IC is not
     // constructed yet at this point in the IR, so we touch PcKey/PC
     // directly rather than via pcLoad.
