@@ -85,6 +85,10 @@ static cl::opt<std::string> VMPCompatReportPath(
              "bytecode word count, and split-region count. Use this to "
              "verify your +vmp functions actually virtualize."));
 
+static cl::opt<bool> VMPTestIsolatedState(
+    "taokari-vmp-test-isolated-state", cl::init(false), cl::NotHidden,
+    cl::desc("Use per-function VM state for isolated VMP tests."));
+
 struct VMPCompatEntry {
   std::string FunctionName;
   std::string Status;
@@ -1917,19 +1921,33 @@ struct CodeVirtualization : public ModulePass {
     return Salt;
   }
 
-  GlobalVariable *getOrCreateVMState(Module &M) {
-    if (VMState)
-      return VMState;
+  GlobalVariable *createVMState(Module &M, const Twine &Name) {
     Type *I64 = Type::getInt64Ty(M.getContext());
     SmallVector<Constant *, 4> Init;
     for (unsigned I = 0; I < 4; ++I)
       Init.push_back(ConstantInt::get(I64, nextNonZeroKey()));
     auto *ArrayTy = ArrayType::get(I64, Init.size());
-    VMState = new GlobalVariable(M, ArrayTy, false, GlobalValue::PrivateLinkage,
-                                 ConstantArray::get(ArrayTy, Init),
-                                 "__taokari_vmp_xstate");
-    VMState->setAlignment(Align(8));
+    auto *State =
+        new GlobalVariable(M, ArrayTy, false, GlobalValue::PrivateLinkage,
+                           ConstantArray::get(ArrayTy, Init), Name);
+    State->setAlignment(Align(8));
+    return State;
+  }
+
+  GlobalVariable *getOrCreateVMState(Module &M) {
+    if (VMState)
+      return VMState;
+    VMState = createVMState(M, "__taokari_vmp_xstate");
     return VMState;
+  }
+
+  GlobalVariable *getVMStateForFunction(Module &M, Function &F) {
+    if (!VMPTestIsolatedState)
+      return getOrCreateVMState(M);
+    std::string Name = ("__taokari_vmp_xstate_" + F.getName()).str();
+    if (auto *Existing = M.getGlobalVariable(Name))
+      return Existing;
+    return createVMState(M, Name);
   }
 
   Value *loadWord(IRBuilder<> &B, Type *I64, Value *BC, Value *PC,
@@ -2833,6 +2851,22 @@ struct CodeVirtualization : public ModulePass {
     }
     auto *FTy = FunctionType::get(I64, ParamTypes, false);
     auto DynOpt = ArgsOptions->toObfuscate(ArgsOptions->dynOpt(), &Source);
+    switch (ArgsOptions->vmpAntiTraceMode()) {
+    case 1:
+      DynOpt.setEnable(false);
+      DynOpt.setLevel(0);
+      break;
+    case 2:
+      DynOpt.setEnable(true);
+      DynOpt.setLevel(3);
+      break;
+    case 3:
+      DynOpt.setEnable(true);
+      DynOpt.setLevel(4);
+      break;
+    default:
+      break;
+    }
     std::string InterpName =
         ("__taokari_vmp_interp_i64_" + Source.getName()).str();
     InterpName += "_";
@@ -3367,7 +3401,7 @@ struct CodeVirtualization : public ModulePass {
     Value *BCPtr = B.CreateGEP(ArrayTy, Bytecode, {Zero, Zero});
     Value *PCMapPtr = B.CreateGEP(PCMapArrayTy, PCMap, {Zero, Zero});
     Value *OpcodeMapPtr = B.CreateGEP(OpcodeMapArrayTy, OpcodeMap, {Zero, Zero});
-    auto *VMStateGV = getOrCreateVMState(M);
+    auto *VMStateGV = getVMStateForFunction(M, F);
     auto *VMStateArrayTy = cast<ArrayType>(VMStateGV->getValueType());
     Value *VMStatePtr =
         B.CreateGEP(VMStateArrayTy, VMStateGV, {Zero, Zero}, "vmp.xstate.ptr");

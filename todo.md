@@ -234,32 +234,32 @@ Goal: make the VM harder to signature, harder to lift and safer to ship.
 
 ## B4. Handler Obfuscation
 
-- [ ] Apply MBA inside arithmetic handlers.
-- [ ] Apply BCF to selected handler bodies.
-- [ ] Apply MIR noise to generated handler code where safe.
-- [ ] Add fake but reachable handler bodies.
-- [ ] Avoid breaking VM correctness or liveness.
-- [ ] 🧪 Add native-vs-VMP differential test after handler obfuscation.
-- [ ] 🧪 Add decompiler snapshot test for handler bodies.
+- [x] Apply MBA inside arithmetic handlers.
+- [x] Apply BCF to selected handler bodies.
+- [x] Apply MIR noise to generated handler code where safe.
+- [x] Add fake but reachable handler bodies.
+- [x] Avoid breaking VM correctness or liveness.
+- [x] 🧪 Add native-vs-VMP differential test after handler obfuscation.
+- [x] 🧪 Add decompiler snapshot test for handler bodies.
 
 ## B5. Anti-Trace / Anti-Emulation
 
-- [ ] Route interpreter-loop checks through DynamicProtection.
-- [ ] Add configurable anti-trace gate.
-- [ ] Add configurable anti-emulation gate.
-- [ ] Add safe false-positive mode for development.
-- [ ] Add profile knob: `vm.anti_trace = off/light/strong`.
-- [ ] 🧪 Add false-positive benchmark.
-- [ ] 🧪 Add clean execution test on normal hardware.
+- [x] Route interpreter-loop checks through DynamicProtection.
+- [x] Add configurable anti-trace gate.
+- [x] Add configurable anti-emulation gate.
+- [x] Add safe false-positive mode for development.
+- [x] Add profile knob: `vm.anti_trace = off/light/strong`.
+- [x] 🧪 Add false-positive benchmark.
+- [x] 🧪 Add clean execution test on normal hardware.
 
 ## B6. Cross-Function VM State
 
-- [ ] Add shared obfuscated module state.
-- [ ] Make selected handlers depend on module state.
-- [ ] Update state through opaque transitions.
-- [ ] Keep isolated function testing possible through a test-only mode.
-- [ ] 🧪 Add verifier that lifting one function alone is incomplete.
-- [ ] 🧪 Add regression tests for multi-function VMP programs.
+- [x] Add shared obfuscated module state.
+- [x] Make selected handlers depend on module state.
+- [x] Update state through opaque transitions.
+- [x] Keep isolated function testing possible through a test-only mode.
+- [x] 🧪 Add verifier that lifting one function alone is incomplete.
+- [x] 🧪 Add regression tests for multi-function VMP programs.
 
 ---
 

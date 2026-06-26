@@ -112,17 +112,15 @@ def main() -> int:
     gate(len(noise_globals) >= 1,
          f"per-interpreter noise global emitted (got {len(noise_globals)})")
 
-    # MBA noise shape: %h.sp = load ; %h.a = xor %h.sp, K ; %h.b = xor %h.sp, K
-    # ; %h.and = and %h.a, %h.b ; %h.shl = shl %h.and, 1 ;
-    # %h.xor = xor %h.a, %h.b ; %h.sum = add %h.xor, %h.shl ; store %h.sum
     sp_load = re.findall(r"%h\.sp\w*\s*=\s*load i64", ir_text)
     gate(len(sp_load) >= 1,
          f"handler body loads SP for MBA noise (got {len(sp_load)} loads)")
 
     xor_a = re.findall(r"%h\.a\w*\s*=\s*xor i64 %h\.sp", ir_text)
-    xor_b = re.findall(r"%h\.b\w*\s*=\s*xor i64 %h\.sp", ir_text)
-    gate(len(xor_a) >= 1 and len(xor_b) >= 1,
-         "handler body builds two keyed XOR copies of SP")
+    b_seed = re.findall(r"%h\.b\.seed\w*\s*=\s*add i64 %h\.sp", ir_text)
+    xor_b = re.findall(r"%h\.b\w*\s*=\s*xor i64 %h\.b\.seed", ir_text)
+    gate(len(xor_a) >= 1 and len(b_seed) >= 1 and len(xor_b) >= 1,
+         "handler body builds two keyed SP-derived values")
 
     and_chain = re.findall(r"%h\.and\w*\s*=\s*and i64", ir_text)
     shl_chain = re.findall(r"%h\.shl\w*\s*=\s*shl i64", ir_text)

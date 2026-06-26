@@ -352,6 +352,35 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
       }
       continue;
     }
+    if (obj.getFirst().str() == "vm") {
+      auto *VmObj = obj.getSecond().getAsObject();
+      if (!VmObj) {
+        reportConfigError(FileName, "vm must be an object");
+      }
+      if (const auto *AntiTraceValue = VmObj->get("anti_trace")) {
+        auto AntiTrace = AntiTraceValue->getAsString();
+        if (!AntiTrace) {
+          reportConfigError(FileName, "vm.anti_trace must be string");
+        }
+        if (*AntiTrace == "off") {
+          result->setVmpAntiTraceMode(1);
+        } else if (*AntiTrace == "light") {
+          result->setVmpAntiTraceMode(2);
+        } else if (*AntiTrace == "strong") {
+          result->setVmpAntiTraceMode(3);
+        } else {
+          reportConfigError(FileName,
+                            "vm.anti_trace must be off, light or strong");
+        }
+      }
+      for (const auto &KV : *VmObj) {
+        if (KV.getFirst() != "anti_trace") {
+          llvm::errs() << "warning: unknown taokari config key: vm."
+                       << KV.getFirst().str() << '\n';
+        }
+      }
+      continue;
+    }
     bool objHit = false;
     for (auto &opt : allOpt) {
       if ((objHit = procObj(opt, obj))) {

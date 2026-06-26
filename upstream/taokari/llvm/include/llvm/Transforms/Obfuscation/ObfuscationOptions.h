@@ -242,6 +242,7 @@ protected:
   std::shared_ptr<ObfOpt> RttiOpt = nullptr;
   std::shared_ptr<ObfOpt> MetaOpt = nullptr;
   std::shared_ptr<ObfOpt> VmpOpt = nullptr;
+  uint32_t VmpAntiTraceMode = 0;
 
   SmallString<32> RandomSeed;
 
@@ -337,6 +338,12 @@ public:
   auto metaOpt() const { return MetaOpt; }
 
   auto vmpOpt() const { return VmpOpt; }
+
+  void setVmpAntiTraceMode(uint32_t Mode) {
+    VmpAntiTraceMode = Mode <= 3 ? Mode : 0;
+  }
+
+  uint32_t vmpAntiTraceMode() const { return VmpAntiTraceMode; }
 
   auto &randomSeed() { return RandomSeed; }
 
