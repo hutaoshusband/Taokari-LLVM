@@ -120,12 +120,15 @@ struct ConstantIntEncryption : public FunctionPass {
 
     const bool UsePool =
         opt.constPerFunctionPool() || opt.level() >= 3;
+    const bool UseShards =
+        UsePool && (opt.constHelperShards() || opt.level() >= 3);
     struct PoolEntry {
       Constant *Enc;
       ConstantInt *Key;
       Constant *XorKey;
       unsigned BitWidth;
       unsigned Offset;
+      Function *Shard = nullptr;
     };
     DenseMap<ConstantInt *, PoolEntry> Pool;
     GlobalVariable *PoolGV = nullptr;
@@ -211,6 +214,51 @@ struct ConstantIntEncryption : public FunctionPass {
                                      F.getName() + ".cie.pool.ref");
       PoolRefGV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
       PoolRefGV->addMetadata("noobf", *MDNode::get(F.getContext(), {}));
+    }
+
+    if (UseShards && PoolGV) {
+      auto *I64 = Type::getInt64Ty(F.getContext());
+      auto *ShardFTy = FunctionType::get(I64, false);
+      unsigned ShardIdx = 0;
+      for (auto &KV : Pool) {
+        PoolEntry &E = KV.second;
+        auto *Shard = Function::Create(
+            ShardFTy, GlobalValue::InternalLinkage,
+            F.getName() + ".cie.shard." + Twine(ShardIdx++), F.getParent());
+        Shard->addFnAttr(Attribute::NoInline);
+        Shard->addMetadata("noobf", *MDNode::get(F.getContext(), {}));
+        auto *BB = BasicBlock::Create(F.getContext(), "entry", Shard);
+        IRBuilder<NoFolder> SIRB(BB);
+        SIRB.CreateRet(ConstantInt::get(I64, 0));
+        Instruction *Ret = BB->getTerminator();
+
+        IRBuilder<NoFolder> B(Ret);
+        Value *PoolBase = PoolGV;
+        if (PoolRefGV) {
+          PoolBase = B.CreateAlignedLoad(
+              PointerType::getUnqual(F.getContext()), PoolRefGV, Align{1},
+              true, "cie.shard.ref.ld");
+        }
+        auto *I8 = Type::getInt8Ty(F.getContext());
+        Value *BytePtr = B.CreateInBoundsGEP(
+            ArrayType::get(I8, 1), PoolBase,
+            {ConstantInt::get(Type::getInt32Ty(F.getContext()), 0),
+             ConstantInt::get(Type::getInt32Ty(F.getContext()), E.Offset)},
+            "cie.shard.ptr");
+        auto *LoadTy = IntegerType::get(F.getContext(), E.BitWidth);
+        auto *PoolLoad = B.CreateAlignedLoad(LoadTy, BytePtr, Align{1}, true,
+                                             "cie.shard.ld");
+        Value *Dec = decryptConstantCipher(
+            PoolLoad, E.Key, E.XorKey, E.BitWidth, LoadTy, Ret, RNG,
+            opt.level(), nullptr, opt.volatileSeed(),
+            opt.constDecryptorMBA());
+        Value *RetVal = Dec;
+        if (E.BitWidth != 64) {
+          RetVal = B.CreateZExt(Dec, I64, "cie.shard.zext");
+        }
+        cast<ReturnInst>(Ret)->setOperand(0, RetVal);
+        E.Shard = Shard;
+      }
     }
 
     // Count constant occurrences for deduplication
@@ -309,6 +357,15 @@ struct ConstantIntEncryption : public FunctionPass {
             auto &Entry = Pool[CTI];
             auto *IntTy = cast<IntegerType>(CTI->getType());
             IRBuilder<NoFolder> IRB(InsertPoint);
+            if (Entry.Shard) {
+              auto *Call = IRB.CreateCall(Entry.Shard, {}, "cie.shard.call");
+              if (IntTy->getBitWidth() < 64) {
+                CipherConstant =
+                    IRB.CreateTrunc(Call, IntTy, "cie.shard.trunc");
+              } else {
+                CipherConstant = Call;
+              }
+            } else {
             auto *I8 = Type::getInt8Ty(F.getContext());
             Value *PoolBase = PoolGV;
             if (PoolRefGV) {
@@ -329,6 +386,7 @@ struct ConstantIntEncryption : public FunctionPass {
                 PoolLoad, Entry.Key, Entry.XorKey, Entry.BitWidth,
                 CTI->getType(), InsertPoint, RNG, opt.level(), SeedCache,
                 opt.volatileSeed(), opt.constDecryptorMBA());
+            }
           } else {
             auto CacheIt = DedupCache.find(CTI);
             if (CacheIt != DedupCache.end()) {

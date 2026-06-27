@@ -255,6 +255,14 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
         }
         obfOpt->setConstIndirectPoolRef(*indirect);
       }
+      if (const auto *shardsValue = optObj->get("helperShards")) {
+        auto shards = shardsValue->getAsBoolean();
+        if (!shards) {
+          reportConfigError(FileName, obfOpt->attributeName() +
+                                          ".helperShards must be boolean");
+        }
+        obfOpt->setConstHelperShards(*shards);
+      }
       if (const auto *releaseStripValue = optObj->get("releaseStrip")) {
         auto releaseStrip = releaseStripValue->getAsBoolean();
         if (!releaseStrip) {
@@ -532,6 +540,7 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
   result.setConstDecryptorMBA(option->constDecryptorMBA());
   result.setConstPerFunctionPool(option->constPerFunctionPool());
   result.setConstIndirectPoolRef(option->constIndirectPoolRef());
+  result.setConstHelperShards(option->constHelperShards());
   result.setReleaseStrip(option->releaseStrip());
   result.setRandomizeSections(option->randomizeSections());
   result.setExportAllowlist(option->exportAllowlist());

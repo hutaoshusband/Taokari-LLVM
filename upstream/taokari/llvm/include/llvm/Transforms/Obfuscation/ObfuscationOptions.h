@@ -50,6 +50,12 @@ protected:
   // single static @pool reference a reverser can grep. Off by default;
   // auto-enabled at cie.level >= 3 when the pool is on.
   uint32_t ConstIndirectPoolRef = 0;
+  // CIE Fortress (L3): route each constant access through an outlined helper
+  // shard function (<fn>.cie.shard.<n>) that encapsulates the pool load +
+  // decrypt, so each use site is a call rather than inlined decrypt IR. One
+  // shard per distinct encrypted constant (deduped). Off by default;
+  // auto-enabled at cie.level >= 3.
+  uint32_t ConstHelperShards = 0;
   uint32_t ReleaseStrip = 0;
   uint32_t RandomizeSections = 0;
   std::vector<std::string> ExportAllowlist;
@@ -195,6 +201,12 @@ public:
 
   bool constIndirectPoolRef() const { return this->ConstIndirectPoolRef; }
 
+  void setConstHelperShards(bool shards) {
+    this->ConstHelperShards = shards;
+  }
+
+  bool constHelperShards() const { return this->ConstHelperShards; }
+
   void setReleaseStrip(bool releaseStrip) { this->ReleaseStrip = releaseStrip; }
 
   bool releaseStrip() const { return this->ReleaseStrip; }
@@ -249,6 +261,7 @@ public:
     Result.setConstDecryptorMBA(ConstDecryptorMBA);
     Result.setConstPerFunctionPool(ConstPerFunctionPool);
     Result.setConstIndirectPoolRef(ConstIndirectPoolRef);
+    Result.setConstHelperShards(ConstHelperShards);
     Result.setReleaseStrip(ReleaseStrip);
     Result.setRandomizeSections(RandomizeSections);
     Result.setExportAllowlist(ExportAllowlist);

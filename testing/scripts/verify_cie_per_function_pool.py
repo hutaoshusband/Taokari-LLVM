@@ -120,16 +120,24 @@ def main() -> int:
         if ".cie.pool" not in l3_text:
             print("FAIL: L3 IR has no .cie.pool global", file=sys.stderr)
             return 1
-        if "cie.pool.ld" not in l3_text or "getelementptr" not in l3_text:
-            print("FAIL: L3 IR has no pool load/GEP markers", file=sys.stderr)
+        if ("cie.pool.ld" not in l3_text and "cie.shard.ld" not in l3_text) or \
+                "getelementptr" not in l3_text:
+            print("FAIL: L3 IR has no pool/shard load+GEP markers",
+                  file=sys.stderr)
             return 1
-        if not any("cie.pool" in line and "getelementptr" in line
+        if not any(("cie.pool" in line or "cie.shard" in line)
+                   and "getelementptr" in line
                    for line in l3_text.splitlines()):
             print("FAIL: L3 IR does not GEP into the pool", file=sys.stderr)
             return 1
-        if ".cie.pool.ref" not in l3_text or "cie.pool.ref.ld" not in l3_text:
-            print("FAIL: L3 IR has no indirect pool-ref slot/load "
+        if ".cie.pool.ref" not in l3_text and "cie.shard.ref" not in l3_text:
+            print("FAIL: L3 IR has no indirect pool-ref slot "
                   "(indirect constant references not wired)", file=sys.stderr)
+            return 1
+        if ("cie.pool.ref.ld" not in l3_text
+                and "cie.shard.ref.ld" not in l3_text):
+            print("FAIL: L3 IR has no indirect pool/shard base load",
+                  file=sys.stderr)
             return 1
         if ".cie.pool" in l2_text:
             print("FAIL: L2 IR leaked a .cie.pool global (pool must be L3-gated)",
