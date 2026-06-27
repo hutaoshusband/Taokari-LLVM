@@ -131,6 +131,12 @@ static cl::opt<unsigned> TaokariMirFakePrologueProb(
              "functions (EH/funclet, real prologue conflicts) before "
              "emission."));
 
+static cl::opt<bool> TaokariMirVerbose(
+    "taokari-mir-verbose", cl::init(false), cl::NotHidden,
+    cl::desc("Emit human-readable diagnostics for MIR skip/fallback decisions "
+             "and inserted transforms (default: off). Opt-in: release builds "
+             "stay silent unless this or -debug-only=taokari-mir is set."));
+
 struct MirSubpasses {
   bool Marker = false;
   bool DirtyBytes = false;
@@ -429,6 +435,48 @@ static MirSubpasses resolveSubpasses(const Function &F) {
   return Passes;
 }
 
+struct MirSafetyReport {
+  StringRef Reason;
+  StringRef Pass;
+  bool Unsafe = false;
+};
+
+static bool functionHasEhShape(const MachineFunction &MF) {
+  if (MF.getFunction().hasPersonalityFn())
+    return true;
+  for (const MachineBasicBlock &MBB : MF) {
+    if (MBB.isEHPad() || MBB.isEHFuncletEntry() || MBB.isEHScopeEntry() ||
+        MBB.isEHScopeReturnBlock() || MBB.isCleanupFuncletEntry())
+      return true;
+  }
+  return false;
+}
+
+static MirSafetyReport assessMirSafety(const MachineFunction &MF,
+                                       const MirSubpasses &P) {
+  MirSafetyReport Report;
+  if (!MF.getTarget().getTargetTriple().isX86_64())
+    return {"unsupported target", "all", true};
+  const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
+  if (!TII)
+    return {"missing target instr info", "all", true};
+
+  const bool StructureSensitive =
+      P.FunctionSplit || P.FakeBounds || P.Sse || P.Unmodelled;
+  if (StructureSensitive && functionHasEhShape(MF))
+    return {"EH/funclet function", "split/fakeprologue/sse/unmodelled", true};
+
+  if (P.FunctionSplit && MF.front().isEHPad())
+    return {"entry is an EH pad", "split", true};
+
+  return Report;
+}
+
+static void logSkip(const MachineFunction &MF, const MirSafetyReport &R) {
+  errs() << "taokari-mir: skip " << MF.getName() << " (" << R.Pass << "): "
+         << R.Reason << "\n";
+}
+
 // Stateful core shared by the legacy and new-PM wrappers.
 struct TaokariMachineObf {
   bool run(MachineFunction &MF);
@@ -590,11 +638,15 @@ bool TaokariMachineObf::run(MachineFunction &MF) {
   if (!Passes.any())
     return false;
 
+  MirSafetyReport Safety = assessMirSafety(MF, Passes);
+  if (Safety.Unsafe) {
+    LLVM_DEBUG(logSkip(MF, Safety));
+    if (TaokariMirVerbose)
+      logSkip(MF, Safety);
+    return false;
+  }
+
   const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
-  if (!TII)
-    return false;
-  if (!MF.getTarget().getTargetTriple().isX86_64())
-    return false;
 
   MachineBasicBlock *InsertMBB = &MF.front();
   if (Passes.FunctionSplit)
