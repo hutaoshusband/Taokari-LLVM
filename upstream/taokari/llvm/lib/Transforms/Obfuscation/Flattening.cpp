@@ -295,6 +295,41 @@ bool Flattening::flatten(Function *f) {
     }
   };
 
+  auto buildMbaXor = [&](IRBuilder<> &Builder, Value *LHS, Value *RHS,
+                         const Twine &Name) -> Value * {
+    if (!fortressMode) {
+      return Builder.CreateXor(LHS, RHS, Name);
+    }
+    Value *AllOnes = ConstantInt::getAllOnesValue(IntTy);
+    switch (RNG() % 4) {
+    case 0: {
+      Value *Or = Builder.CreateOr(LHS, RHS, Name + ".mba.or");
+      Value *And = Builder.CreateAnd(LHS, RHS, Name + ".mba.and");
+      return Builder.CreateSub(Or, And, Name + ".mba.sub");
+    }
+    case 1: {
+      Value *NB = Builder.CreateXor(RHS, AllOnes, Name + ".mba.nb");
+      Value *NA = Builder.CreateXor(LHS, AllOnes, Name + ".mba.na");
+      Value *L = Builder.CreateAnd(LHS, NB, Name + ".mba.l");
+      Value *R = Builder.CreateAnd(NA, RHS, Name + ".mba.r");
+      return Builder.CreateOr(L, R, Name + ".mba.or");
+    }
+    case 2: {
+      Value *And = Builder.CreateAnd(LHS, RHS, Name + ".mba.and");
+      Value *Sum = Builder.CreateAdd(LHS, RHS, Name + ".mba.sum");
+      Value *DoubleAnd = Builder.CreateShl(And, ConstantInt::get(IntTy, 1),
+                                           Name + ".mba.shl");
+      return Builder.CreateSub(Sum, DoubleAnd, Name + ".mba.sub");
+    }
+    default: {
+      Value *Or = Builder.CreateOr(LHS, RHS, Name + ".mba.or");
+      Value *And = Builder.CreateAnd(LHS, RHS, Name + ".mba.and");
+      Value *NotAnd = Builder.CreateXor(And, AllOnes, Name + ".mba.nand");
+      return Builder.CreateAnd(Or, NotAnd, Name + ".mba.and2");
+    }
+    }
+  };
+
   // init：Encoded = EntryCase ^ XorKey
   ConstantInt *entryXor = randStateKey();
   Value *entryEnc = IRB.CreateXor(EntryCase, entryXor);
@@ -315,13 +350,13 @@ bool Flattening::flatten(Function *f) {
   Value *switchCondition = nullptr;
   if (flaLevel > 0) {
     ConstantInt *delta = randStateKey();
-    Value *enc1 = IRB.CreateXor(enc0, delta, "switchVar.enc1");
-    Value *xor1 = IRB.CreateXor(xor0, delta, "switchXor.xor1");
+    Value *enc1 = buildMbaXor(IRB, enc0, delta, "switchVar.enc1");
+    Value *xor1 = buildMbaXor(IRB, xor0, delta, "switchXor.xor1");
     IRB.CreateStore(enc1, switchVar, true);
     IRB.CreateStore(xor1, switchXorVar, true);
-    switchCondition = IRB.CreateXor(enc1, xor1, "switchCond");
+    switchCondition = buildMbaXor(IRB, enc1, xor1, "switchCond");
   } else {
-    switchCondition = IRB.CreateXor(enc0, xor0, "switchCond");
+    switchCondition = buildMbaXor(IRB, enc0, xor0, "switchCond");
   }
 
   // Move first BB on top
@@ -721,7 +756,7 @@ bool Flattening::flatten(Function *f) {
       default:
         break;
       }
-      Value *nextEnc = buildXorExpr(IRB, NextCaseVal, nextXor, "nextEnc");
+      Value *nextEnc = buildMbaXor(IRB, NextCaseVal, nextXor, "nextEnc");
 
       if (fortressMode) {
         Value *bogusXor = randStateKey();
