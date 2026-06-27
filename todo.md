@@ -305,14 +305,14 @@ Goal: make “hard to reverse” measurable instead of based on feeling.
 ## D1. Decompiler Snapshot Pipeline
 
 - [x] IDA snapshot path exists for later.
-- [ ] 🧪 Add optional IDA runner detection.
-- [ ] 🧪 Add optional Ghidra headless runner detection.
+- [x] 🧪 Add optional IDA runner detection.
+- [x] 🧪 Add optional Ghidra headless runner detection.
 - [ ] Dump CFG node/edge count per target function.
 - [ ] Dump decompiler pseudocode length per target function.
 - [ ] Dump switch-recovery result if available.
 - [ ] Dump call-graph recovery result.
-- [ ] Store snapshots as JSON artifacts.
-- [ ] Skip gracefully when IDA/Ghidra is not installed.
+- [x] Store snapshots as JSON artifacts.
+- [x] Skip gracefully when IDA/Ghidra is not installed.
 
 ## D2. Gnarliness Gates
 
@@ -436,7 +436,7 @@ This is the “do this next without thinking too much” queue.
 1. [x] 📚 Document `-taokari-max`, `-taokari-max-no-vmp` and VMP budget behaviour in `docs/CONFIGURATION.md`.
 2. [x] Finish MIR config keys per sub-pass.
 3. [ ] Add per-function VMP overhead budget.
-4. [ ] Add VMP decompiler snapshot verifier that skips if IDA/Ghidra is unavailable.
+4. [x] Add VMP decompiler snapshot verifier that skips if IDA/Ghidra is unavailable.
 5. [ ] Add BCF multi-layer bogus graphs.
 6. [ ] Add BCF dispatcher fake-case integration.
 7. [ ] Add MBA on flattening dispatch-state updates.
