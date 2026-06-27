@@ -443,7 +443,7 @@ This is the “do this next without thinking too much” queue.
 8. [x] Add constant encryption per-function pool.
 9. [x] Add encrypted constant pool.
 10. [x] Add indirect constant references through helper shards.
-11. [ ] Add post-link `.text` hash patching prototype.
+11. [x] Add post-link `.text` hash patching prototype.
 12. [ ] Add Linux build instructions and smoke test.
 13. [ ] Add new-PM blocker document.
 14. [ ] Add config wizard prototype.
