@@ -42,6 +42,7 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <iterator>
@@ -249,6 +250,33 @@ static bool stablePercentHit(const Function &F, StringRef PassName,
   Key += PassName;
   return (static_cast<uint64_t>(hash_value(StringRef(Key))) % 100) <
          Probability;
+}
+
+struct MirProbOpt {
+  StringRef Name;
+  const cl::opt<unsigned> &Opt;
+};
+
+static SmallVector<MirProbOpt> mirProbOpts() {
+  return {
+      {"dirtybytes", TaokariMirDirtyProb},
+      {"junk", TaokariMirJunkProb},
+      {"sub", TaokariMirSubProb},
+      {"sse", TaokariMirSseProb},
+      {"split", TaokariMirSplitProb},
+      {"fakeprologue", TaokariMirFakePrologueProb},
+  };
+}
+
+static void validateMirProbabilities() {
+  for (const MirProbOpt &P : mirProbOpts()) {
+    if (P.Opt.getNumOccurrences() == 0)
+      continue;
+    if (P.Opt > 100)
+      report_fatal_error("Taokari config error: -taokari-mir-" +
+                         P.Name + "-prob=" + Twine(P.Opt.getValue()) +
+                         " out of range; probability must be 0..100");
+  }
 }
 
 // Reads the `llvm.global.annotations` global (populated by clang from
@@ -557,6 +585,7 @@ static void scatterSseGuards(MachineFunction &MF, const TargetInstrInfo &TII) {
 // sequence at a function's entry is a reliable, non-vacuous proof that the
 // pass fired.
 bool TaokariMachineObf::run(MachineFunction &MF) {
+  validateMirProbabilities();
   MirSubpasses Passes = resolveSubpasses(MF.getFunction());
   if (!Passes.any())
     return false;
