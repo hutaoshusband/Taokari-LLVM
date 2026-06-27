@@ -23,6 +23,11 @@ or by `noobf`.
 | `-mllvm -taokari-vmp`             | Enable code virtualisation (off by default).             |
 | `-mllvm -taokari-vmp-padding=N`   | Probability (0..100) of inserting pad opcodes in VM bytecode. |
 | `-mllvm -taokari-mir=<passes>`    | Comma-list of MIR passes (`dirtybytes,junk,sub,...`).    |
+| `-mllvm -taokari-mir-<p>-prob=N`  | Per-MIR-sub-pass probability (0..100). `<p>` is `dirtybytes`, `junk`, `sub`, `sse`, `split`, `fakeprologue`. |
+| `-mllvm -taokari-mir-verbose`     | Emit skip/fallback diagnostics (default off).            |
+| `-mllvm -taokari-mir-release-verify` | Run the MachineVerifier after MIR transform (default on). |
+| `-mllvm -taokari-mir-strict`      | Make a post-transform verifier failure fatal (default off). |
+| `-mllvm -taokari-mir-reproducer-dir=<dir>` | Write a `.mir` + JSON reproducer on verifier failure. |
 | `-mllvm -taokari-level-<p>=N`     | Per-pass level override (0..4). `<p>` is one of `indbr`, `icall`, `indgv`, `fla`, `bcf`, `mba`, `cie`, `cfe`, `outline`. |
 | `-mllvm -taokari-<p>-prob=N`      | Per-pass probability (0..100).                           |
 | `-mllvm -taokari-<p>-func-prob=N` | Per-pass per-function probability (0..100).              |
