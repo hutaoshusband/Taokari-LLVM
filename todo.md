@@ -329,13 +329,13 @@ Goal: make “hard to reverse” measurable instead of based on feeling.
 ## D3. Release Dashboard
 
 - [x] Regression dashboard exists.
-- [ ] Add per-tier dashboard summary.
-- [ ] Add pass cost summary.
-- [ ] Add slowest pass summary.
-- [ ] Add transformed function count summary.
-- [ ] Add VM compatibility summary.
-- [ ] Add skipped-function reason summary.
-- [ ] Add output path for CI artifacts.
+- [x] Add per-tier dashboard summary.
+- [x] Add pass cost summary.
+- [x] Add slowest pass summary.
+- [x] Add transformed function count summary.
+- [x] Add VM compatibility summary.
+- [x] Add skipped-function reason summary.
+- [x] Add output path for CI artifacts.
 
 ---
 
@@ -447,7 +447,7 @@ This is the “do this next without thinking too much” queue.
 12. [ ] Add Linux build instructions and smoke test.
 13. [x] Add new-PM blocker document.
 14. [x] Add config wizard prototype.
-15. [ ] Add release dashboard summary for Tier A/B/C/D.
+15. [x] Add release dashboard summary for Tier A/B/C/D.
 
 ---
 
