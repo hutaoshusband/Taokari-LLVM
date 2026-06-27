@@ -355,6 +355,14 @@ static cl::opt<std::string>
 
 namespace llvm {
 
+static bool isTaokariHelper(const Function &F) {
+  StringRef N = F.getName();
+  return N.starts_with("__taokari_icall_fake_") ||
+         N.starts_with("__taokari_sh_") ||
+         N.starts_with("__taokari_bcf_") ||
+         N.contains(".cie.shard.") || N.contains(".shard");
+}
+
 struct ObfuscationPassManager : public ModulePass {
   static char ID; // Pass identification
   SmallVector<Pass *, 8> Passes;
@@ -398,8 +406,14 @@ struct ObfuscationPassManager : public ModulePass {
   bool runFunctionPass(Module &M, FunctionPass *P) {
     bool Changed = false;
     Changed |= P->doInitialization(M);
-    for (Function &F : M) {
-      Changed |= P->runOnFunction(F);
+    SmallVector<Function *, 0> Snapshot;
+    Snapshot.reserve(M.size());
+    for (Function &F : M)
+      Snapshot.push_back(&F);
+    for (Function *F : Snapshot) {
+      if (F->isDeclaration() || isTaokariHelper(*F))
+        continue;
+      Changed |= P->runOnFunction(*F);
     }
     return Changed;
   }

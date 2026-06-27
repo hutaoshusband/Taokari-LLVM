@@ -28,6 +28,14 @@ static cl::opt<uint32_t>
 static cl::opt<uint32_t>
     BCFLoopCount("taokari-bcf-loops", cl::init(0), cl::NotHidden,
                  cl::desc("BCF fake-block junk loop count."));
+static cl::opt<uint32_t>
+    BCFMaxInsts("taokari-bcf-max-insts", cl::init(5000), cl::NotHidden,
+                cl::desc("Skip functions larger than this many instructions. Matches "
+                         "the flattening guard so BCF cannot blow up on functions "
+                         "FLA already expanded into a giant dispatcher."));
+static cl::opt<uint32_t>
+    BCFMaxBlocks("taokari-bcf-max-blocks", cl::init(200), cl::NotHidden,
+                 cl::desc("Skip functions with more than this many basic blocks."));
 
 namespace {
 struct BogusControlFlow : public FunctionPass {
@@ -64,6 +72,9 @@ struct BogusControlFlow : public FunctionPass {
             : (Opt.loopCount() ? Opt.loopCount()
                                : std::max(1u, Opt.level() + 1));
     if (!Probability)
+      return false;
+
+    if (F.getInstructionCount() > BCFMaxInsts || F.size() > BCFMaxBlocks)
       return false;
 
     SmallVector<BasicBlock *, 32> Blocks;
