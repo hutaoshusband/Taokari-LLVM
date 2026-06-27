@@ -111,8 +111,8 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 
 - [ ] Add opaque constant pass.
 - [ ] Add context-dependent constants.
-- [ ] Add per-function constant pool.
-- [ ] Add encrypted constant pool.
+- [x] Add per-function constant pool.
+- [x] Add encrypted constant pool.
 - [ ] Add page-table-backed constants.
 - [ ] Add indirect constant references.
 - [ ] Add constant access through helper shards.
@@ -440,7 +440,7 @@ This is the “do this next without thinking too much” queue.
 5. [x] Add BCF multi-layer bogus graphs.
 6. [x] Add BCF dispatcher fake-case integration.
 7. [x] Add MBA on flattening dispatch-state updates.
-8. [ ] Add constant encryption per-function pool.
+8. [x] Add constant encryption per-function pool.
 9. [ ] Add encrypted constant pool.
 10. [ ] Add indirect constant references through helper shards.
 11. [ ] Add post-link `.text` hash patching prototype.

@@ -69,4 +69,11 @@ Value *encryptConstant(Constant *plainConstant, Instruction *insertBefore,
                        AllocaInst *SeedCache = nullptr,
                        bool volatileSeed = true,
                        bool decryptorMBA = false);
+Value *decryptConstantCipher(Value *EncLoad, ConstantInt *Key,
+                             Constant *XorKey, unsigned BitWidth,
+                             Type *OriginValTy, Instruction *insertBefore,
+                             std::mt19937_64 &rng, unsigned level,
+                             AllocaInst *SeedCache = nullptr,
+                             bool volatileSeed = true,
+                             bool decryptorMBA = false);
 #endif

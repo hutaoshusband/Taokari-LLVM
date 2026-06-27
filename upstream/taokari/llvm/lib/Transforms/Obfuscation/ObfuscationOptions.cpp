@@ -239,6 +239,14 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
         }
         obfOpt->setConstDecryptorMBA(*decryptorMba);
       }
+      if (const auto *poolValue = optObj->get("perFunctionPool")) {
+        auto pool = poolValue->getAsBoolean();
+        if (!pool) {
+          reportConfigError(FileName, obfOpt->attributeName() +
+                                          ".perFunctionPool must be boolean");
+        }
+        obfOpt->setConstPerFunctionPool(*pool);
+      }
       if (const auto *releaseStripValue = optObj->get("releaseStrip")) {
         auto releaseStrip = releaseStripValue->getAsBoolean();
         if (!releaseStrip) {
@@ -514,6 +522,7 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
   result.setStringReencryptAfterUse(option->stringReencryptAfterUse());
   result.setVolatileSeed(option->volatileSeed());
   result.setConstDecryptorMBA(option->constDecryptorMBA());
+  result.setConstPerFunctionPool(option->constPerFunctionPool());
   result.setReleaseStrip(option->releaseStrip());
   result.setRandomizeSections(option->randomizeSections());
   result.setExportAllowlist(option->exportAllowlist());

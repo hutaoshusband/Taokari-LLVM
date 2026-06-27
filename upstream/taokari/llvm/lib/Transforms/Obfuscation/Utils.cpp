@@ -794,6 +794,13 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
   llvm_unreachable("BuildDecryptIR unreachable!!!");
 }
 
+Value *decryptConstantCipher(Value *EncLoad, ConstantInt *Key,
+                             Constant *XorKey, unsigned BitWidth,
+                             Type *OriginValTy, Instruction *insertBefore,
+                             std::mt19937_64 &rng, unsigned level,
+                             AllocaInst *SeedCache, bool volatileSeed,
+                             bool decryptorMBA);
+
 Value *encryptConstant(Constant *plainConstant, Instruction *insertBefore,
                        std::mt19937_64 &rng, unsigned level,
                        AllocaInst *SeedCache, bool volatileSeed,
@@ -835,6 +842,21 @@ Value *encryptConstant(Constant *plainConstant, Instruction *insertBefore,
   EncGV->addMetadata("noobf", *MDNode::get(Ctx, {}));
   IRBuilder<NoFolder> IRB(insertBefore);
   auto *EncLoad = IRB.CreateAlignedLoad(Enc->getType(), EncGV, Align{1}, true);
+  markNoObf(EncLoad);
+  Value *Load = decryptConstantCipher(EncLoad, Key, XorKey, BitWidth,
+                                      OriginValTy, insertBefore, rng, level,
+                                      SeedCache, volatileSeed, decryptorMBA);
+  return Load;
+}
+
+Value *decryptConstantCipher(Value *EncLoad, ConstantInt *Key,
+                             Constant *XorKey, unsigned BitWidth,
+                             Type *OriginValTy, Instruction *insertBefore,
+                             std::mt19937_64 &rng, unsigned level,
+                             AllocaInst *SeedCache, bool volatileSeed,
+                             bool decryptorMBA) {
+  auto &Ctx = insertBefore->getContext();
+  IRBuilder<NoFolder> IRB(insertBefore);
   markNoObf(EncLoad);
   Value *Load = EncLoad;
   auto loadSeed = [&](const Twine &Name) -> Value * {

@@ -108,6 +108,7 @@ following keys.
 | Key           | Type | Default | Notes                                                |
 | ------------- | ---- | ------- | ---------------------------------------------------- |
 | `minConstSize`| int  | `0`     | Encrypt integer/FP constants whose bit-width >= this.|
+| `perFunctionPool` | bool | `false` | Collect every encrypted integer constant of a function into one per-function byte-array global (`.cie.pool`) instead of one global per constant. Auto-enabled at `cie.level >= 3`. |
 
 ### String encryption (`cse`)
 

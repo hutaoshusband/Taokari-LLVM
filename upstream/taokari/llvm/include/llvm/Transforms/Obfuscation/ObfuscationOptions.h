@@ -38,6 +38,12 @@ protected:
   uint32_t StringReencryptAfterUse = 0;
   uint32_t VolatileSeed = 1;
   uint32_t ConstDecryptorMBA = 0;
+  // CIE Fortress (L3): collect every encrypted integer constant of a function
+  // into one per-function byte-array global (the "pool") instead of emitting
+  // one GlobalVariable per constant. Each use site GEPs into the pool at its
+  // own offset and decrypts, so a reverser cannot grep individual constant
+  // globals. Off by default; auto-enabled at cie.level >= 3.
+  uint32_t ConstPerFunctionPool = 0;
   uint32_t ReleaseStrip = 0;
   uint32_t RandomizeSections = 0;
   std::vector<std::string> ExportAllowlist;
@@ -171,6 +177,12 @@ public:
 
   bool constDecryptorMBA() const { return this->ConstDecryptorMBA; }
 
+  void setConstPerFunctionPool(bool pool) {
+    this->ConstPerFunctionPool = pool;
+  }
+
+  bool constPerFunctionPool() const { return this->ConstPerFunctionPool; }
+
   void setReleaseStrip(bool releaseStrip) { this->ReleaseStrip = releaseStrip; }
 
   bool releaseStrip() const { return this->ReleaseStrip; }
@@ -223,6 +235,7 @@ public:
     Result.setStringReencryptAfterUse(StringReencryptAfterUse);
     Result.setVolatileSeed(VolatileSeed);
     Result.setConstDecryptorMBA(ConstDecryptorMBA);
+    Result.setConstPerFunctionPool(ConstPerFunctionPool);
     Result.setReleaseStrip(ReleaseStrip);
     Result.setRandomizeSections(RandomizeSections);
     Result.setExportAllowlist(ExportAllowlist);
