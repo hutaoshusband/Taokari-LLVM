@@ -39,6 +39,7 @@ LEGACY_PASSES = {
     "LegacyLowerSwitch.cpp": ("class LowerSwitch", "FunctionPass"),
     "MBA.cpp": ("struct MBA", "FunctionPass"),
     "NativeIntegrity.cpp": ("struct NativeIntegrity", "FunctionPass"),
+    "OpaqueConstant.cpp": ("struct OpaqueConstant", "FunctionPass"),
     "MetadataHygiene.cpp": ("class MetadataHygiene", "ModulePass"),
     "MicrosoftRTTIEraser.cpp": ("class MsRttiEraser", "ModulePass"),
     "StringEncryption.cpp": ("struct StringEncryption", "ModulePass"),

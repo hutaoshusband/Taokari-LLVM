@@ -47,6 +47,7 @@ new-PM does not schedule directly:
 | `LowerSwitch` (internal) | `FunctionPass` | `LegacyLowerSwitch.cpp:71` |
 | `MBA` | `FunctionPass` | `MBA.cpp:33` |
 | `NativeIntegrity` | `FunctionPass` | `NativeIntegrity.cpp:39` |
+| `OpaqueConstant` | `FunctionPass` | `OpaqueConstant.cpp:60` |
 | `MetadataHygiene` | `ModulePass` | `MetadataHygiene.cpp:24` |
 | `MsRttiEraser` | `ModulePass` | `MicrosoftRTTIEraser.cpp:21` |
 | `StringEncryption` | `ModulePass` | `StringEncryption.cpp:66` |

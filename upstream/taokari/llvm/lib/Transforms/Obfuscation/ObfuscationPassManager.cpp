@@ -11,6 +11,7 @@
 #include "llvm/Transforms/Obfuscation/FunctionOutlining.h"
 #include "llvm/Transforms/Obfuscation/MBA.h"
 #include "llvm/Transforms/Obfuscation/NativeIntegrity.h"
+#include "llvm/Transforms/Obfuscation/OpaqueConstant.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 
 #define DEBUG_TYPE "ir-obfuscation"
@@ -131,6 +132,19 @@ static cl::alias
 static cl::alias TaokariLevelIRConstantIntEncryption(
     "taokari-level-cie", cl::desc("Alias for -level-cie"),
     cl::aliasopt(LevelIRConstantIntEncryption));
+
+static cl::opt<bool> EnableOpaqueConstant(
+    "irobf-ocnst", cl::init(false), cl::NotHidden,
+    cl::desc("Enable IR Opaque Constant substitution. Rewrites plain "
+             "integer constants as opaque XOR-of-runtime-values "
+             "expressions that survive InstCombine but evaluate to the "
+             "exact original value. Distinct from -taokari-cie (which "
+             "encrypts via a global pool); ocnst is lighter-weight and "
+             "composable with cie."));
+static cl::alias
+    TaokariOpaqueConstant("taokari-ocnst",
+                          cl::desc("Alias for -irobf-ocnst"),
+                          cl::aliasopt(EnableOpaqueConstant));
 
 static cl::opt<bool>
     EnableIRConstantFPEncryption("irobf-cfe", cl::init(false), cl::NotHidden,
@@ -412,6 +426,7 @@ struct ObfuscationPassManager : public ModulePass {
     Opt->cseOpt()->readOpt(EnableIRStringEncryption);
     Opt->cieOpt()->readOpt(EnableIRConstantIntEncryption,
                            LevelIRConstantIntEncryption);
+    Opt->ocnstOpt()->readOpt(EnableOpaqueConstant);
     Opt->cfeOpt()->readOpt(EnableIRConstantFPEncryption,
                            LevelIRConstantFPEncryption);
     if (TaokariConstVolatileSeed.getNumOccurrences()) {
@@ -496,6 +511,7 @@ struct ObfuscationPassManager : public ModulePass {
         EnableBogusControlFlow || EnableMBA || EnableOutline || EnableDyn ||
         EnableRttiEraser ||
         EnableMetadataHygiene || EnableVMP || TaokariMaxProtection ||
+        EnableOpaqueConstant ||
         !TaokariConfigPath.empty() || !ArkariConfigPath.empty()) {
       EnableIRObfuscation = true;
     }
@@ -539,6 +555,7 @@ struct ObfuscationPassManager : public ModulePass {
     add(llvm::createFunctionOutliningPass(Options.get()));
 
     add(llvm::createConstantIntEncryptionPass(Options.get()));
+    add(llvm::createOpaqueConstantPass(Options.get()));
 
     add(llvm::createIndirectGlobalVariablePass(Options.get()));
 

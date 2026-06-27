@@ -293,6 +293,7 @@ protected:
   std::shared_ptr<ObfOpt> RttiOpt = nullptr;
   std::shared_ptr<ObfOpt> MetaOpt = nullptr;
   std::shared_ptr<ObfOpt> VmpOpt = nullptr;
+  std::shared_ptr<ObfOpt> OcnstOpt = nullptr;
   uint32_t VmpAntiTraceMode = 0;
 
   SmallString<32> RandomSeed;
@@ -313,6 +314,7 @@ public:
     allOpt.push_back(RttiOpt);
     allOpt.push_back(MetaOpt);
     allOpt.push_back(VmpOpt);
+    allOpt.push_back(OcnstOpt);
     return allOpt;
   }
 
@@ -329,7 +331,8 @@ public:
                      const std::shared_ptr<ObfOpt> &dynOpt,
                      const std::shared_ptr<ObfOpt> &rttiOpt,
                      const std::shared_ptr<ObfOpt> &metaOpt,
-                     const std::shared_ptr<ObfOpt> &vmpOpt) {
+                     const std::shared_ptr<ObfOpt> &vmpOpt,
+                     const std::shared_ptr<ObfOpt> &ocnstOpt) {
     this->IndBrOpt = indBrOpt;
     this->ICallOpt = iCallOpt;
     this->IndGvOpt = indGvOpt;
@@ -344,6 +347,7 @@ public:
     this->RttiOpt = rttiOpt;
     this->MetaOpt = metaOpt;
     this->VmpOpt = vmpOpt;
+    this->OcnstOpt = ocnstOpt;
   }
 
   ObfuscationOptions()
@@ -360,7 +364,8 @@ public:
                            std::make_shared<ObfOpt>("dyn"),
                            std::make_shared<ObfOpt>("rtti"),
                            std::make_shared<ObfOpt>("meta"),
-                           std::make_shared<ObfOpt>("vmp")} {}
+                           std::make_shared<ObfOpt>("vmp"),
+                           std::make_shared<ObfOpt>("ocnst")} {}
 
   auto indBrOpt() const { return IndBrOpt; }
 
@@ -389,6 +394,8 @@ public:
   auto metaOpt() const { return MetaOpt; }
 
   auto vmpOpt() const { return VmpOpt; }
+
+  auto ocnstOpt() const { return OcnstOpt; }
 
   void setVmpAntiTraceMode(uint32_t Mode) {
     VmpAntiTraceMode = Mode <= 3 ? Mode : 0;

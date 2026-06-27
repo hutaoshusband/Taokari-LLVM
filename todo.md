@@ -109,7 +109,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 
 ## 1.2 Constants / Globals / Branches
 
-- [ ] Add opaque constant pass.
+- [x] Add opaque constant pass.
 - [ ] Add context-dependent constants.
 - [x] Add per-function constant pool.
 - [x] Add encrypted constant pool.

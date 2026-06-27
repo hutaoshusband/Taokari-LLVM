@@ -19,6 +19,7 @@ add_llvm_component_library(LLVMObfuscation
   MetadataHygiene.cpp
   NativeIntegrity.cpp
   DynamicProtection.cpp
+  OpaqueConstant.cpp
   
   COMPONENT_NAME
   Obfuscation
