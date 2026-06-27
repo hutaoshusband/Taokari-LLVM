@@ -18,7 +18,9 @@ or by `noobf`.
 | Flag                              | Purpose                                                  |
 | --------------------------------- | -------------------------------------------------------- |
 | `-mllvm -taokari`                 | Master IR obfuscation switch (alias of `-irobf`).        |
-| `-mllvm -taokari-max`             | Taokari Max Protection profile (all passes on, level 4). |
+| `-mllvm -taokari-max`             | Taokari Max Protection profile (all passes on, level 4). Budgeted: see "Max Protection + VMP budget". |
+| `-mllvm -taokari-max-no-vmp`      | Under `-taokari-max`: force VMP off, keep every other max-strength pass on. |
+| `-mllvm -taokari-max-no-<p>`      | Under `-taokari-max`: disable one pass family. `<p>` = `fla`, `mba`, `const`, `indirects`, `bcf-before`, `bcf-after`. |
 | `-mllvm -taokari-cfg=<path>`      | Load JSON config from `<path>`.                          |
 | `-mllvm -taokari-vmp`             | Enable code virtualisation (off by default).             |
 | `-mllvm -taokari-vmp-padding=N`   | Probability (0..100) of inserting pad opcodes in VM bytecode. |
@@ -314,6 +316,14 @@ function becomes a VM candidate). Two mechanisms keep that safe:
    pass at L4/prob 100 but force VMP off entirely. The compile cannot hang
    on per-function VM work. This is what `build_strong.bat` (Tier B)
    relies on implicitly by not enabling VMP at all.
+
+   Under `-taokari-max-no-vmp` the VMP *pass* is off, but the annotation
+   opt-in is not — a function marked `+vmp` is still virtualised, because
+   the annotation force-enables the pass for that one function only. So the
+   recommended shape under Max Protection is: pass `-taokari-max-no-vmp`
+   (global blanket off) plus annotate a small set of sensitive functions
+   with `+vmp` (targeted opt-in). The budget caps below still gate each
+   `+vmp` function, so a runaway candidate is skipped, not a hang.
 
 2. **VMP budget caps** — these three knobs now default *on* and refuse
    functions that would blow up compile time or runtime. A refused
