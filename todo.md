@@ -103,7 +103,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 ## 1.1 Control Flow / BCF / MBA
 
 - [x] 🚧 Finish BCF L3 multi-layer bogus graphs.
-- [ ] 🚧 Add fake exception-looking BCF regions where safe.
+- [x] 🚧 Add fake exception-looking BCF regions where safe.
 - [x] 🚧 Integrate BCF fake regions with flattening dispatcher fake cases.
 - [x] 🚧 Add MBA on flattening dispatch-state updates.
 

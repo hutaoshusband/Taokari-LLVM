@@ -95,7 +95,8 @@ struct BogusControlFlow : public FunctionPass {
 
   static bool isGeneratedBCFBlock(BasicBlock &BB) {
     StringRef Name = BB.getName();
-    return Name.contains(".bcf.guard") || Name.contains(".bcf.fake");
+    return Name.contains(".bcf.guard") || Name.contains(".bcf.fake")
+        || Name.contains(".bcf.exh");
   }
 
   bool obfuscateBlock(Function &F, BasicBlock &BB, uint32_t Level,
@@ -199,6 +200,10 @@ struct BogusControlFlow : public FunctionPass {
       CurrentTarget = Guard;
     }
 
+    if (Level >= 3 && !F.hasPersonalityFn() && (FuncRNG() % 2)) {
+      emitFakeExceptionRegion(F, CurrentTarget, BB, *Nonce, FuncRNG);
+    }
+
     Pred->getTerminator()->replaceSuccessorWith(&BB, CurrentTarget);
     return true;
   }
@@ -260,6 +265,51 @@ struct BogusControlFlow : public FunctionPass {
   static AllocaInst *createEntrySlot(Function &F, Type *Ty) {
     IRBuilder<> IRB(&*F.getEntryBlock().getFirstInsertionPt());
     return IRB.CreateAlloca(Ty, nullptr, "bcf.dead.slot");
+  }
+
+  void emitFakeExceptionRegion(Function &F, BasicBlock *&Entry,
+                               BasicBlock &Real, GlobalVariable &Nonce,
+                               std::mt19937_64 &FuncRNG) {
+    LLVMContext &Ctx = F.getContext();
+    auto *Int64 = Type::getInt64Ty(Ctx);
+    Module &M = *F.getParent();
+
+    BasicBlock *Exh = BasicBlock::Create(
+        Ctx, F.getName() + ".bcf.exh", &F, &Real);
+    IRBuilder<> EIRB(Exh);
+    auto *RecSlot = new GlobalVariable(
+        M, Int64, false, GlobalValue::PrivateLinkage,
+        ConstantInt::get(Int64, FuncRNG()),
+        Twine(F.getName()) + ".bcf.exh.rec");
+    RecSlot->setAlignment(Align(8));
+    Value *Rec = EIRB.CreateAlignedLoad(Int64, RecSlot, Align(8), true,
+                                        "bcf.exh.rec.ld");
+    Value *Code = EIRB.CreateAnd(Rec, ConstantInt::get(Int64, 0xFFFF),
+                                 "bcf.exh.code");
+    Value *Addr = EIRB.CreateAlignedLoad(Int64, &Nonce, Align(8), true,
+                                         "bcf.exh.frame");
+    Value *Mix = EIRB.CreateXor(Addr, Code, "bcf.exh.mix");
+    EIRB.CreateStore(Mix, RecSlot);
+    Function *Cleanup = getOrCreateCleanupStub(M);
+    EIRB.CreateCall(FunctionType::get(Type::getVoidTy(Ctx), false), Cleanup);
+    EIRB.CreateBr(&Real);
+
+    BasicBlock *Gate = BasicBlock::Create(
+        Ctx, F.getName() + ".bcf.exh.gate", &F, Exh);
+    IRBuilder<> GIRB(Gate);
+    taokari::OpaqueSeedKind SeedKind = taokari::OpaqueSeedKind::Global;
+    switch (FuncRNG() % 4) {
+    case 0: SeedKind = taokari::OpaqueSeedKind::StackAddress; break;
+    case 1: SeedKind = taokari::OpaqueSeedKind::Pointer; break;
+    case 2: SeedKind = taokari::OpaqueSeedKind::Environment; break;
+    default: break;
+    }
+    Value *Seed = taokari::makeContextSeed(F, GIRB, Int64, FuncRNG, SeedKind,
+                                           "bcf.exh.seed");
+    Value *False = taokari::makeUnfoldableFalsePredicate(GIRB, Seed, FuncRNG,
+                                                         "bcf.exh.opaque");
+    GIRB.CreateCondBr(False, Exh, Entry);
+    Entry = Gate;
   }
 
   static void sanitizeFake(BasicBlock &Fake) {
