@@ -643,10 +643,38 @@ static const char *const MirDirtyStackDecGuardBytes =
     "0xaf,0xc1,0xa8,0x01,0x74,0x08,0x0f,0x0b,0xeb,0xfe,0xcc,0xf1,0x0f,"
     "0x0b,0x59,0x58,0x9d";
 
+static const char *const MirDirtyShiftGuardBytes =
+    ".byte 0x9c,0x50,0x51,0x48,0x89,0xe0,0x48,0xd1,0xe0,0xa8,0x01,0x74,0x08,"
+    "0x0f,0x0b,0xeb,0xfe,0xcc,0xf1,0x0f,0x0b,0x59,0x58,0x9d";
+
 static const char *selectDirtyGuardBytes(StringRef FunctionName) {
-  return (static_cast<size_t>(hash_value(FunctionName)) & 1)
-             ? MirDirtyStackDecGuardBytes
-             : MirDirtyStackGuardBytes;
+  switch (static_cast<size_t>(hash_value(FunctionName)) % 3) {
+  default:
+    return MirDirtyStackGuardBytes;
+  case 1:
+    return MirDirtyStackDecGuardBytes;
+  case 2:
+    return MirDirtyShiftGuardBytes;
+  }
+}
+
+static const char *const MirSubAddLeaBytes =
+    ".byte 0x9c,0x50,0x48,0x89,0xe0,0x48,0x8d,0x40,0x13,0x48,0x83,0xe8,0x13,"
+    "0x58,0x9d";
+static const char *const MirSubDoubleNegBytes =
+    ".byte 0x9c,0x50,0x48,0xf7,0xd8,0x48,0xf7,0xd8,0x58,0x9d";
+static const char *const MirSubDoubleNotBytes =
+    ".byte 0x9c,0x50,0x48,0xf7,0xd0,0x48,0xf7,0xd0,0x58,0x9d";
+
+static const char *selectSubstitutionBytes(StringRef FunctionName) {
+  switch (static_cast<size_t>(hash_value(FunctionName)) % 3) {
+  default:
+    return MirSubAddLeaBytes;
+  case 1:
+    return MirSubDoubleNegBytes;
+  case 2:
+    return MirSubDoubleNotBytes;
+  }
 }
 
 // Scatter the +mir:sse nonce guard across the function BODY (not just entry).
@@ -740,8 +768,7 @@ bool TaokariMachineObf::run(MachineFunction &MF) {
   // side-effecting machine code below the IR layer.
   if (Passes.Substitution)
     insertSideEffectAsm(*InsertMBB, InsertMBB->begin(), *TII,
-                        ".byte 0x9c,0x50,0x48,0x89,0xe0,0x48,0x8d,0x40,"
-                        "0x13,0x48,0x83,0xe8,0x13,0x58,0x9d");
+                        selectSubstitutionBytes(MF.getName()));
   if (Passes.Junk)
     insertSideEffectAsm(*InsertMBB, InsertMBB->begin(), *TII,
                         ".byte 0x9c,0x50,0x80,0x34,0x24,0x5a,0x80,0x34,"

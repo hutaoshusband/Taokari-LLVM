@@ -288,8 +288,8 @@ Goal: make protection survive below the IR layer and keep decompilers from repai
 
 ## C3. MIR Decompiler Resistance
 
-- [ ] Add more anti-microcode instruction substitutions.
-- [ ] Add architecture-safe dirty-byte patterns.
+- [x] Add more anti-microcode instruction substitutions.
+- [x] Add architecture-safe dirty-byte patterns.
 - [ ] Add function-boundary confusion variants.
 - [ ] Add fake call/prologue patterns where safe.
 - [ ] 🧪 Add IDA snapshot comparison.

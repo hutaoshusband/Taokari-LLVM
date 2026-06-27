@@ -22,7 +22,10 @@ DIRTY_STACK = bytes.fromhex(
 DIRTY_STACK_DEC = bytes.fromhex(
     "9c 50 51 48 89 e0 48 8d 48 ff 48 0f af c1 a8 01 74 08 0f 0b eb fe cc f1 0f 0b 59 58 9d"
 )
-DIRTY_GUARDS = (DIRTY_STACK, DIRTY_STACK_DEC)
+DIRTY_SHIFT = bytes.fromhex(
+    "9c 50 51 48 89 e0 48 d1 e0 a8 01 74 08 0f 0b eb fe cc f1 0f 0b 59 58 9d"
+)
+DIRTY_GUARDS = (DIRTY_STACK, DIRTY_STACK_DEC, DIRTY_SHIFT)
 OLD_DOUBLE_XOR_DIRTY = bytes.fromhex(
     "9c 50 8a 04 24 34 a7 34 a7 3a 04 24 74 08 0f 0b eb fe cc f1 0f 0b 58 9d"
 )
