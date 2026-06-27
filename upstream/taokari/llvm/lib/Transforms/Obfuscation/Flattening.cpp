@@ -513,6 +513,39 @@ bool Flattening::flatten(Function *f) {
       fakeCaseTarget = Clone;
       ++cloned;
     }
+
+    SmallVector<BasicBlock *, 8> BcfFakes;
+    for (BasicBlock &BB : *f) {
+      StringRef Name = BB.getName();
+      if (!Name.contains(".bcf.fake")) {
+        continue;
+      }
+      if (BB.isEHPad() || BB.empty()) {
+        continue;
+      }
+      auto *Term = dyn_cast<BranchInst>(BB.getTerminator());
+      if (!Term || Term->isConditional()) {
+        continue;
+      }
+      BasicBlock *Succ = Term->getSuccessor(0);
+      if (!Succ || Succ->getName().contains(".bcf.fake")) {
+        continue;
+      }
+      BcfFakes.push_back(&BB);
+    }
+    if (!BcfFakes.empty()) {
+      std::shuffle(BcfFakes.begin(), BcfFakes.end(), RNG);
+      unsigned chained = 0;
+      for (BasicBlock *BcfFake : BcfFakes) {
+        if (chained >= 4) {
+          break;
+        }
+        auto *Term = cast<BranchInst>(BcfFake->getTerminator());
+        Term->setSuccessor(0, fakeCaseTarget);
+        fakeCaseTarget = BcfFake;
+        ++chained;
+      }
+    }
   }
 
   // Remove branch jump from 1st BB and make a jump to the while
