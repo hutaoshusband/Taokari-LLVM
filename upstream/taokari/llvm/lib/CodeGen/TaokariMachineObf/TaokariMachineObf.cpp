@@ -137,6 +137,20 @@ static cl::opt<bool> TaokariMirVerbose(
              "and inserted transforms (default: off). Opt-in: release builds "
              "stay silent unless this or -debug-only=taokari-mir is set."));
 
+static cl::opt<bool> TaokariMirReleaseVerify(
+    "taokari-mir-release-verify", cl::init(true), cl::NotHidden,
+    cl::desc("Run the MachineVerifier after MIR transformation in release "
+             "builds and report any failure (default: on). On failure the pass "
+             "cannot retroactively undo the transform, so the pre-emit safety "
+             "gate (assessMirSafety) is what guarantees no corrupted output; "
+             "this flag is the belt-and-suspenders post-condition."));
+
+static cl::opt<bool> TaokariMirStrict(
+    "taokari-mir-strict", cl::init(false), cl::NotHidden,
+    cl::desc("Convert a post-transform verifier failure into a hard abort "
+             "(default: off). CI/lab use only: catches regressions that would "
+             "otherwise be reported but not fatal."));
+
 struct MirSubpasses {
   bool Marker = false;
   bool DirtyBytes = false;
@@ -688,6 +702,20 @@ bool TaokariMachineObf::run(MachineFunction &MF) {
   // microcode lifter actually operates.
   if (Passes.Sse)
     scatterSseGuards(MF, *TII);
+
+  if (TaokariMirReleaseVerify) {
+    SmallString<64> Banner;
+    raw_svector_ostream(Banner)
+        << "taokari-mir post-transform verify: " << MF.getName();
+    if (!MF.verify(nullptr, Banner.c_str(), &errs(), false)) {
+      errs() << "taokari-mir: verifier failure after transforming "
+             << MF.getName() << " (re-run with -mllvm -taokari-mir-strict "
+             << "to make this fatal)\n";
+      if (TaokariMirStrict)
+        report_fatal_error("Taokari MIR verifier failure in " +
+                           MF.getName());
+    }
+  }
 
   LLVM_DEBUG(dbgs() << "taokari-mir: inserted MIR obfuscation in "
                     << MF.getName() << "\n");
