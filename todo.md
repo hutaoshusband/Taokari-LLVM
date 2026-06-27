@@ -102,7 +102,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 
 ## 1.1 Control Flow / BCF / MBA
 
-- [ ] 🚧 Finish BCF L3 multi-layer bogus graphs.
+- [x] 🚧 Finish BCF L3 multi-layer bogus graphs.
 - [ ] 🚧 Add fake exception-looking BCF regions where safe.
 - [ ] 🚧 Integrate BCF fake regions with flattening dispatcher fake cases.
 - [ ] 🚧 Add MBA on flattening dispatch-state updates.
@@ -437,7 +437,7 @@ This is the “do this next without thinking too much” queue.
 2. [x] Finish MIR config keys per sub-pass.
 3. [x] Add per-function VMP overhead budget.
 4. [x] Add VMP decompiler snapshot verifier that skips if IDA/Ghidra is unavailable.
-5. [ ] Add BCF multi-layer bogus graphs.
+5. [x] Add BCF multi-layer bogus graphs.
 6. [ ] Add BCF dispatcher fake-case integration.
 7. [ ] Add MBA on flattening dispatch-state updates.
 8. [ ] Add constant encryption per-function pool.

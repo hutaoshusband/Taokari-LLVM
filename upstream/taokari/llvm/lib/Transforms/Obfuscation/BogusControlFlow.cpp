@@ -110,79 +110,96 @@ struct BogusControlFlow : public FunctionPass {
     auto *Nonce = getOrCreateNonce(M, Int64);
     auto *JunkSlot = createEntrySlot(F, Int64);
 
-    BasicBlock *Guard =
-        BasicBlock::Create(Ctx, BB.getName() + ".bcf.guard", &F, &BB);
-
     ValueToValueMapTy VMap;
     BasicBlock *Fake = CloneBasicBlock(&BB, VMap, ".bcf.fake", &F);
     sanitizeFake(*Fake);
     if (Level >= 2)
       mutateFake(*Fake, Level, FuncRNG);
-    addJunk(*Fake, BB, *Nonce, *JunkSlot, Loops, Level, FuncRNG);
 
-    Pred->getTerminator()->replaceSuccessorWith(&BB, Guard);
+    unsigned Layers = Level >= 4 ? 3 : (Level >= 3 ? 2 : 1);
+    BasicBlock *CurrentTarget = &BB;
+    for (unsigned Layer = Layers; Layer >= 1; --Layer) {
+      BasicBlock *Guard = BasicBlock::Create(
+          Ctx, BB.getName() + ".bcf.guard" + Twine(Layer), &F, CurrentTarget);
 
-    IRBuilder<> GuardIR(Guard);
-    Value *Opaque = nullptr;
-    if (Level >= 2) {
-      taokari::OpaqueSeedKind SeedKind = taokari::OpaqueSeedKind::Global;
-      switch (FuncRNG() % 5) {
-      case 0:
-        SeedKind = taokari::OpaqueSeedKind::Pointer;
-        break;
-      case 1:
-        SeedKind = taokari::OpaqueSeedKind::StackAddress;
-        break;
-      case 2:
-        SeedKind = taokari::OpaqueSeedKind::Environment;
-        break;
-      case 3:
-        SeedKind = taokari::OpaqueSeedKind::RuntimeNonce;
-        break;
-      default:
-        break;
+      IRBuilder<> GuardIR(Guard);
+      Value *Opaque = nullptr;
+      if (Level >= 2) {
+        taokari::OpaqueSeedKind SeedKind = taokari::OpaqueSeedKind::Global;
+        switch (FuncRNG() % 5) {
+        case 0:
+          SeedKind = taokari::OpaqueSeedKind::Pointer;
+          break;
+        case 1:
+          SeedKind = taokari::OpaqueSeedKind::StackAddress;
+          break;
+        case 2:
+          SeedKind = taokari::OpaqueSeedKind::Environment;
+          break;
+        case 3:
+          SeedKind = taokari::OpaqueSeedKind::RuntimeNonce;
+          break;
+        default:
+          break;
+        }
+        Value *Seed = taokari::makeContextSeed(
+            F, GuardIR, Int64, FuncRNG, SeedKind, "bcf.seed");
+        Opaque = taokari::makeUnfoldableTruePredicate(GuardIR, Seed, FuncRNG,
+                                                      "bcf.opaque");
+      } else {
+        auto *Load = GuardIR.CreateAlignedLoad(Int64, Nonce, Align(8), true,
+                                               "bcf.nonce");
+        Value *A = GuardIR.CreateMul(
+            Load, GuardIR.CreateAdd(Load, ConstantInt::get(Int64, 1)),
+            "bcf.opaque.mul");
+        Opaque = GuardIR.CreateICmpEQ(
+            GuardIR.CreateAnd(A, ConstantInt::get(Int64, 1), "bcf.opaque.bit"),
+            ConstantInt::get(Int64, 0), "bcf.opaque");
       }
-      Value *Seed = taokari::makeContextSeed(
-          F, GuardIR, Int64, FuncRNG, SeedKind, "bcf.seed");
-      Opaque = taokari::makeUnfoldableTruePredicate(GuardIR, Seed, FuncRNG,
-                                                    "bcf.opaque");
-    } else {
-      auto *Load =
-          GuardIR.CreateAlignedLoad(Int64, Nonce, Align(8), true, "bcf.nonce");
-      Value *A = GuardIR.CreateMul(
-          Load, GuardIR.CreateAdd(Load, ConstantInt::get(Int64, 1)),
-          "bcf.opaque.mul");
-      Opaque = GuardIR.CreateICmpEQ(
-          GuardIR.CreateAnd(A, ConstantInt::get(Int64, 1), "bcf.opaque.bit"),
-          ConstantInt::get(Int64, 0), "bcf.opaque");
-    }
-    if (Level >= 3 && (FuncRNG() % 2)) {
-      auto *I64 = Type::getInt64Ty(Ctx);
-      auto *I32 = Type::getInt32Ty(Ctx);
-      Value *Seed = GuardIR.CreateAlignedLoad(I64, Nonce, Align(8), true,
-                                              "bcf.sw.seed");
-      Value *Idx = GuardIR.CreateAnd(Seed, ConstantInt::get(I64, 3),
-                                     "bcf.sw.idx");
-      Value *Bias = GuardIR.CreateSub(ConstantInt::get(I64, 1), Idx, "bcf.sw.bias");
-      Value *Real = GuardIR.CreateAdd(Idx, Bias, "bcf.sw.real");
-      Value *Sel = GuardIR.CreateTrunc(Real, I32, "bcf.sel");
-      auto *Sw = GuardIR.CreateSwitch(Sel, Fake, 1);
-      Sw->addCase(ConstantInt::get(I32, 1), &BB);
-      Function *ErrStub = getOrCreateErrorStub(M);
-      Function *CleanupStub = getOrCreateCleanupStub(M);
-      unsigned Extra = 1 + (FuncRNG() % 3);
-      for (unsigned I = 0; I < Extra; ++I) {
-        BasicBlock *Path = BasicBlock::Create(
-            Ctx, BB.getName() + ".bcf.fakepath", &F, &BB);
-        IRBuilder<> E(Path);
-        Function *Stub = (FuncRNG() & 1) ? ErrStub : CleanupStub;
-        E.CreateCall(FunctionType::get(Type::getVoidTy(Ctx), false), Stub);
-        E.CreateBr(&BB);
-        Sw->addCase(ConstantInt::get(I32, static_cast<uint32_t>(2 + I)), Path);
+
+      BasicBlock *InnerFake = Fake;
+      if (Layer == 1) {
+        addJunk(*Fake, CurrentTarget, *Nonce, *JunkSlot, Loops, Level, FuncRNG);
+      } else {
+        InnerFake = BasicBlock::Create(
+            Ctx, BB.getName() + ".bcf.fake.layer" + Twine(Layer), &F,
+            CurrentTarget);
+        addJunk(*InnerFake, CurrentTarget, *Nonce, *JunkSlot, Loops, Level,
+                FuncRNG);
       }
-    } else {
-      GuardIR.CreateCondBr(Opaque, &BB, Fake);
+
+      if (Layer == 1 && Level >= 3 && (FuncRNG() % 2)) {
+        auto *I64 = Type::getInt64Ty(Ctx);
+        auto *I32 = Type::getInt32Ty(Ctx);
+        Value *Seed = GuardIR.CreateAlignedLoad(I64, Nonce, Align(8), true,
+                                                "bcf.sw.seed");
+        Value *Idx = GuardIR.CreateAnd(Seed, ConstantInt::get(I64, 3),
+                                       "bcf.sw.idx");
+        Value *Bias = GuardIR.CreateSub(ConstantInt::get(I64, 1), Idx,
+                                        "bcf.sw.bias");
+        Value *Real = GuardIR.CreateAdd(Idx, Bias, "bcf.sw.real");
+        Value *Sel = GuardIR.CreateTrunc(Real, I32, "bcf.sel");
+        auto *Sw = GuardIR.CreateSwitch(Sel, InnerFake, 1);
+        Sw->addCase(ConstantInt::get(I32, 1), CurrentTarget);
+        Function *ErrStub = getOrCreateErrorStub(M);
+        Function *CleanupStub = getOrCreateCleanupStub(M);
+        unsigned Extra = 1 + (FuncRNG() % 3);
+        for (unsigned I = 0; I < Extra; ++I) {
+          BasicBlock *Path = BasicBlock::Create(
+              Ctx, BB.getName() + ".bcf.fakepath", &F, CurrentTarget);
+          IRBuilder<> E(Path);
+          Function *Stub = (FuncRNG() & 1) ? ErrStub : CleanupStub;
+          E.CreateCall(FunctionType::get(Type::getVoidTy(Ctx), false), Stub);
+          E.CreateBr(CurrentTarget);
+          Sw->addCase(ConstantInt::get(I32, static_cast<uint32_t>(2 + I)), Path);
+        }
+      } else {
+        GuardIR.CreateCondBr(Opaque, CurrentTarget, InnerFake);
+      }
+      CurrentTarget = Guard;
     }
+
+    Pred->getTerminator()->replaceSuccessorWith(&BB, CurrentTarget);
     return true;
   }
 
@@ -280,14 +297,14 @@ struct BogusControlFlow : public FunctionPass {
     }
   }
 
-  void addJunk(BasicBlock &Fake, BasicBlock &Real, GlobalVariable &Nonce,
-               AllocaInst &JunkSlot, uint32_t Loops, uint32_t Level,
-               std::mt19937_64 &FuncRNG) {
+  void addJunk(BasicBlock &Fake, BasicBlock *BranchTarget,
+               GlobalVariable &Nonce, AllocaInst &JunkSlot, uint32_t Loops,
+               uint32_t Level, std::mt19937_64 &FuncRNG) {
     auto *Int64 = Type::getInt64Ty(Fake.getContext());
 
     bool InEHFunction = Fake.getParent()->hasPersonalityFn();
     if (Level >= 3 && Loops > 1 && !InEHFunction) {
-      addJunkLoop(Fake, Real, Nonce, JunkSlot, Loops, FuncRNG);
+      addJunkLoop(Fake, BranchTarget, Nonce, JunkSlot, Loops, FuncRNG);
       return;
     }
 
@@ -317,11 +334,11 @@ struct BogusControlFlow : public FunctionPass {
     }
     IRB.CreateStore(V, &JunkSlot);
     IRB.CreateAlignedStore(V, &JunkSlot, Align(8), true);
-    IRB.CreateBr(&Real);
+    IRB.CreateBr(BranchTarget);
   }
 
-  void addJunkLoop(BasicBlock &Fake, BasicBlock &Real, GlobalVariable &Nonce,
-                   AllocaInst &JunkSlot, uint32_t Loops,
+  void addJunkLoop(BasicBlock &Fake, BasicBlock *BranchTarget,
+                   GlobalVariable &Nonce, AllocaInst &JunkSlot, uint32_t Loops,
                    std::mt19937_64 &FuncRNG) {
     auto *Int64 = Type::getInt64Ty(Fake.getContext());
     auto *Int32 = Type::getInt32Ty(Fake.getContext());
@@ -342,13 +359,13 @@ struct BogusControlFlow : public FunctionPass {
 
     BasicBlock *LoopHdr =
         BasicBlock::Create(Fake.getContext(), "bcf.fake.loop.hdr",
-                           Fake.getParent(), &Real);
+                           Fake.getParent(), BranchTarget);
     BasicBlock *LoopBody =
         BasicBlock::Create(Fake.getContext(), "bcf.fake.loop.body",
-                           Fake.getParent(), &Real);
+                           Fake.getParent(), BranchTarget);
     BasicBlock *LoopExit =
         BasicBlock::Create(Fake.getContext(), "bcf.fake.loop.exit",
-                           Fake.getParent(), &Real);
+                           Fake.getParent(), BranchTarget);
     Entry.CreateBr(LoopHdr);
 
     IRBuilder<> Hdr(LoopHdr);
@@ -374,7 +391,7 @@ struct BogusControlFlow : public FunctionPass {
     Value *FinalAcc = Exit.CreateLoad(Int64, AccSlot, "bcf.fake.final");
     Exit.CreateStore(FinalAcc, &JunkSlot);
     Exit.CreateAlignedStore(FinalAcc, &JunkSlot, Align(8), true);
-    Exit.CreateBr(&Real);
+    Exit.CreateBr(BranchTarget);
   }
 
   static Function *getOrCreateJunkFunction(Module &M,
