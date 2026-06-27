@@ -292,8 +292,8 @@ Goal: make protection survive below the IR layer and keep decompilers from repai
 - [x] Add architecture-safe dirty-byte patterns.
 - [x] Add function-boundary confusion variants.
 - [x] Add fake call/prologue patterns where safe.
-- [ ] 🧪 Add IDA snapshot comparison.
-- [ ] 🧪 Add Ghidra headless snapshot comparison.
+- [x] 🧪 Add IDA snapshot comparison.
+- [x] 🧪 Add Ghidra headless snapshot comparison.
 - [x] 🧪 Add binary-level metric for function boundary fragmentation.
 
 ---
