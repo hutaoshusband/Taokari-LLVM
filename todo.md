@@ -290,11 +290,11 @@ Goal: make protection survive below the IR layer and keep decompilers from repai
 
 - [x] Add more anti-microcode instruction substitutions.
 - [x] Add architecture-safe dirty-byte patterns.
-- [ ] Add function-boundary confusion variants.
-- [ ] Add fake call/prologue patterns where safe.
+- [x] Add function-boundary confusion variants.
+- [x] Add fake call/prologue patterns where safe.
 - [ ] 🧪 Add IDA snapshot comparison.
 - [ ] 🧪 Add Ghidra headless snapshot comparison.
-- [ ] 🧪 Add binary-level metric for function boundary fragmentation.
+- [x] 🧪 Add binary-level metric for function boundary fragmentation.
 
 ---
 
