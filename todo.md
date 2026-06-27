@@ -280,7 +280,7 @@ Goal: make protection survive below the IR layer and keep decompilers from repai
 
 ## C2. MIR Safety
 
-- [ ] Add liveness regression tests for every MIR sub-pass.
+- [x] Add liveness regression tests for every MIR sub-pass.
 - [x] Add post-RA verifier gate to release mode.
 - [x] Add fallback when a machine function is unsafe for MIR transformation.
 - [x] Add crash reproducer minimizer for MIR failures.
