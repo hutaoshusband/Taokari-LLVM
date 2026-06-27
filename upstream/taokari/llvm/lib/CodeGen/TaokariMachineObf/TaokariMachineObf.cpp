@@ -29,6 +29,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -296,6 +297,60 @@ static bool annotationHas(StringRef Annotation, StringRef Needle) {
   return Annotation.contains(Needle);
 }
 
+struct MirSubpassName {
+  StringRef Canonical;
+  bool *Flag;
+  SmallVector<StringRef, 4> Aliases;
+};
+
+static SmallVector<MirSubpassName> mirSubpassNames(MirSubpasses &P) {
+  return {
+      {"dirtybytes", &P.DirtyBytes, {"dirtybytes", "dirty"}},
+      {"junk", &P.Junk, {"junk"}},
+      {"sub", &P.Substitution, {"sub", "subst", "substitution"}},
+      {"unmodelled", &P.Unmodelled,
+       {"unmodelled", "unmodeled", "privileged", "simd"}},
+      {"sse", &P.Sse, {"sse", "simdbody", "anti-lift", "antilift"}},
+      {"fakeprologue", &P.FakeBounds,
+       {"fakebounds", "fakeboundaries", "fakeprologue", "fakeprologues"}},
+      {"split", &P.FunctionSplit,
+       {"split", "functionsplit", "functionsplitting", "boundary"}},
+  };
+}
+
+static StringSet<> mirKnownSubpassAliases() {
+  StringSet<> Known;
+  MirSubpasses Unused;
+  for (const MirSubpassName &N : mirSubpassNames(Unused))
+    for (StringRef A : N.Aliases)
+      Known.insert(A);
+  Known.insert("marker");
+  return Known;
+}
+
+static void applySubpassToken(StringRef Sign, StringRef Name, bool Enable,
+                              MirSubpasses &P) {
+  bool Matched = false;
+  for (const MirSubpassName &N : mirSubpassNames(P)) {
+    for (StringRef A : N.Aliases) {
+      if (A != Name)
+        continue;
+      *N.Flag = Enable;
+      Matched = true;
+      break;
+    }
+    if (Matched)
+      break;
+  }
+  if (Matched)
+    return;
+  static const StringSet<> Known = mirKnownSubpassAliases();
+  if (Known.contains(Name))
+    return;
+  errs() << "warning: taokari-mir: unknown " << Sign << "mir:" << Name
+         << " annotation\n";
+}
+
 static MirSubpasses resolveSubpasses(const Function &F) {
   MirSubpasses Passes = parseMirFlag();
   if (F.isDeclaration() || F.hasAvailableExternallyLinkage())
@@ -309,48 +364,21 @@ static MirSubpasses resolveSubpasses(const Function &F) {
       EnableAll = true;
     if (annotationHas(A, "-mir") && !annotationHas(A, "-mir:"))
       DisableAll = true;
-    if (annotationHas(A, "+mir:dirtybytes"))
-      Passes.DirtyBytes = true;
-    if (annotationHas(A, "+mir:junk"))
-      Passes.Junk = true;
-    if (annotationHas(A, "+mir:sub"))
-      Passes.Substitution = true;
-    if (annotationHas(A, "+mir:unmodelled") ||
-        annotationHas(A, "+mir:unmodeled"))
-      Passes.Unmodelled = true;
-    if (annotationHas(A, "+mir:sse"))
-      Passes.Sse = true;
-    if (annotationHas(A, "+mir:fakebounds") ||
-        annotationHas(A, "+mir:fakeboundaries") ||
-        annotationHas(A, "+mir:fakeprologue") ||
-        annotationHas(A, "+mir:fakeprologues"))
-      Passes.FakeBounds = true;
-    if (annotationHas(A, "+mir:split") ||
-        annotationHas(A, "+mir:functionsplit") ||
-        annotationHas(A, "+mir:functionsplitting") ||
-        annotationHas(A, "+mir:boundary"))
-      Passes.FunctionSplit = true;
-    if (annotationHas(A, "-mir:dirtybytes"))
-      Passes.DirtyBytes = false;
-    if (annotationHas(A, "-mir:junk"))
-      Passes.Junk = false;
-    if (annotationHas(A, "-mir:sub"))
-      Passes.Substitution = false;
-    if (annotationHas(A, "-mir:unmodelled") ||
-        annotationHas(A, "-mir:unmodeled"))
-      Passes.Unmodelled = false;
-    if (annotationHas(A, "-mir:sse"))
-      Passes.Sse = false;
-    if (annotationHas(A, "-mir:fakebounds") ||
-        annotationHas(A, "-mir:fakeboundaries") ||
-        annotationHas(A, "-mir:fakeprologue") ||
-        annotationHas(A, "-mir:fakeprologues"))
-      Passes.FakeBounds = false;
-    if (annotationHas(A, "-mir:split") ||
-        annotationHas(A, "-mir:functionsplit") ||
-        annotationHas(A, "-mir:functionsplitting") ||
-        annotationHas(A, "-mir:boundary"))
-      Passes.FunctionSplit = false;
+
+    const size_t PlusPos = A.find("+mir:");
+    if (PlusPos != StringRef::npos) {
+      StringRef Rest = A.substr(PlusPos + 5);
+      StringRef Name = Rest.take_while(
+          [](char C) { return C != ' ' && C != ',' && C != '"' && C != '\0'; });
+      applySubpassToken("+", Name, true, Passes);
+    }
+    const size_t MinusPos = A.find("-mir:");
+    if (MinusPos != StringRef::npos) {
+      StringRef Rest = A.substr(MinusPos + 5);
+      StringRef Name = Rest.take_while(
+          [](char C) { return C != ' ' && C != ',' && C != '"' && C != '\0'; });
+      applySubpassToken("-", Name, false, Passes);
+    }
   }
 
   if (EnableAll && DisableAll) {

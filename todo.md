@@ -275,7 +275,7 @@ Goal: make protection survive below the IR layer and keep decompilers from repai
 - [x] Add probability config for `sub`.
 - [x] Add probability config for `split`.
 - [x] Add probability config for `fakeprologue`.
-- [ ] Add per-function annotation parsing for MIR sub-pass selection.
+- [x] Add per-function annotation parsing for MIR sub-pass selection.
 - [ ] 🧪 Add config validation tests.
 
 ## C2. MIR Safety
