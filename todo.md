@@ -367,15 +367,15 @@ Goal: make Taokari easy to use without turning protection into an all-or-nothing
 
 ## E3. Config Generator
 
-- [ ] Add `taokari-config-wizard.py`.
-- [ ] Ask for target platform.
-- [ ] Ask for protection goal.
-- [ ] Ask for performance budget.
-- [ ] Ask whether VMP should be allowed.
-- [ ] Generate JSON config.
-- [ ] Generate suggested Clang flags.
-- [ ] Generate annotation guide.
-- [ ] Generate expected test command.
+- [x] Add `taokari-config-wizard.py`.
+- [x] Ask for target platform.
+- [x] Ask for protection goal.
+- [x] Ask for performance budget.
+- [x] Ask whether VMP should be allowed.
+- [x] Generate JSON config.
+- [x] Generate suggested Clang flags.
+- [x] Generate annotation guide.
+- [x] Generate expected test command.
 
 ## E4. Build Integration
 
@@ -446,7 +446,7 @@ This is the “do this next without thinking too much” queue.
 11. [x] Add post-link `.text` hash patching prototype.
 12. [ ] Add Linux build instructions and smoke test.
 13. [x] Add new-PM blocker document.
-14. [ ] Add config wizard prototype.
+14. [x] Add config wizard prototype.
 15. [ ] Add release dashboard summary for Tier A/B/C/D.
 
 ---
