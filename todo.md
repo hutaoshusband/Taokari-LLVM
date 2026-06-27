@@ -269,12 +269,12 @@ Goal: make protection survive below the IR layer and keep decompilers from repai
 
 ## C1. MIR Configuration
 
-- [ ] Finish config keys for each MIR sub-pass.
-- [ ] Add probability config for `dirtybytes`.
-- [ ] Add probability config for `junk`.
-- [ ] Add probability config for `sub`.
-- [ ] Add probability config for `split`.
-- [ ] Add probability config for `fakeprologue`.
+- [x] Finish config keys for each MIR sub-pass.
+- [x] Add probability config for `dirtybytes`.
+- [x] Add probability config for `junk`.
+- [x] Add probability config for `sub`.
+- [x] Add probability config for `split`.
+- [x] Add probability config for `fakeprologue`.
 - [ ] Add per-function annotation parsing for MIR sub-pass selection.
 - [ ] 🧪 Add config validation tests.
 

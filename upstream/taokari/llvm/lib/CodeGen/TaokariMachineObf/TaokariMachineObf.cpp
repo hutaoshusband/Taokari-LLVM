@@ -114,6 +114,21 @@ static cl::opt<unsigned> TaokariMirSseProb(
              "lifting. Can perturb the generated SSE schedule; verify your "
              "SSE-heavy code still produces correct results."));
 
+static cl::opt<unsigned> TaokariMirSplitProb(
+    "taokari-mir-split-prob", cl::init(100), cl::NotHidden,
+    cl::desc("Percent of MIR-split-enabled functions receiving entry-block "
+             "splitting / boundary trampolines (0..100). 100 = every "
+             "MIR-split-enabled function. CHEAP; cost is one extra jump per "
+             "split function."));
+
+static cl::opt<unsigned> TaokariMirFakePrologueProb(
+    "taokari-mir-fakeprologue-prob", cl::init(100), cl::NotHidden,
+    cl::desc("Percent of MIR-fakeprologue-enabled functions receiving fake "
+             "frame byte patterns (0..100). 100 = every enabled function. "
+             "FORTRESS-ONLY and target-gated; the pass refuses unsafe "
+             "functions (EH/funclet, real prologue conflicts) before "
+             "emission."));
+
 struct MirSubpasses {
   bool Marker = false;
   bool DirtyBytes = false;
@@ -352,6 +367,9 @@ static MirSubpasses resolveSubpasses(const Function &F) {
   Passes.Junk &= stablePercentHit(F, "junk", TaokariMirJunkProb);
   Passes.Substitution &= stablePercentHit(F, "sub", TaokariMirSubProb);
   Passes.Sse &= stablePercentHit(F, "sse", TaokariMirSseProb);
+  Passes.FunctionSplit &= stablePercentHit(F, "split", TaokariMirSplitProb);
+  Passes.FakeBounds &= stablePercentHit(F, "fakeprologue",
+                                        TaokariMirFakePrologueProb);
   return Passes;
 }
 
