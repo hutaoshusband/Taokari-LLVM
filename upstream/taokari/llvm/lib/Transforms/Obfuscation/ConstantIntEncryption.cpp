@@ -201,6 +201,18 @@ struct ConstantIntEncryption : public FunctionPass {
       }
     }
 
+    const bool UseIndirectRef =
+        PoolGV && (opt.constIndirectPoolRef() || opt.level() >= 3);
+    GlobalVariable *PoolRefGV = nullptr;
+    if (UseIndirectRef) {
+      auto *PtrTy = PointerType::getUnqual(F.getContext());
+      PoolRefGV = new GlobalVariable(*F.getParent(), PtrTy, false,
+                                     GlobalValue::PrivateLinkage, PoolGV,
+                                     F.getName() + ".cie.pool.ref");
+      PoolRefGV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+      PoolRefGV->addMetadata("noobf", *MDNode::get(F.getContext(), {}));
+    }
+
     // Count constant occurrences for deduplication
     DenseMap<ConstantInt *, unsigned> ConstUseCount;
     for (auto I : FuncModifyIRs) {
@@ -298,8 +310,14 @@ struct ConstantIntEncryption : public FunctionPass {
             auto *IntTy = cast<IntegerType>(CTI->getType());
             IRBuilder<NoFolder> IRB(InsertPoint);
             auto *I8 = Type::getInt8Ty(F.getContext());
+            Value *PoolBase = PoolGV;
+            if (PoolRefGV) {
+              PoolBase = IRB.CreateAlignedLoad(
+                  PointerType::getUnqual(F.getContext()), PoolRefGV, Align{1},
+                  true, "cie.pool.ref.ld");
+            }
             Value *BytePtr = IRB.CreateInBoundsGEP(
-                ArrayType::get(I8, 1), PoolGV,
+                ArrayType::get(I8, 1), PoolBase,
                 {ConstantInt::get(Type::getInt32Ty(F.getContext()), 0),
                  ConstantInt::get(Type::getInt32Ty(F.getContext()),
                                   Entry.Offset)},

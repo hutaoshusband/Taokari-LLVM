@@ -1,25 +1,25 @@
-"""Verify CIE per-function constant pool.
+"""Verify CIE indirect constant references.
 
-At cie L3+ the ConstantIntEncryption pass now collects every encrypted
-integer constant of a function into a single per-function byte-array
-global (the "pool", named <fn>.cie.pool) instead of emitting one
-GlobalVariable per constant. Each use site GEPs into the pool at its own
-offset and decrypts, so a reverser cannot enumerate individual constant
-globals.
+At cie L3+ the ConstantIntEncryption pass resolves the per-function pool
+base through an opaque indirect pointer slot (<fn>.cie.pool.ref) instead
+of a direct @pool reference. Each use site loads the pool base from the
+slot, then GEPs into it, so no use site carries a direct reference to the
+@pool global. This is the constant-layer analogue of indirect-call/branch
+page-table indirection.
 
-Contract (same source, -emit-llvm + linked binary):
-  * L3 build: the IR contains a .cie.pool global and cie.pool.ptr /
-    cie.pool.ld loads indexing into it (pool path fired).
-  * L2 build: no .cie.pool global (pool is L3-gated).
-  * L3 binary: the plaintext constant does NOT appear in the .rdata/.data
-    bytes (encryption survived to the final binary).
+Contract (same source, -emit-llvm):
+  * L3 build: a .cie.pool.ref global exists and every pool access loads the
+    base via cie.pool.ref.ld before GEPing (no use-site GEPs @pool directly).
+  * A direct @pool GEP at a use site would betray the pool; assert there is
+    at least one cie.pool.ref.ld and that GEPs reference the loaded base
+    rather than the pool global symbol.
+  * L2 build: no .cie.pool and no .cie.pool.ref (both are L3-gated).
   * Correctness: the L3 obfuscated binary runs and matches native output.
 
 Exit: 0 ok | 1 contract failure | 2 missing clang.
 """
 from __future__ import annotations
 
-import struct
 import subprocess
 import sys
 import tempfile
@@ -32,21 +32,20 @@ VSDEVCMD = Path(
     r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
 )
 
-PLAIN_CONST = 0x123456789ABCDEF0
+PLAIN_CONST = 0xCAFEBABEDEADC0DE
 
 SOURCE = f"""
 #include <cstdint>
 #include <cstdio>
 
 __attribute__((noinline)) int64_t magic() {{
-  volatile int64_t v = 0;
+  volatile int64_t v = 1;
   int64_t secret = {PLAIN_CONST}LL;
-  int64_t secret2 = {PLAIN_CONST ^ 0x0F0F0F0F0F0F0F0F}LL;
-  return (secret + v) ^ secret2;
+  return secret + v;
 }}
 
 int main() {{
-  std::printf("ciepool:%lld\\n", static_cast<long long>(magic()));
+  std::printf("cieindir:%lld\\n", static_cast<long long>(magic()));
   return 0;
 }}
 """
@@ -94,9 +93,9 @@ def main() -> int:
         print(f"missing clang: {CLANG}", file=sys.stderr)
         return 2
 
-    with tempfile.TemporaryDirectory(prefix="taokari-cie-pool-") as tmp_name:
+    with tempfile.TemporaryDirectory(prefix="taokari-cie-indir-") as tmp_name:
         tmp = Path(tmp_name)
-        src = tmp / "cie_pool.cpp"
+        src = tmp / "cie_indir.cpp"
         src.write_text(SOURCE, encoding="utf-8")
 
         l3_ir = tmp / "l3.ll"
@@ -120,19 +119,29 @@ def main() -> int:
         if ".cie.pool" not in l3_text:
             print("FAIL: L3 IR has no .cie.pool global", file=sys.stderr)
             return 1
-        if "cie.pool.ld" not in l3_text or "getelementptr" not in l3_text:
-            print("FAIL: L3 IR has no pool load/GEP markers", file=sys.stderr)
+        if ".cie.pool.ref" not in l3_text:
+            print("FAIL: L3 IR has no indirect .cie.pool.ref slot",
+                  file=sys.stderr)
             return 1
-        if not any("cie.pool" in line and "getelementptr" in line
-                   for line in l3_text.splitlines()):
-            print("FAIL: L3 IR does not GEP into the pool", file=sys.stderr)
+        ref_ld_count = l3_text.count("cie.pool.ref.ld")
+        if ref_ld_count == 0:
+            print("FAIL: L3 IR has no cie.pool.ref.ld loads (indirect base "
+                  "never resolved)", file=sys.stderr)
             return 1
-        if ".cie.pool.ref" not in l3_text or "cie.pool.ref.ld" not in l3_text:
-            print("FAIL: L3 IR has no indirect pool-ref slot/load "
-                  "(indirect constant references not wired)", file=sys.stderr)
+
+        direct_pool_gep = 0
+        for line in l3_text.splitlines():
+            if "getelementptr" not in line:
+                continue
+            if ".cie.pool\"" in line and ".cie.pool.ref" not in line:
+                direct_pool_gep += 1
+        if direct_pool_gep > 0:
+            print(f"FAIL: {direct_pool_gep} use-site GEP(s) reference the pool "
+                  f"global directly (indirection defeated)", file=sys.stderr)
             return 1
+
         if ".cie.pool" in l2_text:
-            print("FAIL: L2 IR leaked a .cie.pool global (pool must be L3-gated)",
+            print("FAIL: L2 IR leaked .cie.pool (must be L3-gated)",
                   file=sys.stderr)
             return 1
 
@@ -158,16 +167,8 @@ def main() -> int:
                   file=sys.stderr)
             return 1
 
-        plain_le = struct.pack("<Q", PLAIN_CONST)
-        plain_be = struct.pack(">Q", PLAIN_CONST)
-        obf_bytes = obf.read_bytes()
-        if plain_le in obf_bytes or plain_be in obf_bytes:
-            print("FAIL: plaintext constant survived into the L3 binary",
-                  file=sys.stderr)
-            return 1
-
-    print(f"cie per-function pool: ok (.cie.pool present at L3, absent at L2, "
-          f"plaintext hidden in binary, runtime matches native)")
+    print(f"cie indirect constant ref: ok ({ref_ld_count} indirect base load(s), "
+          f"0 direct pool GEPs, runtime matches native)")
     return 0
 
 

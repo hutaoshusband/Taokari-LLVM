@@ -114,7 +114,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 - [x] Add per-function constant pool.
 - [x] Add encrypted constant pool.
 - [ ] Add page-table-backed constants.
-- [ ] Add indirect constant references.
+- [x] Add indirect constant references.
 - [ ] Add constant access through helper shards.
 - [ ] Add fake recovery paths for indirect branches.
 - [ ] Add split global storage.
@@ -441,7 +441,7 @@ This is the “do this next without thinking too much” queue.
 6. [x] Add BCF dispatcher fake-case integration.
 7. [x] Add MBA on flattening dispatch-state updates.
 8. [x] Add constant encryption per-function pool.
-9. [ ] Add encrypted constant pool.
+9. [x] Add encrypted constant pool.
 10. [ ] Add indirect constant references through helper shards.
 11. [ ] Add post-link `.text` hash patching prototype.
 12. [ ] Add Linux build instructions and smoke test.

@@ -44,6 +44,12 @@ protected:
   // own offset and decrypts, so a reverser cannot grep individual constant
   // globals. Off by default; auto-enabled at cie.level >= 3.
   uint32_t ConstPerFunctionPool = 0;
+  // CIE Fortress (L3): resolve the pool base through an opaque indirect
+  // pointer slot instead of a direct @pool reference, so each use site loads
+  // the pool base from a separate global and GEPs through it. Removes the
+  // single static @pool reference a reverser can grep. Off by default;
+  // auto-enabled at cie.level >= 3 when the pool is on.
+  uint32_t ConstIndirectPoolRef = 0;
   uint32_t ReleaseStrip = 0;
   uint32_t RandomizeSections = 0;
   std::vector<std::string> ExportAllowlist;
@@ -183,6 +189,12 @@ public:
 
   bool constPerFunctionPool() const { return this->ConstPerFunctionPool; }
 
+  void setConstIndirectPoolRef(bool ref) {
+    this->ConstIndirectPoolRef = ref;
+  }
+
+  bool constIndirectPoolRef() const { return this->ConstIndirectPoolRef; }
+
   void setReleaseStrip(bool releaseStrip) { this->ReleaseStrip = releaseStrip; }
 
   bool releaseStrip() const { return this->ReleaseStrip; }
@@ -236,6 +248,7 @@ public:
     Result.setVolatileSeed(VolatileSeed);
     Result.setConstDecryptorMBA(ConstDecryptorMBA);
     Result.setConstPerFunctionPool(ConstPerFunctionPool);
+    Result.setConstIndirectPoolRef(ConstIndirectPoolRef);
     Result.setReleaseStrip(ReleaseStrip);
     Result.setRandomizeSections(RandomizeSections);
     Result.setExportAllowlist(ExportAllowlist);
