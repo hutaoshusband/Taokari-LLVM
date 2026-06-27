@@ -284,7 +284,7 @@ Goal: make protection survive below the IR layer and keep decompilers from repai
 - [x] Add post-RA verifier gate to release mode.
 - [x] Add fallback when a machine function is unsafe for MIR transformation.
 - [x] Add crash reproducer minimizer for MIR failures.
-- [ ] 🧪 Add large C++ binary smoke test.
+- [x] 🧪 Add large C++ binary smoke test.
 
 ## C3. MIR Decompiler Resistance
 
