@@ -361,7 +361,7 @@ Goal: make Taokari easy to use without turning protection into an all-or-nothing
 - [ ] Add global binary-size growth budget.
 - [ ] Add global compile-time budget.
 - [ ] Add global runtime overhead target.
-- [ ] Add per-function VMP budget override.
+- [x] Add per-function VMP budget override.
 - [ ] Add warning when profile exceeds budget.
 - [ ] Add hard-fail mode when budget exceeds limit.
 
@@ -435,7 +435,7 @@ This is the “do this next without thinking too much” queue.
 
 1. [x] 📚 Document `-taokari-max`, `-taokari-max-no-vmp` and VMP budget behaviour in `docs/CONFIGURATION.md`.
 2. [x] Finish MIR config keys per sub-pass.
-3. [ ] Add per-function VMP overhead budget.
+3. [x] Add per-function VMP overhead budget.
 4. [x] Add VMP decompiler snapshot verifier that skips if IDA/Ghidra is unavailable.
 5. [ ] Add BCF multi-layer bogus graphs.
 6. [ ] Add BCF dispatcher fake-case integration.

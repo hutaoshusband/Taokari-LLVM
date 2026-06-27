@@ -55,6 +55,7 @@ single string.
 | `+strenc` / `+cse` | Force-enable string encryption.                                |
 | `+constenc` / `+cie` | Force-enable integer-constant encryption.                    |
 | `+vmp`         | Force-enable code virtualisation.                                  |
+| `vmp-budget=N` | Per-function VMP bytecode-words ceiling. Overrides the global `-taokari-vmp-max-bytecode-words` cap for this one function. Use on an explicitly tuned `+vmp` function only. |
 | `+outline`     | Force-enable function outlining (callout obfuscation).             |
 | `+dyn`         | Force-enable dynamic anti-reversing checks.                        |
 | `+nativeint`   | Force-enable the per-function native integrity prototype.         |
@@ -336,6 +337,18 @@ function becomes a VM candidate). Two mechanisms keep that safe:
 | `-taokari-vmp-max-bytecode-expansion=N`| `32` | Refuses functions whose bytecode-per-IR-instruction ratio exceeds N. `0` disables. |
 | `-taokari-vmp-max-bytecode-words=N`    | `2048` | Caps the bytecode size of a single VM'd function. `0` disables. Raise to `8192` for Tier D only. |
 | `-taokari-vmp-compat-report=<path>`    | (off) | Emits a TSV showing which `+vmp` functions virtualised vs skipped — use this to verify your `+vmp` functions actually virtualised. |
+
+A single explicitly-tuned `+vmp` function can override the global
+bytecode-words cap with the `vmp-budget=N` annotation, leaving the global
+safety cap untouched for every other function:
+
+```cpp
+__attribute__((noinline, annotate("+vmp vmp-budget=8192")))
+static int hand_tuned(int x) { ... }
+```
+
+`vmp-budget` wins over `-taokari-vmp-max-bytecode-words` for that function
+only; the back-edge and expansion caps remain global safety guards.
 
 ### Quick sanity recipes
 

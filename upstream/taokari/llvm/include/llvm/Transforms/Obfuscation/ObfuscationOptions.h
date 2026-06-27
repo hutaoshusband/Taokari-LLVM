@@ -6,6 +6,8 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/YAMLParser.h"
 
+#include <cstdint>
+
 #include <utility>
 #include <vector>
 
@@ -48,6 +50,11 @@ protected:
   uint32_t StringFakePools = 0;          // emit junk-only decoy pools
   uint32_t StringPageTableAccess = 0;    // look up pool ptr via indgv page tbl
   uint32_t StringDelayedDecrypt = 0;     // decrypt-on-touch, scrub before ret
+  // Per-function VMP bytecode-words budget override. UINT32_MAX = unset, fall
+  // back to the global -taokari-vmp-max-bytecode-words cap. Set by the
+  // `vmp-budget=N` annotation so a single explicitly-tuned +vmp function can
+  // raise (or lower) its own VM size ceiling without touching the global cap.
+  uint32_t VmpBudget = UINT32_MAX;
 
 public:
   ObfOpt(bool enable, uint32_t level, const std::string &attributeName) {
@@ -196,6 +203,10 @@ public:
 
   const std::string &attributeName() const { return this->AttributeName; }
 
+  void setVmpBudget(uint32_t budget) { this->VmpBudget = budget; }
+
+  uint32_t vmpBudget() const { return this->VmpBudget; }
+
   ObfOpt none() const {
     ObfOpt Result{false, 0, this->attributeName()};
     Result.setMaxInsts(MaxInsts);
@@ -222,6 +233,7 @@ public:
     Result.setStringFakePools(StringFakePools);
     Result.setStringPageTableAccess(StringPageTableAccess);
     Result.setStringDelayedDecrypt(StringDelayedDecrypt);
+    Result.setVmpBudget(VmpBudget);
     return Result;
   }
 };

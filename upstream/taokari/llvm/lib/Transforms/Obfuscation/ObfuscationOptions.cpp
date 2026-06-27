@@ -524,6 +524,32 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
   result.setStringFakePools(option->stringFakePools());
   result.setStringPageTableAccess(option->stringPageTableAccess());
   result.setStringDelayedDecrypt(option->stringDelayedDecrypt());
+
+  if (option->attributeName() == "vmp" && !annotations.empty()) {
+    const std::string BudgetToken = "vmp-budget=";
+    for (const auto &annotation : annotations) {
+      auto pos = annotation.find(BudgetToken);
+      if (pos == std::string::npos)
+        continue;
+      auto digits = pos + BudgetToken.size();
+      uint32_t value = 0;
+      bool any = false;
+      for (; digits < annotation.size() && annotation[digits] >= '0' &&
+             annotation[digits] <= '9';
+           ++digits) {
+        value = value * 10 + static_cast<uint32_t>(annotation[digits] - '0');
+        any = true;
+      }
+      if (!any) {
+        f->getContext().diagnose(DiagnosticInfoUnsupported{
+            *f, f->getName() + ": vmp-budget= needs a non-negative integer "
+                               "(sample: vmp-budget=4096)"});
+        return result.none();
+      }
+      result.setVmpBudget(value);
+    }
+  }
+
   return result;
 }
 

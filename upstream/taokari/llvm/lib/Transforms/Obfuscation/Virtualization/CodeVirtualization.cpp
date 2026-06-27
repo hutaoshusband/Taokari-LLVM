@@ -3773,6 +3773,10 @@ struct CodeVirtualization : public ModulePass {
     for (size_t TargetIdx = 0; TargetIdx < Targets.size(); ++TargetIdx) {
       Function *F = Targets[TargetIdx];
       OptimizationRemarkEmitter ORE(F);
+      auto Opt = ArgsOptions->toObfuscate(ArgsOptions->vmpOpt(), F);
+      uint32_t BytecodeWordsLimit = VMPMaxBytecodeWords;
+      if (Opt.vmpBudget() != UINT32_MAX)
+        BytecodeWordsLimit = Opt.vmpBudget();
       unsigned BackEdges = countBackEdges(*F);
       if (BackEdges > VMPMaxBackEdges) {
         OptimizationRemarkMissed R(DEBUG_TYPE, "HotLoopBudgetExceeded", F);
@@ -3853,12 +3857,12 @@ struct CodeVirtualization : public ModulePass {
         ++Skipped;
         continue;
       }
-      if (VMPMaxBytecodeWords &&
-          P.Words.size() > static_cast<size_t>(VMPMaxBytecodeWords)) {
+      if (BytecodeWordsLimit &&
+          P.Words.size() > static_cast<size_t>(BytecodeWordsLimit)) {
         OptimizationRemarkMissed R(DEBUG_TYPE, "BytecodeBudgetExceeded", F);
         R << "skipped: bytecode size budget exceeded ("
           << ore::NV("Words", (unsigned)P.Words.size()) << " > "
-          << ore::NV("Limit", VMPMaxBytecodeWords.getValue()) << ")";
+          << ore::NV("Limit", BytecodeWordsLimit) << ")";
         ORE.emit(R);
         addCompatEntry(CompatReport, *F, "skipped",
                        "bytecode size budget exceeded",
