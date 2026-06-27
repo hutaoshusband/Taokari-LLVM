@@ -283,7 +283,7 @@ Goal: make protection survive below the IR layer and keep decompilers from repai
 - [ ] Add liveness regression tests for every MIR sub-pass.
 - [x] Add post-RA verifier gate to release mode.
 - [x] Add fallback when a machine function is unsafe for MIR transformation.
-- [ ] Add crash reproducer minimizer for MIR failures.
+- [x] Add crash reproducer minimizer for MIR failures.
 - [ ] 🧪 Add large C++ binary smoke test.
 
 ## C3. MIR Decompiler Resistance

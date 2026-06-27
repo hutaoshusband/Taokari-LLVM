@@ -43,6 +43,8 @@
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <iterator>
@@ -150,6 +152,13 @@ static cl::opt<bool> TaokariMirStrict(
     cl::desc("Convert a post-transform verifier failure into a hard abort "
              "(default: off). CI/lab use only: catches regressions that would "
              "otherwise be reported but not fatal."));
+
+static cl::opt<std::string> TaokariMirReproducerDir(
+    "taokari-mir-reproducer-dir", cl::init(""), cl::NotHidden,
+    cl::desc("Directory to write a MIR crash reproducer (reduced .mir + JSON "
+             "metadata sidecar) on transform/verifier failure. Empty (default) "
+             "disables reproducer generation. Local absolute paths are stripped "
+             "from the artifact."));
 
 struct MirSubpasses {
   bool Marker = false;
@@ -491,6 +500,65 @@ static void logSkip(const MachineFunction &MF, const MirSafetyReport &R) {
          << R.Reason << "\n";
 }
 
+static std::string sanitizedPath(StringRef P) {
+  if (P.empty())
+    return "<unknown>";
+  size_t Slash = P.find_last_of("/\\");
+  StringRef Base = (Slash == StringRef::npos) ? P : P.substr(Slash + 1);
+  return Base.str();
+}
+
+static std::string reproFileName(StringRef Dir, StringRef Func, StringRef Ext) {
+  SmallString<128> P;
+  sys::path::append(P, Twine(Dir), Twine(Func) + Twine(Ext));
+  return std::string(P);
+}
+
+static void writeMirReproducer(const MachineFunction &MF,
+                               StringRef FailReason) {
+  if (TaokariMirReproducerDir.empty())
+    return;
+  if (std::error_code EC = sys::fs::create_directories(TaokariMirReproducerDir)) {
+    errs() << "taokari-mir: could not create reproducer dir "
+           << TaokariMirReproducerDir << ": " << EC.message() << "\n";
+    return;
+  }
+  const Function &F = MF.getFunction();
+  std::string MirPath = reproFileName(TaokariMirReproducerDir, F.getName(), ".mir");
+  std::error_code EC;
+  raw_fd_ostream MirOS(MirPath, EC);
+  if (EC) {
+    errs() << "taokari-mir: could not write reproducer " << MirPath << ": "
+           << EC.message() << "\n";
+    return;
+  }
+  MF.print(MirOS);
+  MirOS.close();
+
+  std::string MetaPath = reproFileName(TaokariMirReproducerDir, F.getName(), ".repro.json");
+  raw_fd_ostream MetaOS(MetaPath, EC);
+  if (EC) {
+    errs() << "taokari-mir: could not write reproducer meta " << MetaPath
+           << ": " << EC.message() << "\n";
+    return;
+  }
+  const Module *M = F.getParent();
+  MetaOS << "{\n"
+         << "  \"taokari_mir_reproducer\": true,\n"
+         << "  \"function\": \"" << F.getName() << "\",\n"
+         << "  \"fail_reason\": \"" << FailReason << "\",\n"
+         << "  \"target_triple\": \""
+         << (M ? M->getTargetTriple().str() : StringRef()) << "\",\n"
+         << "  \"source_module\": \""
+         << sanitizedPath(M ? M->getModuleIdentifier() : StringRef()) << "\",\n"
+         << "  \"flag\": \"" << TaokariMirFlag << "\",\n"
+         << "  \"strict\": " << (TaokariMirStrict ? "true" : "false") << ",\n"
+         << "  \"mir_file\": \"" << sanitizedPath(MirPath) << "\"\n"
+         << "}\n";
+  errs() << "taokari-mir: wrote reproducer " << MirPath << " + " << MetaPath
+         << "\n";
+}
+
 // Stateful core shared by the legacy and new-PM wrappers.
 struct TaokariMachineObf {
   bool run(MachineFunction &MF);
@@ -711,6 +779,7 @@ bool TaokariMachineObf::run(MachineFunction &MF) {
       errs() << "taokari-mir: verifier failure after transforming "
              << MF.getName() << " (re-run with -mllvm -taokari-mir-strict "
              << "to make this fatal)\n";
+      writeMirReproducer(MF, "post-transform verifier failure");
       if (TaokariMirStrict)
         report_fatal_error("Taokari MIR verifier failure in " +
                            MF.getName());
