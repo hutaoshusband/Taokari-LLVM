@@ -18,6 +18,65 @@ static void reportConfigError(const Twine &FileName, const Twine &Message) {
   report_fatal_error("Taokari config error in " + FileName + ": " + Message);
 }
 
+namespace {
+
+json::Value loadConfigValue(const Twine &FileName) {
+  if (!sys::fs::exists(FileName))
+    reportConfigError(FileName, "extends target does not exist");
+  auto BufOrErr = MemoryBuffer::getFileOrSTDIN(FileName);
+  if (const auto ErrCode = BufOrErr.getError())
+    reportConfigError(FileName, "cannot read extends target: " +
+                                  ErrCode.message());
+  auto Parsed = json::parse(BufOrErr.get()->getBuffer());
+  if (!Parsed)
+    reportConfigError(FileName,
+                      "extends target invalid JSON: " +
+                          toString(Parsed.takeError()));
+  if (!Parsed->getAsObject())
+    reportConfigError(FileName, "extends target root must be an object");
+  return std::move(*Parsed);
+}
+
+void deepMerge(json::Object &Dst, const json::Object &Src) {
+  for (const auto &KV : Src) {
+    const StringRef &Key = KV.getFirst();
+    const json::Value &SrcVal = KV.getSecond();
+    auto *SrcObj = SrcVal.getAsObject();
+    auto Existing = Dst.find(Key);
+    if (SrcObj && Existing != Dst.end() &&
+        Existing->second.getAsObject()) {
+      json::Object Merged = *Existing->second.getAsObject();
+      deepMerge(Merged, *SrcObj);
+      Dst[Key] = std::move(Merged);
+    } else {
+      Dst[Key] = SrcVal;
+    }
+  }
+}
+
+void resolveExtends(json::Object &Root, const Twine &FileName, unsigned Depth) {
+  if (Depth > 8)
+    reportConfigError(FileName, "extends chain too deep (cycle?)");
+  auto *ExtendsV = Root.get("extends");
+  if (!ExtendsV)
+    return;
+  auto ExtendsStr = ExtendsV->getAsString();
+  if (!ExtendsStr) {
+    reportConfigError(FileName, "extends must be a string");
+    return;
+  }
+  SmallString<256> Parent(*ExtendsStr);
+  json::Value ParentVal = loadConfigValue(Parent);
+  json::Object *ParentObj = ParentVal.getAsObject();
+  resolveExtends(*ParentObj, Parent, Depth + 1);
+  Root.erase("extends");
+  json::Object Merged = *ParentObj;
+  deepMerge(Merged, Root);
+  Root = std::move(Merged);
+}
+
+} // namespace
+
 SmallVector<std::string> readAnnotate(Function *f) {
   SmallVector<std::string> annotations;
 
@@ -80,6 +139,8 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
   if (!rootObj) {
     reportConfigError(FileName, "JSON root must be an object");
   }
+
+  resolveExtends(*rootObj, FileName, 0);
 
   auto procObj =
       [&FileName](const std::shared_ptr<ObfOpt> &obfOpt,

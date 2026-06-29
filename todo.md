@@ -352,7 +352,7 @@ Goal: make Taokari easy to use without turning protection into an all-or-nothing
 - [x] Add `mobile` profile for smaller binaries.
 - [x] Add `debuggable-strong` profile for internal testing.
 - [x] Add `vmp-spear` profile for annotation-only virtualization.
-- [ ] Add profile inheritance in config.
+- [x] Add profile inheritance in config.
 - [x] Add profile validation.
 
 ## E2. Budget System

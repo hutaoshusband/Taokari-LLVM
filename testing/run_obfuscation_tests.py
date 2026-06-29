@@ -149,6 +149,7 @@ RELEASE_GATES = [
     ReleaseGate("platform_matrix", TESTING / "scripts" / "verify_platform_matrix.py"),
     ReleaseGate("runtime_overhead_target", TESTING / "scripts" / "verify_runtime_overhead_target.py"),
     ReleaseGate("build_integration_doc", TESTING / "scripts" / "verify_build_integration_doc.py"),
+    ReleaseGate("config_inheritance", TESTING / "scripts" / "verify_config_inheritance.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"

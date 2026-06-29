@@ -86,6 +86,22 @@ The JSON file is a flat object whose top-level keys are pass names
 `meta`, `rtti`, `vmp`). Each value is an object with any of the
 following keys.
 
+### Config inheritance
+
+A config may inherit another config with the top-level `extends` key
+(a path to the parent config):
+
+```json
+{ "extends": "C:/.../profile-strong.json",
+  "fla": { "enable": true, "level": 1 } }
+```
+
+The parent is loaded first, then the child is deep-merged on top: nested
+pass objects are merged per-key, and the child wins on conflicts. The
+`extends` key is resolved recursively (a chain deeper than 8 is rejected as
+a cycle). This lets a project start from a shipped profile and override a
+few passes without copying the whole file.
+
 ### Common keys (every pass)
 
 | Key                  | Type    | Default | Notes                                                |
