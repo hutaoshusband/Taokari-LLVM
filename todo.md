@@ -324,7 +324,7 @@ Goal: make “hard to reverse” measurable instead of based on feeling.
 - [x] Add string leak bar.
 - [x] Add symbol leak bar.
 - [x] Add VMP signature-divergence bar.
-- [ ] Add MIR survival bar.
+- [x] Add MIR survival bar.
 
 ## D3. Release Dashboard
 

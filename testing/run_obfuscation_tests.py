@@ -127,6 +127,7 @@ RELEASE_GATES = [
     ReleaseGate("symbol_leak_bar", TESTING / "scripts" / "verify_symbol_leak_bar.py"),
     ReleaseGate("indirect_rewrite_count_bar", TESTING / "scripts" / "verify_indirect_rewrite_count_bar.py"),
     ReleaseGate("vmp_signature_divergence_bar", TESTING / "scripts" / "verify_vmp_handler_signature.py"),
+    ReleaseGate("mir_survival_bar", TESTING / "scripts" / "verify_machine_obf_l3_boundary_metric.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
