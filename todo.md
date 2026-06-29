@@ -320,7 +320,7 @@ Goal: make “hard to reverse” measurable instead of based on feeling.
 - [x] `.text` entropy is measured but not used as hard bar.
 - [x] Add fake-case density bar.
 - [ ] Add indirect rewrite count bar.
-- [ ] Add call-graph breakage bar.
+- [x] Add call-graph breakage bar.
 - [x] Add string leak bar.
 - [ ] Add symbol leak bar.
 - [ ] Add VMP signature-divergence bar.

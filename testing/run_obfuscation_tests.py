@@ -123,6 +123,7 @@ RELEASE_GATES = [
     ReleaseGate("opaque_constant_context", TESTING / "scripts" / "verify_opaque_constant_context.py"),
     ReleaseGate("string_leak_bar", TESTING / "scripts" / "verify_string_leak_bar.py"),
     ReleaseGate("fake_case_density_bar", TESTING / "scripts" / "verify_fake_case_density_bar.py"),
+    ReleaseGate("call_graph_breakage_bar", TESTING / "scripts" / "verify_call_graph_breakage.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
