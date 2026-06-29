@@ -176,6 +176,12 @@ CASES = [
     # all IR passes.
     Case("static_init", (case_path("static_init") / "src" / "main.cpp",),
          "staticinit:102:103:100:101:20:20\n"),
+    # Thread-local storage fixture: thread_local scalar / array / pointer
+    # variables touched from worker threads, each getting its own instance.
+    # Stresses the _tls_index / __tls_array access pattern and per-thread
+    # initialization under all IR passes.
+    Case("thread_local_storage", (case_path("thread_local_storage") / "src" / "main.cpp",),
+         "tls:10:88:9990904:29973024\n"),
     # Control-flow & loop fixture: nested if/switch/for/while/do-while,
     # break/continue/goto/return, comma operator, recursive factorial and a
     # recursive BST built with malloc. Stresses Flattening, IndirectBranch,

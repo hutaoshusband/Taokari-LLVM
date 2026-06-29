@@ -400,7 +400,7 @@ Goal: avoid building a beautiful obfuscator that breaks real programs.
 - [ ] Add exception-heavy C++ fixture.
 - [x] Add virtual dispatch fixture.
 - [x] Add static local initialization fixture.
-- [ ] Add thread-local storage fixture.
+- [x] Add thread-local storage fixture.
 - [x] Add atomics fixture.
 - [ ] Add SIMD/intrinsics fixture.
 - [x] Add large switch fixture.
