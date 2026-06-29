@@ -453,10 +453,10 @@ This is the “do this next without thinking too much” queue.
 
 # 9. Definition of Done for the Next Roadmap Version
 
-- [ ] Every open task belongs to exactly one track.
-- [ ] Every track has a clear goal.
+- [x] Every open task belongs to exactly one track.
+- [x] Every track has a clear goal.
 - [ ] Every implementation task has a verifier task nearby.
-- [ ] Every partial item is either completed or split into smaller checkboxes.
+- [x] Every partial item is either completed or split into smaller checkboxes.
 - [x] Every profile has a compile-time, runtime and size budget.
 - [x] Every tier has a correctness gate and a gnarliness gate.
 - [x] The roadmap stays short enough to fit in one readable GitHub issue or project board.

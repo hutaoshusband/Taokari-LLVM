@@ -69,9 +69,24 @@ def main() -> int:
         print("FAIL: roadmap has no expansion tracks", file=sys.stderr)
         return 1
 
+    goals = [l for l in text.splitlines() if l.strip().startswith("Goal:")]
+    track_count = len(tracks)
+    if len(goals) < track_count:
+        print(f"FAIL: only {len(goals)} 'Goal:' lines for {track_count} tracks",
+              file=sys.stderr)
+        return 1
+
+    open_partials = [l for l in text.splitlines()
+                     if l.strip().startswith("- [ ]") and "🚧" in l]
+    if open_partials:
+        print(f"FAIL: roadmap has open partial (🚧) items not split or completed: "
+              f"{open_partials}", file=sys.stderr)
+        return 1
+
     print(f"definition-of-done: ok (tiers have correctness+gnarliness+"
           f"size/compile budgets; {len(profiles)} profiles validate; "
-          f"roadmap bounded at {open_count}/{MAX_OPEN} open; {len(tracks)} tracks)")
+          f"every track has a Goal; no partials left; "
+          f"roadmap bounded at {open_count}/{MAX_OPEN} open; {track_count} tracks)")
     return 0
 
 
