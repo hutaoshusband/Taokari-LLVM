@@ -29,7 +29,7 @@ from pathlib import Path
 
 
 PLATFORMS = ("windows-x64", "linux-x64", "aarch64")
-GOALS = ("mobile", "dev", "balanced", "strong", "fortress", "vmp-spear")
+GOALS = ("mobile", "dev", "balanced", "strong", "debuggable-strong", "fortress", "vmp-spear")
 PERFS = ("loose", "balanced", "tight")
 VMPS = ("off", "annotation-only", "global")
 
@@ -78,6 +78,19 @@ PROFILES = {
         "outline": _pass(False, 0),
     },
     "strong": {
+        "fla": _pass(True, 3, maxInsts=4000, maxBlocks=200),
+        "bcf": _pass(True, 2, probability=50, functionProbability=70, loopCount=2),
+        "mba": _pass(True, 2, probability=60, functionProbability=100),
+        "icall": _pass(True, 3, probability=90, functionProbability=90),
+        "indbr": _pass(True, 3),
+        "indgv": _pass(True, 3),
+        "cie": _pass(True, 3, minConstSize=8),
+        "cfe": _pass(True, 2, minConstSize=8),
+        "cse": _pass(True, 3, minStringLength=4, decryptorMba=True,
+                     stringDecryptorFlattening=True),
+        "outline": _pass(True, 2),
+    },
+    "debuggable-strong": {
         "fla": _pass(True, 3, maxInsts=4000, maxBlocks=200),
         "bcf": _pass(True, 2, probability=50, functionProbability=70, loopCount=2),
         "mba": _pass(True, 2, probability=60, functionProbability=100),
@@ -146,19 +159,24 @@ def build_config(goal: str, perf: str, vmp: str) -> dict:
     for name, delta in adj.items():
         if name in cfg:
             cfg[name] = clamp_level(cfg[name], delta)
+    cfg["randomSeed"] = f"taokari-{goal}-{perf}-seed"
     if vmp == "global":
         cfg["vmp"] = _pass(True, 2)
     elif vmp == "annotation-only":
         cfg["vmp"] = _pass(False, 0)
     else:
         cfg["vmp"] = _pass(False, 0)
+    if goal == "debuggable-strong":
+        cfg["meta"] = _pass(False, 0)
+    else:
+        cfg["meta"] = {"enable": True, "level": 2, "releaseStrip": True}
     return cfg
 
 
 def config_to_flags(cfg: dict) -> list[str]:
     flags = ["-taokari"]
     for name in ("fla", "bcf", "mba", "icall", "indbr", "indgv", "cie", "cfe",
-                 "cse", "outline", "vmp"):
+                 "cse", "outline", "meta", "vmp"):
         p = cfg.get(name, {})
         if not p.get("enable"):
             continue

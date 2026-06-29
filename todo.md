@@ -350,7 +350,7 @@ Goal: make Taokari easy to use without turning protection into an all-or-nothing
 - [x] Strong profile exists.
 - [x] Fortress profile exists.
 - [x] Add `mobile` profile for smaller binaries.
-- [ ] Add `debuggable-strong` profile for internal testing.
+- [x] Add `debuggable-strong` profile for internal testing.
 - [x] Add `vmp-spear` profile for annotation-only virtualization.
 - [ ] Add profile inheritance in config.
 - [x] Add profile validation.

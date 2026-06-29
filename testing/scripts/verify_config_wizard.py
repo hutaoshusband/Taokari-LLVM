@@ -68,7 +68,8 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="taokari-wizard-") as tmp_name:
         tmp = Path(tmp_name)
-        for goal in ("mobile", "dev", "balanced", "strong", "fortress", "vmp-spear"):
+        for goal in ("mobile", "dev", "balanced", "strong",
+                     "debuggable-strong", "fortress", "vmp-spear"):
             stem = tmp / goal
             r = run([sys.executable, str(WIZARD),
                      "--non-interactive",
@@ -146,7 +147,7 @@ def main() -> int:
                           f"out={run_r.stdout!r}", file=sys.stderr)
                     return 1
 
-    print(f"config wizard: ok (6 profiles, 4 deliverables each, "
+    print(f"config wizard: ok (7 profiles, 4 deliverables each, "
           f"strong+fortress configs load clean, runtime matches native)")
     return 0
 
