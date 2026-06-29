@@ -194,6 +194,12 @@ CASES = [
     # and MBA on FP and wide-integer math, and FP precision preservation.
     Case("math_heavy", (case_path("math_heavy") / "src" / "main.c",),
          "math:57.5000:1024:1305938385386173474:4.0709:407\n"),
+    # Parser / state-machine fixture: a recursive-descent arithmetic parser
+    # (mutual recursion + many branches) and a DFA-style number validator with
+    # 7 states. Stresses Flattening, BCF and IndirectBranch on dense branching
+    # and recursive control flow.
+    Case("parser_state_machine", (case_path("parser_state_machine") / "src" / "main.c",),
+         "parser:22:1:1:-1:-1\n"),
     # Control-flow & loop fixture: nested if/switch/for/while/do-while,
     # break/continue/goto/return, comma operator, recursive factorial and a
     # recursive BST built with malloc. Stresses Flattening, IndirectBranch,
