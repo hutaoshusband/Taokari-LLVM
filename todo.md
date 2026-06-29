@@ -170,12 +170,12 @@ Goal: make Taokari less Windows-only without losing the current Windows x64 stab
 - [x] 📚 Write clean Linux build instructions.
 - [x] ⚙️ Add Ubuntu build script.
 - [x] ⚙️ Add Ninja/CMake preset for Linux.
-- [ ] 🧪 Add Linux smoke test with a tiny C program.
-- [ ] 🧪 Add Linux smoke test with a tiny C++ program.
-- [ ] 🧪 Add Linux test for exceptions and RTTI if supported.
-- [ ] 🧪 Add Linux string/constant encryption test.
-- [ ] 🧪 Add Linux indirect call/branch/global test.
-- [ ] 🧪 Add Linux VMP opt-in function test.
+- [x] 🧪 Add Linux smoke test with a tiny C program.
+- [x] 🧪 Add Linux smoke test with a tiny C++ program.
+- [x] 🧪 Add Linux test for exceptions and RTTI if supported.
+- [x] 🧪 Add Linux string/constant encryption test.
+- [x] 🧪 Add Linux indirect call/branch/global test.
+- [x] 🧪 Add Linux VMP opt-in function test.
 
 ## A2. AArch64 / ARM64 Expansion
 

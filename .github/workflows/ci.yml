@@ -29,6 +29,8 @@ jobs:
           # source and runs a tiny C program under the IR passes to confirm
           # the Linux build path is intact. See docs/BUILD_LINUX.md.
           scripts/build-linux.sh
+      - name: Linux smoke suite
+        run: bash testing/scripts/linux_smoke.sh
 
   windows:
     name: Windows x64 build + test suite

@@ -152,6 +152,7 @@ RELEASE_GATES = [
     ReleaseGate("config_inheritance", TESTING / "scripts" / "verify_config_inheritance.py"),
     ReleaseGate("ci_workflow", TESTING / "scripts" / "verify_ci_workflow.py"),
     ReleaseGate("definition_of_done", TESTING / "scripts" / "verify_dod.py"),
+    ReleaseGate("linux_smoke_script", TESTING / "scripts" / "verify_linux_smoke_script.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
