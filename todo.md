@@ -398,8 +398,8 @@ Goal: avoid building a beautiful obfuscator that breaks real programs.
 - [ ] Add pointer-heavy C fixture.
 - [ ] Add template-heavy C++ fixture.
 - [ ] Add exception-heavy C++ fixture.
-- [ ] Add virtual dispatch fixture.
-- [ ] Add static local initialization fixture.
+- [x] Add virtual dispatch fixture.
+- [x] Add static local initialization fixture.
 - [ ] Add thread-local storage fixture.
 - [x] Add atomics fixture.
 - [ ] Add SIMD/intrinsics fixture.

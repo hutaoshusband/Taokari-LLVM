@@ -165,6 +165,17 @@ CASES = [
     # fallthrough chain, and a default arm. Stresses Flattening, LowerSwitch
     # and switch-recovery resistance.
     Case("large_switch", (case_path("large_switch") / "src" / "main.c",), "switch:807:837:-1:15:15170\n"),
+    # Virtual dispatch fixture: abstract base + three derived shapes, vtable
+    # lookups through base pointers, and a polymorphic fold. Stresses
+    # IndirectCall/IndirectBranch around vtable loads and the RTTI eraser.
+    Case("virtual_dispatch", (case_path("virtual_dispatch") / "src" / "main.cpp",),
+         "vdispatch:32:45:15:174\n"),
+    # Static-local initialization fixture: function-local statics with
+    # thread-safe init guards, global object constructors, and lazy cached
+    # init. Stresses the __cxa_guard_atomic and global-init lowering under
+    # all IR passes.
+    Case("static_init", (case_path("static_init") / "src" / "main.cpp",),
+         "staticinit:102:103:100:101:20:20\n"),
     # Control-flow & loop fixture: nested if/switch/for/while/do-while,
     # break/continue/goto/return, comma operator, recursive factorial and a
     # recursive BST built with malloc. Stresses Flattening, IndirectBranch,
