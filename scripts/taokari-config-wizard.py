@@ -29,7 +29,7 @@ from pathlib import Path
 
 
 PLATFORMS = ("windows-x64", "linux-x64", "aarch64")
-GOALS = ("mobile", "dev", "balanced", "strong", "fortress")
+GOALS = ("mobile", "dev", "balanced", "strong", "fortress", "vmp-spear")
 PERFS = ("loose", "balanced", "tight")
 VMPS = ("off", "annotation-only", "global")
 
@@ -103,6 +103,19 @@ PROFILES = {
                      stringDecryptorFlattening=True, stringShardedPool=True,
                      stringFakePools=True, stringDelayedDecrypt=True),
         "outline": _pass(True, 3),
+    },
+    "vmp-spear": {
+        "fla": _pass(False, 0),
+        "bcf": _pass(False, 0),
+        "mba": _pass(False, 0),
+        "icall": _pass(False, 0),
+        "indbr": _pass(False, 0),
+        "indgv": _pass(False, 0),
+        "cie": _pass(False, 0),
+        "cfe": _pass(False, 0),
+        "cse": _pass(False, 0),
+        "outline": _pass(False, 0),
+        "vmp": _pass(False, 3),
     },
 }
 

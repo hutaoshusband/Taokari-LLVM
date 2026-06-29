@@ -1,0 +1,12 @@
+{
+  "randomSeed": "vmp-spear-vmp-spear-vmp",
+  "meta": {
+    "enable": true,
+    "level": 1,
+    "releaseStrip": true
+  },
+  "vmp": {
+    "enable": false,
+    "level": 3
+  }
+}

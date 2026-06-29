@@ -68,7 +68,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="taokari-wizard-") as tmp_name:
         tmp = Path(tmp_name)
-        for goal in ("mobile", "dev", "balanced", "strong", "fortress"):
+        for goal in ("mobile", "dev", "balanced", "strong", "fortress", "vmp-spear"):
             stem = tmp / goal
             r = run([sys.executable, str(WIZARD),
                      "--non-interactive",
@@ -96,9 +96,14 @@ def main() -> int:
                       file=sys.stderr)
                 return 1
             flags = flags_path.read_text(encoding="utf-8")
-            if "-taokari" not in flags or "-taokari-" not in flags:
-                print(f"FAIL: {goal} flags missing -taokari / -taokari-<pass>",
+            if "-taokari" not in flags:
+                print(f"FAIL: {goal} flags missing -taokari master switch",
                       file=sys.stderr)
+                return 1
+            has_pass = any(cfg.get(p, {}).get("enable") for p in cfg)
+            if has_pass and "-taokari-" not in flags:
+                print(f"FAIL: {goal} flags missing -taokari-<pass> "
+                      f"for enabled passes", file=sys.stderr)
                 return 1
             guide = guide_path.read_text(encoding="utf-8")
             for token in ("+vmp", "+fla", "noobf"):
@@ -141,7 +146,7 @@ def main() -> int:
                           f"out={run_r.stdout!r}", file=sys.stderr)
                     return 1
 
-    print(f"config wizard: ok (5 profiles, 4 deliverables each, "
+    print(f"config wizard: ok (6 profiles, 4 deliverables each, "
           f"strong+fortress configs load clean, runtime matches native)")
     return 0
 
