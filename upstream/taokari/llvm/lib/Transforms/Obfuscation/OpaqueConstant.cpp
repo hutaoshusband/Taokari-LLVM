@@ -1,5 +1,6 @@
 #include "llvm/Transforms/Obfuscation/OpaqueConstant.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
+#include "llvm/Transforms/Obfuscation/ObfuscationPassManager.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
@@ -142,4 +143,17 @@ char OpaqueConstant::ID = 0;
 
 FunctionPass *llvm::createOpaqueConstantPass(ObfuscationOptions *argsOptions) {
   return new OpaqueConstant(argsOptions);
+}
+
+PreservedAnalyses
+llvm::OpaqueConstantNewPMPass::run(Function &F, FunctionAnalysisManager &) {
+  if (!Options) {
+    Options = getTaokariObfuscationOptions();
+    Legacy = std::unique_ptr<FunctionPass>(
+        createOpaqueConstantPass(Options.get()));
+  }
+  if (!Options->ocnstOpt()->isEnabled())
+    return PreservedAnalyses::all();
+  bool Changed = Legacy->runOnFunction(F);
+  return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }

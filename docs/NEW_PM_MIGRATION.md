@@ -145,6 +145,26 @@ per-pass conversion pattern and the options plumbing before attacking the
 order-sensitive core. The next ports (MsRttiEraser, then the leaf
 FunctionPasses) follow the same twin-with-shared-options shape.
 
+### First FunctionPass port: OpaqueConstant (B2 progress)
+
+The same twin-with-shared-options shape extends to function passes.
+`OpaqueConstant` (`OpaqueConstant.cpp:32`, `FunctionPass`) gains
+`OpaqueConstantNewPMPass` (`run(Function&, FunctionAnalysisManager&)`) that
+lazily constructs the legacy pass once per pipeline and reuses it across
+functions, so the per-module RNG/BuildSeed lifetime matches the legacy
+path. The twin holds the resolved `ObfuscationOptions` as a member so the
+legacy pass's raw options pointer stays valid for the whole module.
+Schedulable standalone via `-passes=opaque-constant-newpm` (registered as a
+module-level callback that wraps the function pass in
+`createModuleToFunctionPassAdaptor`). Verified by
+`testing/scripts/verify_new_pm_opaque_constant.py`.
+
+This validates the function-pass conversion pattern. The remaining B2 risk
+(order-sensitive passes threaded through the OPM recipe) still applies to
+the *production* scheduling of function passes; standalone twins like this
+one are for differential testing, not recipe scheduling.
+
+
 
 ## What does NOT block today
 
