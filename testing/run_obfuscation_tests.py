@@ -200,6 +200,11 @@ CASES = [
     # and recursive control flow.
     Case("parser_state_machine", (case_path("parser_state_machine") / "src" / "main.c",),
          "parser:22:1:1:-1:-1\n"),
+    # Hashing fixture: FNV-1a 64, djb2, table-driven CRC32, and an 8-bit
+    # Pearson hash. Stresses ConstantIntEncryption on lookup tables and MBA
+    # on the bitwise mixing loops.
+    Case("hashing", (case_path("hashing") / "src" / "main.c",),
+         "hash:17972933699863945481:490021557:3042874451:193\n"),
     # Control-flow & loop fixture: nested if/switch/for/while/do-while,
     # break/continue/goto/return, comma operator, recursive factorial and a
     # recursive BST built with malloc. Stresses Flattening, IndirectBranch,
