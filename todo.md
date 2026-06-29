@@ -195,7 +195,7 @@ Goal: make Taokari less Windows-only without losing the current Windows x64 stab
 - [x] List Linux x64 pass support.
 - [x] List AArch64 pass support.
 - [x] Mark unsupported combinations explicitly.
-- [ ] Add release-blocking tests per supported platform.
+- [x] Add release-blocking tests per supported platform.
 
 ---
 
