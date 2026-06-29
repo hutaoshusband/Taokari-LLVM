@@ -182,6 +182,12 @@ CASES = [
     # initialization under all IR passes.
     Case("thread_local_storage", (case_path("thread_local_storage") / "src" / "main.cpp",),
          "tls:10:88:9990904:29973024\n"),
+    # Pointer-heavy C fixture: strided pointer sums, GEP matrix trace,
+    # pointer-to-pointer walk, a malloc/free linked list, and byte-cast
+    # aliasing. Stresses GEP lowering, aliasing assumptions and the
+    # indirect-global handling of pointer-shaped state.
+    Case("pointer_heavy", (case_path("pointer_heavy") / "src" / "main.c",),
+         "ptrs:22:18:60:13539:10\n"),
     # Control-flow & loop fixture: nested if/switch/for/while/do-while,
     # break/continue/goto/return, comma operator, recursive factorial and a
     # recursive BST built with malloc. Stresses Flattening, IndirectBranch,
