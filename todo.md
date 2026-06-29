@@ -150,7 +150,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 - [x] Add max runtime overhead target.
 - [x] 🧪 Add decompiler snapshot tests to the normal release-blocking suite.
 - [ ] 📚 Add clean Linux build instructions.
-- [ ] ⚙️ Add CI build check.
+- [x] ⚙️ Add CI build check.
 - [x] Identify new pass-manager migration blockers.
 - [x] Create new-PM wrapper prototype.
 - [x] Port one simple module pass to new-PM.
