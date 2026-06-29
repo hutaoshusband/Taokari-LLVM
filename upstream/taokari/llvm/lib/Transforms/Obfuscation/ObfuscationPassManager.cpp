@@ -613,6 +613,11 @@ ModulePass *llvm::createObfuscationPassManager() {
   return new ObfuscationPassManager();
 }
 
+std::shared_ptr<ObfuscationOptions>
+llvm::getTaokariObfuscationOptions() {
+  return ObfuscationPassManager::getOptions();
+}
+
 INITIALIZE_PASS_BEGIN(ObfuscationPassManager, "irobf", "Enable IR Obfuscation",
                       false, false)
 INITIALIZE_PASS_END(ObfuscationPassManager, "irobf", "Enable IR Obfuscation",

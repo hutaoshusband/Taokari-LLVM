@@ -118,24 +118,33 @@ direct `addPass` in `PassBuilderPipelines.cpp`. The factories and
 ## Smallest viable migration step
 
 Per todo 1.5 the migration is intentionally incremental. The recommended
-first concrete port (smallest blast radius, validates the pattern):
+first concrete port (smallest blast radius, validates the pattern) —
+**DONE**:
 
-1. **Pick one leaf `ModulePass` with no function-pass dependencies.**
-   `MetadataHygiene` or `MsRttiEraser` are the best candidates — they are
-   module-scoped, have no order interaction with the IR-obfuscation recipe,
-   and consume few analyses.
-2. **Add a `PassInfoMixin` twin** (`MetadataHygieneNewPMPass`) with
-   `run(Module&, ModuleAnalysisManager&)` that calls the same
-   `runOnModule` body. Keep the legacy pass for the bridge.
-3. **Wire it** behind the existing bridge so the recipe still runs the
-   legacy OPM, but the ported pass is *also* schedulable standalone via
-   `-passes=metadata-hygiene` for differential testing.
-4. **Validate** with a verifier that exercises the standalone new-PM pass
-   and confirms identical output to the legacy path.
+1. **Pick one leaf `ModulePass` with no function-pass dependencies.** DONE:
+   `MetadataHygiene` (`MetadataHygiene.cpp:24`) — module-scoped, no order
+   interaction with the IR-obfuscation recipe, consumes no analyses.
+2. **Add a `PassInfoMixin` twin** (`MetadataHygieneNewPMPass`,
+   `MetadataHygiene.cpp`) with `run(Module&, ModuleAnalysisManager&)` that
+   reuses the legacy `runOnModule` body via `createMetadataHygienePass`. The
+   resolved options come from the shared `llvm::getTaokariObfuscationOptions()`
+   (exposed from the OPM) so the twin sees the same `-taokari` / `-taokari-cfg`
+   / `-taokari-max` resolution as the bridge. The legacy pass is kept for the
+   bridge.
+3. **Wire it** behind the existing bridge so the recipe still runs the legacy
+   OPM, and the ported pass is *also* schedulable standalone via
+   `-passes=metadata-hygiene-newpm` (registered as a module pipeline-parsing
+   callback in `PassBuilder.cpp`) for differential testing.
+4. **Validate** with `testing/scripts/verify_new_pm_metadata_hygiene.py`:
+   exercises the standalone new-PM pass, confirms it is a no-op when meta is
+   disabled and renames a secret internal symbol identically to the legacy
+   path when enabled, and that the linked binary matches native output.
 
 This does not unblock the OPM ordering problem (B2), but it proves the
-per-pass conversion pattern and the analysis/result plumbing before
-attacking the order-sensitive core.
+per-pass conversion pattern and the options plumbing before attacking the
+order-sensitive core. The next ports (MsRttiEraser, then the leaf
+FunctionPasses) follow the same twin-with-shared-options shape.
+
 
 ## What does NOT block today
 

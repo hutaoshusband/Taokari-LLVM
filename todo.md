@@ -153,7 +153,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 - [ ] ⚙️ Add CI build check.
 - [x] Identify new pass-manager migration blockers.
 - [x] Create new-PM wrapper prototype.
-- [ ] Port one simple module pass to new-PM.
+- [x] Port one simple module pass to new-PM.
 - [ ] Port one simple function pass to new-PM.
 - [ ] Test Taokari under the current LLVM new-PM pipeline.
 - [x] Finish MIR config keys per sub-pass.

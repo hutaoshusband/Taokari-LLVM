@@ -131,6 +131,7 @@ RELEASE_GATES = [
     ReleaseGate("mir_survival_bar", TESTING / "scripts" / "verify_machine_obf_l3_boundary_metric.py"),
     ReleaseGate("decompiler_snapshot", TESTING / "scripts" / "verify_vmp_decompiler_snapshot.py",
                 skippable=True),
+    ReleaseGate("new_pm_metadata_hygiene", TESTING / "scripts" / "verify_new_pm_metadata_hygiene.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"

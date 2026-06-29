@@ -263,6 +263,7 @@
 #include "llvm/Transforms/Instrumentation/SanitizerCoverage.h"
 #include "llvm/Transforms/Instrumentation/ThreadSanitizer.h"
 #include "llvm/Transforms/Instrumentation/TypeSanitizer.h"
+#include "llvm/Transforms/Obfuscation/MetadataHygiene.h"
 #include "llvm/Transforms/ObjCARC.h"
 #include "llvm/Transforms/Scalar/ADCE.h"
 #include "llvm/Transforms/Scalar/AlignmentFromAssumptions.h"
@@ -561,7 +562,7 @@ PassBuilder::PassBuilder(TargetMachine *TM, PipelineTuningOptions PTO,
   if (PassBuilder::checkParametrizedPassName(Name, NAME)) {                    \
     auto L = PassBuilder::parsePassParameters(parseOptLevelParam, Name, NAME); \
     if (!L) {                                                                  \
-      errs() << NAME ": " << toString(L.takeError()) << '\n';                  \
+      errs() << NAME ": " + toString(L.takeError()) + '\n';                    \
       return false;                                                            \
     }                                                                          \
     INVOKE(PM, L.get());                                                       \
@@ -570,6 +571,17 @@ PassBuilder::PassBuilder(TargetMachine *TM, PipelineTuningOptions PTO,
 #include "PassRegistry.def"
         return false;
       });
+
+  registerPipelineParsingCallback(
+      [](StringRef Name, ModulePassManager &PM,
+         ArrayRef<PassBuilder::PipelineElement>) {
+        if (Name == "metadata-hygiene-newpm") {
+          PM.addPass(MetadataHygieneNewPMPass());
+          return true;
+        }
+        return false;
+      });
+
 
   // Module-level callbacks with LTO phase (use Phase::None for string API)
   registerPipelineParsingCallback(
