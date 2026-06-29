@@ -402,7 +402,7 @@ Goal: avoid building a beautiful obfuscator that breaks real programs.
 - [x] Add static local initialization fixture.
 - [x] Add thread-local storage fixture.
 - [x] Add atomics fixture.
-- [ ] Add SIMD/intrinsics fixture.
+- [x] Add SIMD/intrinsics fixture.
 - [x] Add large switch fixture.
 - [x] Add callback/function-pointer fixture.
 
