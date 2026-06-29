@@ -323,7 +323,7 @@ Goal: make “hard to reverse” measurable instead of based on feeling.
 - [x] Add call-graph breakage bar.
 - [x] Add string leak bar.
 - [x] Add symbol leak bar.
-- [ ] Add VMP signature-divergence bar.
+- [x] Add VMP signature-divergence bar.
 - [ ] Add MIR survival bar.
 
 ## D3. Release Dashboard
