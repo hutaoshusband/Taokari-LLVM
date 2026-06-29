@@ -190,11 +190,11 @@ Goal: make Taokari less Windows-only without losing the current Windows x64 stab
 
 ## A3. Platform Feature Matrix
 
-- [ ] 📚 Create `docs/PLATFORM_MATRIX.md`.
-- [ ] List Windows x64 pass support.
-- [ ] List Linux x64 pass support.
-- [ ] List AArch64 pass support.
-- [ ] Mark unsupported combinations explicitly.
+- [x] 📚 Create `docs/PLATFORM_MATRIX.md`.
+- [x] List Windows x64 pass support.
+- [x] List Linux x64 pass support.
+- [x] List AArch64 pass support.
+- [x] Mark unsupported combinations explicitly.
 - [ ] Add release-blocking tests per supported platform.
 
 ---
