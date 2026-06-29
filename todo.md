@@ -396,7 +396,7 @@ Goal: avoid building a beautiful obfuscator that breaks real programs.
 ## F1. C / C++ Feature Fixtures
 
 - [x] Add pointer-heavy C fixture.
-- [ ] Add template-heavy C++ fixture.
+- [x] Add template-heavy C++ fixture.
 - [ ] Add exception-heavy C++ fixture.
 - [x] Add virtual dispatch fixture.
 - [x] Add static local initialization fixture.
