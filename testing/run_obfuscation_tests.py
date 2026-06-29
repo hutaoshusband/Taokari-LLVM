@@ -139,6 +139,7 @@ RELEASE_GATES = [
     ReleaseGate("debuggable_strong_profile", TESTING / "scripts" / "verify_debuggable_strong_profile.py"),
     ReleaseGate("new_pm_opaque_constant", TESTING / "scripts" / "verify_new_pm_opaque_constant.py"),
     ReleaseGate("exported_c_api", TESTING / "scripts" / "verify_exported_c_api.py"),
+    ReleaseGate("cpp_class_export", TESTING / "scripts" / "verify_cpp_class_export.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
