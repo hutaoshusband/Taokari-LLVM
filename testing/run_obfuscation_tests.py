@@ -216,6 +216,11 @@ CASES = [
     # S-box/rsbox tables and MBA on the bitwise MixColumns math.
     Case("tiny_aes", (case_path("tiny_aes") / "src" / "main.c",),
          "aes:308379226:1470713721:1\n"),
+    # Compression fixture: run-length encoding and a sliding-window LZ77-style
+    # matcher, each with a compress->decompress roundtrip check. Stresses
+    # offset/pointer arithmetic and back-reference handling under all IR passes.
+    Case("compression", (case_path("compression") / "src" / "main.c",),
+         "compress:34:1:26:1:31:60\n"),
     # Control-flow & loop fixture: nested if/switch/for/while/do-while,
     # break/continue/goto/return, comma operator, recursive factorial and a
     # recursive BST built with malloc. Stresses Flattening, IndirectBranch,
