@@ -155,7 +155,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 - [x] Create new-PM wrapper prototype.
 - [x] Port one simple module pass to new-PM.
 - [ ] Port one simple function pass to new-PM.
-- [ ] Test Taokari under the current LLVM new-PM pipeline.
+- [x] Test Taokari under the current LLVM new-PM pipeline.
 - [x] Finish MIR config keys per sub-pass.
 - [x] 📚 Document that `-taokari-max` is budgeted and how VMP opt-in behaves.
 

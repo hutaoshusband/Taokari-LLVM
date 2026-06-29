@@ -132,6 +132,7 @@ RELEASE_GATES = [
     ReleaseGate("decompiler_snapshot", TESTING / "scripts" / "verify_vmp_decompiler_snapshot.py",
                 skippable=True),
     ReleaseGate("new_pm_metadata_hygiene", TESTING / "scripts" / "verify_new_pm_metadata_hygiene.py"),
+    ReleaseGate("new_pm_pipeline", TESTING / "scripts" / "verify_new_pm_pipeline.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
