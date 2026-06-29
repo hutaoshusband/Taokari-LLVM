@@ -186,7 +186,7 @@ Goal: make Taokari less Windows-only without losing the current Windows x64 stab
 - [ ] Add AArch64 string/constant encryption parity test.
 - [ ] Add AArch64 MIR no-op infrastructure smoke test.
 - [ ] Add AArch64 MIR dirtybytes equivalent only if architecture-safe.
-- [ ] Document which MIR sub-passes are x86-only.
+- [x] Document which MIR sub-passes are x86-only.
 
 ## A3. Platform Feature Matrix
 
