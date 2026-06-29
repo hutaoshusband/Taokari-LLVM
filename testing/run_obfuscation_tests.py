@@ -142,6 +142,7 @@ RELEASE_GATES = [
     ReleaseGate("cpp_class_export", TESTING / "scripts" / "verify_cpp_class_export.py"),
     ReleaseGate("plugin_dll", TESTING / "scripts" / "verify_plugin_dll.py"),
     ReleaseGate("static_library", TESTING / "scripts" / "verify_static_library.py"),
+    ReleaseGate("budget_warning", TESTING / "scripts" / "verify_budget_warning.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"

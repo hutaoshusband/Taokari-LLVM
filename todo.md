@@ -362,7 +362,7 @@ Goal: make Taokari easy to use without turning protection into an all-or-nothing
 - [ ] Add global compile-time budget.
 - [ ] Add global runtime overhead target.
 - [x] Add per-function VMP budget override.
-- [ ] Add warning when profile exceeds budget.
+- [x] Add warning when profile exceeds budget.
 - [ ] Add hard-fail mode when budget exceeds limit.
 
 ## E3. Config Generator

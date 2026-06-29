@@ -207,6 +207,15 @@ def render_markdown(summaries: list[dict]) -> str:
         enabled = [name for name, p in s["passes"].items() if p["enable"]]
         out.append(f"- tier {s['tier']}: {', '.join(enabled) or '(none)'}")
 
+    over = [s for s in summaries if not s["compile_within_budget"]]
+    if over:
+        out.append("\n## Budget warnings\n")
+        out.append("Tier compile time exceeded its budget (lower the level or "
+                   "drop a pass on this tier).\n")
+        for s in over:
+            out.append(f"- tier {s['tier']}: {s['compile_s']}s > "
+                       f"{s['compile_budget_s']}s budget")
+
     valid = [s for s in summaries if s["build_ok"] and s["correct"]]
     slowest = max(summaries, key=lambda s: s["compile_s"]) if summaries else None
     out.append("\n## Highlights\n")
@@ -242,6 +251,10 @@ def main() -> int:
     payload = {"tiers": summaries}
     text = json.dumps(payload, indent=2)
     md = render_markdown(summaries)
+    over = [s for s in summaries if not s["compile_within_budget"]]
+    for s in over:
+        print(f"warning: tier {s['tier']} exceeded its compile-time budget "
+              f"({s['compile_s']}s > {s['compile_budget_s']}s)", file=sys.stderr)
     if args.out:
         args.out.write_text(text, encoding="utf-8")
     if args.out_md:
