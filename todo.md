@@ -415,7 +415,7 @@ Goal: avoid building a beautiful obfuscator that breaks real programs.
 - [ ] Add plugin-style DLL fixture.
 - [x] Add exported C API fixture.
 - [ ] Add C++ class export fixture.
-- [ ] Add mixed C/C++ build fixture.
+- [x] Add mixed C/C++ build fixture.
 
 ## F3. Third-Party Library Fixtures
 

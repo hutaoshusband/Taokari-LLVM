@@ -228,6 +228,12 @@ CASES = [
     # IR passes.
     Case("json_parser", (case_path("json_parser") / "src" / "main.c",),
          "json:2:2:9:8:3:1:60\n"),
+    # Mixed C/C++ build fixture: a C core (extern "C" functions) linked with a
+    # C++ main using classes + templates. Proves the cross-language ABI and
+    # mixed TU compile survive obfuscation.
+    Case("mixed_c_cpp", (case_path("mixed_c_cpp") / "core.c",
+                         case_path("mixed_c_cpp") / "src" / "main.cpp",),
+         "mixedcc:185:1641:1000\n"),
     # Control-flow & loop fixture: nested if/switch/for/while/do-while,
     # break/continue/goto/return, comma operator, recursive factorial and a
     # recursive BST built with malloc. Stresses Flattening, IndirectBranch,
