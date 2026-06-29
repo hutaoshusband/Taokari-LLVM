@@ -221,6 +221,12 @@ CASES = [
     # offset/pointer arithmetic and back-reference handling under all IR passes.
     Case("compression", (case_path("compression") / "src" / "main.c",),
          "compress:34:1:26:1:31:60\n"),
+    # JSON parser fixture: a self-contained recursive-descent JSON parser
+    # extracting object/array/string/number/bool/null counts and a number
+    # checksum. Stresses recursive control flow + string scanning under all
+    # IR passes.
+    Case("json_parser", (case_path("json_parser") / "src" / "main.c",),
+         "json:2:2:9:8:3:1:60\n"),
     # Control-flow & loop fixture: nested if/switch/for/while/do-while,
     # break/continue/goto/return, comma operator, recursive factorial and a
     # recursive BST built with malloc. Stresses Flattening, IndirectBranch,
