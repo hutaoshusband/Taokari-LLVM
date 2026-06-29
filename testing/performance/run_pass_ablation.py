@@ -163,6 +163,9 @@ def main() -> int:
     parser.add_argument("--levels", help="comma-separated subset of 1..4")
     parser.add_argument("--no-levelless", action="store_true", help="skip cse/ocnst/outline/meta/rtti")
     parser.add_argument("--max", action="store_true", help="also build the -taokari-max reference")
+    parser.add_argument("--max-runtime-x", type=float, default=None,
+                        help="runtime-overhead target: exit 1 if any obfuscated "
+                             "row exceeds this multiple of native runtime")
     args = parser.parse_args()
 
     if not CLANG.exists():
@@ -253,6 +256,13 @@ def main() -> int:
               f"({float(worst_size['size_kb']):.1f}KB)")
         print(f"BIGGEST SPEED:  {worst_speed['label']}  {float(worst_speed['speed_x']):.2f}x native "
               f"({float(worst_speed['total_ms']):.2f}ms)")
+    if args.max_runtime_x is not None and obf:
+        over = [r for r in obf if float(r["speed_x"]) > args.max_runtime_x]
+        if over:
+            print(f"\nFAIL: runtime-overhead target {args.max_runtime_x}x exceeded by "
+                  + ", ".join(f"{r['label']}({float(r['speed_x']):.2f}x)" for r in over),
+                  file=sys.stderr)
+            return 1
     return 0
 
 

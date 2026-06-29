@@ -147,7 +147,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 
 - [ ] Add max binary-size growth limit.
 - [ ] Add max compile-time growth limit.
-- [ ] Add max runtime overhead target.
+- [x] Add max runtime overhead target.
 - [x] 🧪 Add decompiler snapshot tests to the normal release-blocking suite.
 - [ ] 📚 Add clean Linux build instructions.
 - [ ] ⚙️ Add CI build check.
@@ -360,7 +360,7 @@ Goal: make Taokari easy to use without turning protection into an all-or-nothing
 - [x] Per-pass budget system exists.
 - [x] Add global binary-size growth budget.
 - [x] Add global compile-time budget.
-- [ ] Add global runtime overhead target.
+- [x] Add global runtime overhead target.
 - [x] Add per-function VMP budget override.
 - [x] Add warning when profile exceeds budget.
 - [x] Add hard-fail mode when budget exceeds limit.

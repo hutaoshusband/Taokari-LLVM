@@ -147,6 +147,7 @@ RELEASE_GATES = [
     ReleaseGate("cfg_callgraph_dump", TESTING / "scripts" / "verify_cfg_callgraph_dump.py"),
     ReleaseGate("linux_build_doc", TESTING / "scripts" / "verify_linux_build_doc.py"),
     ReleaseGate("platform_matrix", TESTING / "scripts" / "verify_platform_matrix.py"),
+    ReleaseGate("runtime_overhead_target", TESTING / "scripts" / "verify_runtime_overhead_target.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
