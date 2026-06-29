@@ -107,6 +107,10 @@ TIER_D_FLAGS = TIER_C_FLAGS + [
 # Phase 4 compile-time budgets (demo target, seconds).
 TIER_BUDGET_SEC = {"A": 5, "B": 30, "C": 60, "D": 300}
 
+# Phase 5 binary-size budgets (demo target, bytes). Generous ceilings so the
+# bar catches a runaway bloat regression, not a normal obfuscation step.
+TIER_SIZE_BUDGET = {"A": 400_000, "B": 600_000, "C": 1_000_000, "D": 2_000_000}
+
 TIERS = {
     "A": TIER_A_FLAGS,
     "B": TIER_B_FLAGS,

@@ -358,8 +358,8 @@ Goal: make Taokari easy to use without turning protection into an all-or-nothing
 ## E2. Budget System
 
 - [x] Per-pass budget system exists.
-- [ ] Add global binary-size growth budget.
-- [ ] Add global compile-time budget.
+- [x] Add global binary-size growth budget.
+- [x] Add global compile-time budget.
 - [ ] Add global runtime overhead target.
 - [x] Add per-function VMP budget override.
 - [x] Add warning when profile exceeds budget.

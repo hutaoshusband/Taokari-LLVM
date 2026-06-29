@@ -30,7 +30,9 @@ def _load():
 
 
 def _over(summaries: list[dict]) -> list[dict]:
-    return [s for s in summaries if not s["compile_within_budget"]]
+    return [s for s in summaries
+            if not s.get("compile_within_budget", True)
+            or not s.get("size_within_budget", True)]
 
 
 def main() -> int:
@@ -48,14 +50,24 @@ def main() -> int:
 
     mod = _load()
     under = [{"tier": "A", "compile_within_budget": True,
-              "compile_s": 5.0, "compile_budget_s": 60.0}]
+              "compile_s": 5.0, "compile_budget_s": 60.0,
+              "size_within_budget": True}]
     over = [{"tier": "Z", "compile_within_budget": False,
-             "compile_s": 80.0, "compile_budget_s": 60.0}]
+             "compile_s": 80.0, "compile_budget_s": 60.0,
+             "size_within_budget": True}]
+    size_over = [{"tier": "S", "compile_within_budget": True,
+                  "compile_s": 5.0, "compile_budget_s": 60.0,
+                  "size_within_budget": False,
+                  "binary_size": 300000, "size_budget_b": 200000}]
     if _over(under):
         print("FAIL: under-budget summary reported as over-budget", file=sys.stderr)
         return 1
     if not _over(over):
         print("FAIL: over-budget summary not detected by the decision helper",
+              file=sys.stderr)
+        return 1
+    if not _over(size_over):
+        print("FAIL: size-over-budget summary not detected by the decision helper",
               file=sys.stderr)
         return 1
 
@@ -79,11 +91,15 @@ def main() -> int:
             print("FAIL: dashboard JSON missing compile_within_budget field",
                   file=sys.stderr)
             return 1
+        if "size_within_budget" not in tiers[0]:
+            print("FAIL: dashboard JSON missing size_within_budget field",
+                  file=sys.stderr)
+            return 1
     finally:
         out_path.unlink(missing_ok=True)
 
     print("budget-hard-fail: ok (--fail-on-budget-exceed accepted, in-budget "
-          "tier exits 0, over-budget decision helper detects exceed)")
+          "tier exits 0, compile- and size-over detected)")
     return 0
 
 

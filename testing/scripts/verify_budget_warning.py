@@ -26,7 +26,8 @@ def _load():
     return mod
 
 
-def _summary(tier: str, compile_s: float, budget: float) -> dict:
+def _summary(tier: str, compile_s: float, budget: float,
+             size: int = 1000, size_budget: int = 200000) -> dict:
     return {
         "tier": tier,
         "correct": True,
@@ -34,7 +35,9 @@ def _summary(tier: str, compile_s: float, budget: float) -> dict:
         "compile_s": compile_s,
         "compile_budget_s": budget,
         "compile_within_budget": compile_s <= budget,
-        "binary_size": 1000,
+        "binary_size": size,
+        "size_budget_b": size_budget,
+        "size_within_budget": size <= size_budget,
         "node_ratio": 2.0,
         "edge_ratio": 2.0,
         "node_bar": 1.5,
@@ -66,20 +69,26 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
+    size_over = mod.render_markdown([_summary("Z", 5.0, 60.0,
+                                              size=300000, size_budget=200000)])
+    if "tier Z: 300000 B > 200000 B budget" not in size_over:
+        print("FAIL: size-over-budget tier produced no size warning",
+              file=sys.stderr)
+        return 1
+
     mixed = mod.render_markdown([_summary("A", 5.0, 60.0), _summary("B", 80.0, 60.0)])
     if mixed.count("tier B: 80.0s > 60.0s budget") != 1:
         print("FAIL: mixed dashboard did not warn on exactly the over-budget tier",
               file=sys.stderr)
         return 1
-    if "tier A:" in mixed.split("Budget warnings")[1] if "Budget warnings" in mixed else True:
-        if "Budget warnings" in mixed and "tier A: 5" in mixed.split("Budget warnings")[1]:
-            print("FAIL: under-budget tier A listed in the budget-warning section",
-                  file=sys.stderr)
-            return 1
+    if "Budget warnings" in mixed and "tier A: 5" in mixed.split("Budget warnings")[1]:
+        print("FAIL: under-budget tier A listed in the budget-warning section",
+              file=sys.stderr)
+        return 1
 
     print("budget-warning: ok (over-budget tier -> markdown warning section + "
-          "named tier/value; under-budget tier -> no warning; mixed -> only "
-          "over-budget tier warned)")
+          "named tier/value; under-budget tier -> no warning; size-over -> "
+          "size warning; mixed -> only over-budget tier warned)")
     return 0
 
 

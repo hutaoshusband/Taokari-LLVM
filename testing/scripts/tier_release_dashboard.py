@@ -32,7 +32,7 @@ from pathlib import Path
 from verify_vmp_coverage import CLANG, run, ROOT, VSDEVCMD
 from measure_ida_cfg_complexity import TIER_BARS, emit_ir, parse_functions
 from verify_tier_recipe import (
-    DEMO_SOURCE, TIERS, TIER_BUDGET_SEC, VMP_FUNCTIONS,
+    DEMO_SOURCE, TIERS, TIER_BUDGET_SEC, TIER_SIZE_BUDGET, VMP_FUNCTIONS,
     parse_compat_report,
 )
 
@@ -81,6 +81,7 @@ def parse_pass_report(text: str) -> dict[str, dict]:
 def summarize_tier(tier: str, tmpdir: Path) -> dict:
     bar = TIER_BARS[tier]
     budget = TIER_BUDGET_SEC[tier]
+    size_budget = TIER_SIZE_BUDGET[tier]
     src = tmpdir / f"tier_{tier}.c"
     src.write_text(DEMO_SOURCE, encoding="utf-8")
 
@@ -89,11 +90,12 @@ def summarize_tier(tier: str, tmpdir: Path) -> dict:
     plain_metrics = parse_functions(
         plain_ll.read_text(encoding="utf-8", errors="ignore"))
 
-    report_path = tmpdir / f"report_{tier}.tsv" if tier in ("C", "D") else None
+    report_path = tmpdir / f"report_{tier}.TSV" if tier in ("C", "D") else None
     cfg = tier_cfg(tier, tmpdir)
     exe = tmpdir / f"out_{tier}.exe"
     build = tier_build(tier, src, exe, report_path, tmpdir, cfg)
 
+    binary_size = exe.stat().st_size if exe.exists() else 0
     summary: dict = {
         "tier": tier,
         "correct": False,
@@ -101,7 +103,9 @@ def summarize_tier(tier: str, tmpdir: Path) -> dict:
         "compile_budget_s": budget,
         "compile_within_budget": build["compile_s"] <= budget,
         "build_ok": build["returncode"] == 0,
-        "binary_size": exe.stat().st_size if exe.exists() else 0,
+        "binary_size": binary_size,
+        "size_budget_b": size_budget,
+        "size_within_budget": binary_size <= size_budget,
         "node_bar": bar["node_factor"],
         "edge_bar": bar["edge_factor"],
         "passes": parse_pass_report(build["report_text"]),
@@ -215,6 +219,15 @@ def render_markdown(summaries: list[dict]) -> str:
         for s in over:
             out.append(f"- tier {s['tier']}: {s['compile_s']}s > "
                        f"{s['compile_budget_s']}s budget")
+    size_over = [s for s in summaries if not s["size_within_budget"]]
+    if size_over:
+        if not over:
+            out.append("\n## Budget warnings\n")
+        out.append("Tier binary size exceeded its budget (the obfuscation is "
+                   "bloating past the size ceiling).\n")
+        for s in size_over:
+            out.append(f"- tier {s['tier']}: {s['binary_size']} B > "
+                       f"{s['size_budget_b']} B budget")
 
     valid = [s for s in summaries if s["build_ok"] and s["correct"]]
     slowest = max(summaries, key=lambda s: s["compile_s"]) if summaries else None
@@ -257,6 +270,10 @@ def main() -> int:
     for s in over:
         print(f"warning: tier {s['tier']} exceeded its compile-time budget "
               f"({s['compile_s']}s > {s['compile_budget_s']}s)", file=sys.stderr)
+    size_over = [s for s in summaries if not s["size_within_budget"]]
+    for s in size_over:
+        print(f"warning: tier {s['tier']} exceeded its binary-size budget "
+              f"({s['binary_size']} B > {s['size_budget_b']} B)", file=sys.stderr)
     if args.out:
         args.out.write_text(text, encoding="utf-8")
     if args.out_md:
@@ -264,7 +281,7 @@ def main() -> int:
     if not args.out and not args.out_md:
         print(text)
     print(md, file=sys.stderr)
-    if args.fail_on_budget_exceed and over:
+    if args.fail_on_budget_exceed and (over or size_over):
         return 1
     return 0
 
