@@ -29,7 +29,7 @@ from pathlib import Path
 
 
 PLATFORMS = ("windows-x64", "linux-x64", "aarch64")
-GOALS = ("dev", "balanced", "strong", "fortress")
+GOALS = ("mobile", "dev", "balanced", "strong", "fortress")
 PERFS = ("loose", "balanced", "tight")
 VMPS = ("off", "annotation-only", "global")
 
@@ -41,6 +41,18 @@ def _pass(enable: bool, level: int, **extra) -> dict:
 
 
 PROFILES = {
+    "mobile": {
+        "fla": _pass(False, 0),
+        "bcf": _pass(False, 0),
+        "mba": _pass(False, 0),
+        "icall": _pass(False, 0),
+        "indbr": _pass(False, 0),
+        "indgv": _pass(False, 0),
+        "cie": _pass(True, 1, minConstSize=64),
+        "cfe": _pass(False, 0),
+        "cse": _pass(True, 1, minStringLength=16),
+        "outline": _pass(False, 0),
+    },
     "dev": {
         "fla": _pass(False, 0),
         "bcf": _pass(False, 0),
