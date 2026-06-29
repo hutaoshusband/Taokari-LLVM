@@ -411,7 +411,7 @@ Goal: avoid building a beautiful obfuscator that breaks real programs.
 - [x] EXE startup gate exists.
 - [x] DLL LoadLibrary gate exists.
 - [x] Manual-map DLL gate exists.
-- [ ] Add static library fixture.
+- [x] Add static library fixture.
 - [x] Add plugin-style DLL fixture.
 - [x] Add exported C API fixture.
 - [x] Add C++ class export fixture.
