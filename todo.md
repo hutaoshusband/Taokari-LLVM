@@ -419,7 +419,7 @@ Goal: avoid building a beautiful obfuscator that breaks real programs.
 
 ## F3. Third-Party Library Fixtures
 
-- [ ] Add tiny AES fixture.
+- [x] Add tiny AES fixture.
 - [x] Add hashing fixture.
 - [ ] Add compression fixture.
 - [ ] Add JSON parser fixture.
