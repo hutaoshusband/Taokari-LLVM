@@ -145,6 +145,7 @@ RELEASE_GATES = [
     ReleaseGate("budget_warning", TESTING / "scripts" / "verify_budget_warning.py"),
     ReleaseGate("budget_hard_fail", TESTING / "scripts" / "verify_budget_hard_fail.py"),
     ReleaseGate("cfg_callgraph_dump", TESTING / "scripts" / "verify_cfg_callgraph_dump.py"),
+    ReleaseGate("linux_build_doc", TESTING / "scripts" / "verify_linux_build_doc.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
