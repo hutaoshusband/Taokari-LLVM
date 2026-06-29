@@ -205,6 +205,11 @@ CASES = [
     # on the bitwise mixing loops.
     Case("hashing", (case_path("hashing") / "src" / "main.c",),
          "hash:17972933699863945481:490021557:3042874451:193\n"),
+    # Allocator-heavy fixture: a free-list pool allocator with alloc/free
+    # counts, linked chains, and a churn loop that reuses freed blocks.
+    # Stresses dynamic memory + pointer-shaped state under all IR passes.
+    Case("allocator_heavy", (case_path("allocator_heavy") / "src" / "main.c",),
+         "alloc:70:20:448:32:8\n"),
     # Control-flow & loop fixture: nested if/switch/for/while/do-while,
     # break/continue/goto/return, comma operator, recursive factorial and a
     # recursive BST built with malloc. Stresses Flattening, IndirectBranch,
