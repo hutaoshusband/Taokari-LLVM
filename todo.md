@@ -457,6 +457,6 @@ This is the “do this next without thinking too much” queue.
 - [ ] Every track has a clear goal.
 - [ ] Every implementation task has a verifier task nearby.
 - [ ] Every partial item is either completed or split into smaller checkboxes.
-- [ ] Every profile has a compile-time, runtime and size budget.
-- [ ] Every tier has a correctness gate and a gnarliness gate.
-- [ ] The roadmap stays short enough to fit in one readable GitHub issue or project board.
+- [x] Every profile has a compile-time, runtime and size budget.
+- [x] Every tier has a correctness gate and a gnarliness gate.
+- [x] The roadmap stays short enough to fit in one readable GitHub issue or project board.

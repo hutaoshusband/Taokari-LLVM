@@ -151,6 +151,7 @@ RELEASE_GATES = [
     ReleaseGate("build_integration_doc", TESTING / "scripts" / "verify_build_integration_doc.py"),
     ReleaseGate("config_inheritance", TESTING / "scripts" / "verify_config_inheritance.py"),
     ReleaseGate("ci_workflow", TESTING / "scripts" / "verify_ci_workflow.py"),
+    ReleaseGate("definition_of_done", TESTING / "scripts" / "verify_dod.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
