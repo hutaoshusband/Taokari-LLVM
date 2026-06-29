@@ -181,9 +181,9 @@ Goal: make Taokari less Windows-only without losing the current Windows x64 stab
 
 - [x] AArch64 pointer-auth path exists.
 - [x] AArch64 MIR parity planning exists.
-- [ ] Add AArch64 build smoke test.
-- [ ] Add AArch64 indirect branch/call parity test.
-- [ ] Add AArch64 string/constant encryption parity test.
+- [x] Add AArch64 build smoke test.
+- [x] Add AArch64 indirect branch/call parity test.
+- [x] Add AArch64 string/constant encryption parity test.
 - [ ] Add AArch64 MIR no-op infrastructure smoke test.
 - [ ] Add AArch64 MIR dirtybytes equivalent only if architecture-safe.
 - [x] Document which MIR sub-passes are x86-only.

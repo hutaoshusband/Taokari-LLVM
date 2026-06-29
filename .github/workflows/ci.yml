@@ -31,6 +31,8 @@ jobs:
           scripts/build-linux.sh
       - name: Linux smoke suite
         run: bash testing/scripts/linux_smoke.sh
+      - name: AArch64 IR cross-compile smoke
+        run: bash testing/scripts/aarch64_smoke.sh
 
   windows:
     name: Windows x64 build + test suite
