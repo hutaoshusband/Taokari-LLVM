@@ -403,8 +403,8 @@ Goal: avoid building a beautiful obfuscator that breaks real programs.
 - [ ] Add thread-local storage fixture.
 - [x] Add atomics fixture.
 - [ ] Add SIMD/intrinsics fixture.
-- [ ] Add large switch fixture.
-- [ ] Add callback/function-pointer fixture.
+- [x] Add large switch fixture.
+- [x] Add callback/function-pointer fixture.
 
 ## F2. Binary Type Fixtures
 

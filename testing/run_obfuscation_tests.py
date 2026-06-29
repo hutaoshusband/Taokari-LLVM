@@ -156,6 +156,15 @@ CASES = [
     # and acquire/release fences (lock-free counter + ticket pattern). Stresses
     # the obfuscator on atomic memory operations and ordering barriers.
     Case("atomics", (case_path("atomics") / "src" / "main.c",), "atomics:1:2:0:7:2:120\n"),
+    # Callback / function-pointer fixture: a function-pointer table, indirect
+    # dispatch through a pointer parameter, a higher-order map, and a fold that
+    # selects a different callee per iteration. Stresses IndirectCall and the
+    # indirect-branch handling around computed dispatch.
+    Case("callback", (case_path("callback") / "src" / "main.c",), "callback:13:20:3:30\n"),
+    # Large switch fixture: a 32-arm switch with a jump-table shape, a
+    # fallthrough chain, and a default arm. Stresses Flattening, LowerSwitch
+    # and switch-recovery resistance.
+    Case("large_switch", (case_path("large_switch") / "src" / "main.c",), "switch:807:837:-1:15:15170\n"),
     # Control-flow & loop fixture: nested if/switch/for/while/do-while,
     # break/continue/goto/return, comma operator, recursive factorial and a
     # recursive BST built with malloc. Stresses Flattening, IndirectBranch,
