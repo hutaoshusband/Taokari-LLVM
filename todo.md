@@ -319,7 +319,7 @@ Goal: make “hard to reverse” measurable instead of based on feeling.
 - [x] Node/edge ratio bars exist for Tier B/C/D.
 - [x] `.text` entropy is measured but not used as hard bar.
 - [x] Add fake-case density bar.
-- [ ] Add indirect rewrite count bar.
+- [x] Add indirect rewrite count bar.
 - [x] Add call-graph breakage bar.
 - [x] Add string leak bar.
 - [x] Add symbol leak bar.
