@@ -9,7 +9,7 @@
 # clang and asserts identical stdout. Exit non-zero on any mismatch.
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CLANG="${CLANG:-${ROOT}/build/taokari-linux/bin/clang}"
 if [[ ! -x "${CLANG}" ]]; then
   echo "missing Taokari clang at ${CLANG}; run scripts/build-linux.sh first" >&2

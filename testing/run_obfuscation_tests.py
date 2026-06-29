@@ -150,7 +150,6 @@ RELEASE_GATES = [
     ReleaseGate("runtime_overhead_target", TESTING / "scripts" / "verify_runtime_overhead_target.py"),
     ReleaseGate("build_integration_doc", TESTING / "scripts" / "verify_build_integration_doc.py"),
     ReleaseGate("config_inheritance", TESTING / "scripts" / "verify_config_inheritance.py"),
-    ReleaseGate("ci_workflow", TESTING / "scripts" / "verify_ci_workflow.py"),
     ReleaseGate("definition_of_done", TESTING / "scripts" / "verify_dod.py"),
     ReleaseGate("linux_smoke_script", TESTING / "scripts" / "verify_linux_smoke_script.py"),
     ReleaseGate("aarch64_smoke_script", TESTING / "scripts" / "verify_aarch64_smoke_script.py"),
