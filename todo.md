@@ -145,11 +145,11 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 
 ## 1.5 Config / Build / Testing
 
-- [ ] Add max binary-size growth limit.
-- [ ] Add max compile-time growth limit.
+- [x] Add max binary-size growth limit.
+- [x] Add max compile-time growth limit.
 - [x] Add max runtime overhead target.
 - [x] 🧪 Add decompiler snapshot tests to the normal release-blocking suite.
-- [ ] 📚 Add clean Linux build instructions.
+- [x] 📚 Add clean Linux build instructions.
 - [x] ⚙️ Add CI build check.
 - [x] Identify new pass-manager migration blockers.
 - [x] Create new-PM wrapper prototype.
