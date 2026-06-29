@@ -138,6 +138,7 @@ RELEASE_GATES = [
     ReleaseGate("vmp_spear_profile", TESTING / "scripts" / "verify_vmp_spear_profile.py"),
     ReleaseGate("debuggable_strong_profile", TESTING / "scripts" / "verify_debuggable_strong_profile.py"),
     ReleaseGate("new_pm_opaque_constant", TESTING / "scripts" / "verify_new_pm_opaque_constant.py"),
+    ReleaseGate("exported_c_api", TESTING / "scripts" / "verify_exported_c_api.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"

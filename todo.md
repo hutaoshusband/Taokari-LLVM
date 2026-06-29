@@ -413,7 +413,7 @@ Goal: avoid building a beautiful obfuscator that breaks real programs.
 - [x] Manual-map DLL gate exists.
 - [ ] Add static library fixture.
 - [ ] Add plugin-style DLL fixture.
-- [ ] Add exported C API fixture.
+- [x] Add exported C API fixture.
 - [ ] Add C++ class export fixture.
 - [ ] Add mixed C/C++ build fixture.
 
