@@ -124,6 +124,7 @@ RELEASE_GATES = [
     ReleaseGate("string_leak_bar", TESTING / "scripts" / "verify_string_leak_bar.py"),
     ReleaseGate("fake_case_density_bar", TESTING / "scripts" / "verify_fake_case_density_bar.py"),
     ReleaseGate("call_graph_breakage_bar", TESTING / "scripts" / "verify_call_graph_breakage.py"),
+    ReleaseGate("symbol_leak_bar", TESTING / "scripts" / "verify_symbol_leak_bar.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"

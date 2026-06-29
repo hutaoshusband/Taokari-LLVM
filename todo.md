@@ -322,7 +322,7 @@ Goal: make “hard to reverse” measurable instead of based on feeling.
 - [ ] Add indirect rewrite count bar.
 - [x] Add call-graph breakage bar.
 - [x] Add string leak bar.
-- [ ] Add symbol leak bar.
+- [x] Add symbol leak bar.
 - [ ] Add VMP signature-divergence bar.
 - [ ] Add MIR survival bar.
 
