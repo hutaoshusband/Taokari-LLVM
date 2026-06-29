@@ -424,7 +424,7 @@ Goal: avoid building a beautiful obfuscator that breaks real programs.
 - [ ] Add compression fixture.
 - [ ] Add JSON parser fixture.
 - [ ] Add allocator-heavy fixture.
-- [ ] Add math-heavy fixture.
+- [x] Add math-heavy fixture.
 - [ ] Add parser/state-machine fixture.
 
 ---

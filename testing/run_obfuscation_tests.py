@@ -188,6 +188,12 @@ CASES = [
     # indirect-global handling of pointer-shaped state.
     Case("pointer_heavy", (case_path("pointer_heavy") / "src" / "main.c",),
          "ptrs:22:18:60:13539:10\n"),
+    # Math-heavy fixture: Horner polynomial evaluation, integer square root,
+    # a 64x64->128 high-multiply, a trigonometric accumulation, and modular
+    # exponentiation. Stresses ConstantFPEncryption / ConstantIntEncryption
+    # and MBA on FP and wide-integer math, and FP precision preservation.
+    Case("math_heavy", (case_path("math_heavy") / "src" / "main.c",),
+         "math:57.5000:1024:1305938385386173474:4.0709:407\n"),
     # Control-flow & loop fixture: nested if/switch/for/while/do-while,
     # break/continue/goto/return, comma operator, recursive factorial and a
     # recursive BST built with malloc. Stresses Flattening, IndirectBranch,
