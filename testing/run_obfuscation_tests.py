@@ -152,6 +152,10 @@ CASES = [
     # bit-mask idioms, and a byte-order probe. Validates ConstantIntEncryption
     # and MBA on AND/OR/XOR under -O2/LTO.
     Case("bit_ops", (case_path("bit_ops") / "src" / "main.c",), "bitops:4043304975:253011243:896:31:2\n"),
+    # Atomics fixture: atomic fetch_add/load, compare_exchange_weak CAS loop,
+    # and acquire/release fences (lock-free counter + ticket pattern). Stresses
+    # the obfuscator on atomic memory operations and ordering barriers.
+    Case("atomics", (case_path("atomics") / "src" / "main.c",), "atomics:1:2:0:7:2:120\n"),
     # Control-flow & loop fixture: nested if/switch/for/while/do-while,
     # break/continue/goto/return, comma operator, recursive factorial and a
     # recursive BST built with malloc. Stresses Flattening, IndirectBranch,
