@@ -321,7 +321,7 @@ Goal: make “hard to reverse” measurable instead of based on feeling.
 - [ ] Add fake-case density bar.
 - [ ] Add indirect rewrite count bar.
 - [ ] Add call-graph breakage bar.
-- [ ] Add string leak bar.
+- [x] Add string leak bar.
 - [ ] Add symbol leak bar.
 - [ ] Add VMP signature-divergence bar.
 - [ ] Add MIR survival bar.

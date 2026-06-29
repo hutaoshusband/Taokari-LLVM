@@ -121,6 +121,7 @@ RELEASE_GATES = [
     ReleaseGate("dynamic_protection", TESTING / "scripts" / "verify_dynamic_protection.py"),
     ReleaseGate("outline_dyn_fortress_compose", TESTING / "scripts" / "verify_outline_dyn_fortress_compose.py"),
     ReleaseGate("opaque_constant_context", TESTING / "scripts" / "verify_opaque_constant_context.py"),
+    ReleaseGate("string_leak_bar", TESTING / "scripts" / "verify_string_leak_bar.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
