@@ -379,13 +379,13 @@ Goal: make Taokari easy to use without turning protection into an all-or-nothing
 
 ## E4. Build Integration
 
-- [ ] Add CMake helper module.
-- [ ] Add Ninja example.
-- [ ] Add Visual Studio project example.
-- [ ] Add `build_strong.bat` docs.
-- [ ] Add `build_fortress.bat` docs.
-- [ ] Add example with selected `+vmp` function.
-- [ ] Add example with `-vmp` wrapper function.
+- [x] Add CMake helper module.
+- [x] Add Ninja example.
+- [x] Add Visual Studio project example.
+- [x] Add `build_strong.bat` docs.
+- [x] Add `build_fortress.bat` docs.
+- [x] Add example with selected `+vmp` function.
+- [x] Add example with `-vmp` wrapper function.
 
 ---
 
