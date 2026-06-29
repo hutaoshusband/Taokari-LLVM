@@ -235,6 +235,8 @@ def main() -> int:
                         help="write JSON summary here")
     parser.add_argument("--out-md", type=Path, default=None,
                         help="write markdown dashboard here")
+    parser.add_argument("--fail-on-budget-exceed", action="store_true",
+                        help="exit non-zero if any tier exceeds its budget")
     args = parser.parse_args()
 
     if not CLANG.exists():
@@ -262,6 +264,8 @@ def main() -> int:
     if not args.out and not args.out_md:
         print(text)
     print(md, file=sys.stderr)
+    if args.fail_on_budget_exceed and over:
+        return 1
     return 0
 
 

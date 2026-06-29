@@ -143,6 +143,7 @@ RELEASE_GATES = [
     ReleaseGate("plugin_dll", TESTING / "scripts" / "verify_plugin_dll.py"),
     ReleaseGate("static_library", TESTING / "scripts" / "verify_static_library.py"),
     ReleaseGate("budget_warning", TESTING / "scripts" / "verify_budget_warning.py"),
+    ReleaseGate("budget_hard_fail", TESTING / "scripts" / "verify_budget_hard_fail.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
