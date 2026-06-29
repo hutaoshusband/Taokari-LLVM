@@ -85,6 +85,7 @@ class Case:
 class ReleaseGate:
     name: str
     script: Path
+    skippable: bool = False
 
 
 def case_path(name: str) -> Path:
@@ -128,6 +129,8 @@ RELEASE_GATES = [
     ReleaseGate("indirect_rewrite_count_bar", TESTING / "scripts" / "verify_indirect_rewrite_count_bar.py"),
     ReleaseGate("vmp_signature_divergence_bar", TESTING / "scripts" / "verify_vmp_handler_signature.py"),
     ReleaseGate("mir_survival_bar", TESTING / "scripts" / "verify_machine_obf_l3_boundary_metric.py"),
+    ReleaseGate("decompiler_snapshot", TESTING / "scripts" / "verify_vmp_decompiler_snapshot.py",
+                skippable=True),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
@@ -404,6 +407,11 @@ def run_release_gates(*, keep_going: bool) -> int:
     for gate in RELEASE_GATES:
         log("GATE", gate.name, "yellow")
         result = run([sys.executable, str(gate.script)])
+        if gate.skippable and result.returncode == 2:
+            if result.stdout:
+                sys.stdout.write(result.stdout)
+            log("SKIP", gate.name, "blue")
+            continue
         if result.returncode:
             failures += 1
             if result.stdout:

@@ -148,7 +148,7 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 - [ ] Add max binary-size growth limit.
 - [ ] Add max compile-time growth limit.
 - [ ] Add max runtime overhead target.
-- [ ] 🧪 Add decompiler snapshot tests to the normal release-blocking suite.
+- [x] 🧪 Add decompiler snapshot tests to the normal release-blocking suite.
 - [ ] 📚 Add clean Linux build instructions.
 - [ ] ⚙️ Add CI build check.
 - [x] Identify new pass-manager migration blockers.
