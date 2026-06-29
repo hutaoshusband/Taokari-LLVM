@@ -133,6 +133,7 @@ RELEASE_GATES = [
                 skippable=True),
     ReleaseGate("new_pm_metadata_hygiene", TESTING / "scripts" / "verify_new_pm_metadata_hygiene.py"),
     ReleaseGate("new_pm_pipeline", TESTING / "scripts" / "verify_new_pm_pipeline.py"),
+    ReleaseGate("profile_validation", TESTING / "scripts" / "verify_profile_validation.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
