@@ -308,8 +308,8 @@ Goal: make “hard to reverse” measurable instead of based on feeling.
 - [x] 🧪 Add optional IDA runner detection.
 - [x] 🧪 Add optional Ghidra headless runner detection.
 - [x] Dump CFG node/edge count per target function.
-- [ ] Dump decompiler pseudocode length per target function.
-- [ ] Dump switch-recovery result if available.
+- [x] Dump decompiler pseudocode length per target function.
+- [x] Dump switch-recovery result if available.
 - [x] Dump call-graph recovery result.
 - [x] Store snapshots as JSON artifacts.
 - [x] Skip gracefully when IDA/Ghidra is not installed.

@@ -113,6 +113,8 @@ def main() -> int:
             "victim_ea": ea,
             "hexrays": hexrays,
             "pseudocode": pseudo,
+            "switch_recovered": ("switch" in pseudo),
+            "switch_cases": pseudo.count("case ") + pseudo.count("default:"),
             "error": error,
         }, handle, indent=2, sort_keys=True)
     return 0
@@ -167,6 +169,8 @@ def main():
             "victim_ea": str(ea) if ea is not None else None,
             "hexrays": decomp_ok,
             "pseudocode": pseudo,
+            "switch_recovered": ("switch" in pseudo),
+            "switch_cases": pseudo.count("case ") + pseudo.count("default:"),
             "error": error,
         }, handle, indent=2, sort_keys=True)
 
@@ -344,8 +348,11 @@ def run_checks(tmp: Path, tools: list[str], artifacts: Path | None) -> int:
             out.write_text(json.dumps({"plain": plain_snap, "vmp": vmp_snap},
                                       indent=2, sort_keys=True), encoding="utf-8")
         ran += 1
+        plain_sw = plain_snap.get("switch_cases", 0)
+        vmp_sw = vmp_snap.get("switch_cases", 0)
         print(f"  {name}: ok (plain {len(str(plain_snap.get('pseudocode','')).splitlines())} lines"
-              f" -> vmp {len(str(vmp_snap.get('pseudocode','')).splitlines())} lines)")
+              f" -> vmp {len(str(vmp_snap.get('pseudocode','')).splitlines())} lines;"
+              f" switch cases plain {plain_sw} -> vmp {vmp_sw})")
     print(f"verify_vmp_decompiler_snapshot: ok ({ran} tool(s))")
     return 0
 
