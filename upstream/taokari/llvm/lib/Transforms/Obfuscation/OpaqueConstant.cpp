@@ -1,5 +1,6 @@
 #include "llvm/Transforms/Obfuscation/OpaqueConstant.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -32,6 +33,7 @@ struct OpaqueConstant : public FunctionPass {
   static char ID;
   ObfuscationOptions *ArgsOptions;
   std::mt19937_64 RNG;
+  uint64_t BuildSeed = 0;
 
   OpaqueConstant(ObfuscationOptions *argsOptions) : FunctionPass(ID) {
     this->ArgsOptions = argsOptions;
@@ -39,17 +41,26 @@ struct OpaqueConstant : public FunctionPass {
     if (auto EC = getRandomBytes(&Seed, sizeof(Seed)))
       report_fatal_error(StringRef("Failed to seed ocnst RNG: ") + EC.message());
     RNG = std::mt19937_64(Seed);
+    BuildSeed = RNG();
   }
 
   StringRef getPassName() const override { return "OpaqueConstant"; }
 
+  static uint64_t deriveNonceValue(Function &F, uint64_t BuildSeed) {
+    uint64_t NameHash = static_cast<uint64_t>(hash_value(F.getName()));
+    std::mt19937_64 Gen(NameHash ^ BuildSeed);
+    uint64_t Value = Gen();
+    if (!Value)
+      Value = 0x9e3779b97f4a7c15ull;
+    return Value;
+  }
+
   static GlobalVariable *getOrCreateNonce(Module &M, IntegerType *Int64,
-                                          Function &F) {
+                                          Function &F, uint64_t BuildSeed) {
     Twine Name = Twine(F.getName()) + ".ocnst.nonce";
     if (auto *GV = M.getGlobalVariable(Name.str(), true))
       return GV;
-    std::mt19937_64 Gen(0x9e3779b97f4a7c15ull);
-    auto *Init = ConstantInt::get(Int64, Gen());
+    auto *Init = ConstantInt::get(Int64, deriveNonceValue(F, BuildSeed));
     auto *GV = new GlobalVariable(M, Int64, false, GlobalValue::PrivateLinkage,
                                   Init, Name.str(), nullptr,
                                   GlobalVariable::NotThreadLocal, 8, true);
@@ -76,7 +87,8 @@ struct OpaqueConstant : public FunctionPass {
 
     std::mt19937_64 FuncRNG(RNG());
     auto *Int64 = Type::getInt64Ty(F.getContext());
-    GlobalVariable *Nonce = getOrCreateNonce(*F.getParent(), Int64, F);
+    GlobalVariable *Nonce =
+        getOrCreateNonce(*F.getParent(), Int64, F, BuildSeed);
     bool Changed = false;
 
     for (BasicBlock &BB : F) {

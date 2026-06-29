@@ -34,7 +34,7 @@ or by `noobf`.
 | `-mllvm -taokari-<p>-prob=N`      | Per-pass probability (0..100).                           |
 | `-mllvm -taokari-<p>-func-prob=N` | Per-pass per-function probability (0..100).              |
 | `-mllvm -taokari-outline`         | Enable function outlining (callout obfuscation).         |
-| `-mllvm -taokari-ocnst`           | Enable opaque-constant substitution. Rewrites plain integer constants as opaque XOR-of-runtime-values expressions (distinct from `-taokari-cie`, which encrypts via a global pool). |
+| `-mllvm -taokari-ocnst`           | Enable opaque-constant substitution. Rewrites plain integer constants as opaque XOR-of-runtime-values expressions (distinct from `-taokari-cie`, which encrypts via a global pool). The XOR nonce is derived per function from the function identity mixed with a per-build seed, so an identical constant encrypts differently across functions. |
 | `-mllvm -taokari-dyn`             | Enable dynamic anti-reversing checks (off by default; NOT part of `-taokari-max`). |
 
 ## Per-function annotations
