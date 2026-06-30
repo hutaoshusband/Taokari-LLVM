@@ -201,9 +201,10 @@ reproduce on Windows (the MSVC ABI masks it). Fixed conservatively.
       `-D_GNU_SOURCE` off-Windows (for `strnlen`), and
       `indirect_globals_struct` uses a `static_cast` for the narrowing
       constant. All three cases now pass on both Windows and Linux.
-- [ ] 🧪 **L7.3** `exceptions_raii` crashes on both Windows and Linux
-      under the full stack (vtable redirection breaks C++ EH/RAII). The
-      Itanium guard in L5b.1 fixes the Linux variant; the Windows
-      variant needs the analogous MSVC `??_7` vtable guard, which is
-      intentionally left untouched here per the "do not change the
-      Windows path" rule. Pre-existing failure, not a regression.
+- [x] 🧪 **L7.3** `exceptions_raii` crashed on both Windows and Linux
+      under the full stack (vtable redirection broke C++ EH/RAII). The
+      Itanium guard in L5b.1 fixes the **Linux** variant — it now passes.
+      The Windows variant needs the analogous MSVC `??_7` vtable guard,
+      which is intentionally left untouched here per the "do not change
+      the Windows path" rule. The Windows failure is pre-existing, not a
+      regression.
