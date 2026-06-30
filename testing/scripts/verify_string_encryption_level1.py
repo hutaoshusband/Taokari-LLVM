@@ -98,6 +98,8 @@ def must(result: subprocess.CompletedProcess[str], label: str) -> None:
 
 def compile_exe(src: Path, out: Path, cfg: Path | None) -> None:
   cmd = [str(CLANG), str(src), "-std=c++17", "-O2", "-o", str(out)]
+  if not tp.IS_WINDOWS:
+    cmd += ["-fdeclspec", "-D_GNU_SOURCE"]
   if cfg:
     cmd += ["-mllvm", "-taokari", "-mllvm", "-taokari-cse",
             "-mllvm", f"-taokari-cfg={cfg}"]
@@ -110,6 +112,8 @@ def emit_ir(src: Path, out: Path, cfg: Path) -> str:
       "-mllvm", "-taokari", "-mllvm", "-taokari-cse",
       "-mllvm", f"-taokari-cfg={cfg}", "-o", str(out),
   ]
+  if not tp.IS_WINDOWS:
+    cmd += ["-fdeclspec", "-D_GNU_SOURCE"]
   must(run_vs(cmd, src.parent), "emit IR")
   return out.read_text(encoding="utf-8")
 

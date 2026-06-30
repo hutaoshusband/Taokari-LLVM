@@ -114,6 +114,8 @@ def compile_exe(src: Path, out: Path, cfg: Path) -> None:
   cmd = [str(CLANG), str(src), "-std=c++17", "-O2", "-o", str(out),
          "-mllvm", "-taokari", "-mllvm", "-taokari-cse",
          "-mllvm", f"-taokari-cfg={cfg}"]
+  if not tp.IS_WINDOWS:
+    cmd += ["-fdeclspec", "-D_GNU_SOURCE"]
   must(run_vs(cmd, src.parent), f"compile {out.name}")
 
 
@@ -122,6 +124,8 @@ def emit_ir(src: Path, out: Path, cfg: Path) -> str:
          "-fno-discard-value-names",
          "-mllvm", "-taokari", "-mllvm", "-taokari-cse",
          "-mllvm", f"-taokari-cfg={cfg}", "-o", str(out)]
+  if not tp.IS_WINDOWS:
+    cmd += ["-fdeclspec", "-D_GNU_SOURCE"]
   must(run_vs(cmd, src.parent), "emit IR")
   return out.read_text(encoding="utf-8")
 
@@ -216,7 +220,8 @@ def main() -> int:
     src = tmp / "strenc_key.cpp"
     src.write_text(SOURCE, encoding="utf-8")
     plain = tmp / "plain.exe"
-    must(run_vs([str(CLANG), str(src), "-std=c++17", "-O2", "-o", str(plain)],
+    plain_flags = ["-fdeclspec", "-D_GNU_SOURCE"] if not tp.IS_WINDOWS else []
+    must(run_vs([str(CLANG), str(src), "-std=c++17", "-O2", *plain_flags, "-o", str(plain)],
                 src.parent), "plain compile")
     plain_run = run([str(plain)])
     must(plain_run, "plain run")
