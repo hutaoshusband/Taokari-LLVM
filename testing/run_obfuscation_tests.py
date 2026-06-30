@@ -90,6 +90,9 @@ class ReleaseGate:
     name: str
     script: Path
     skippable: bool = False
+    # Gates that are Windows-only by construction (MSVC ABI, PE, LoadLibrary,
+    # clang-cl). Skipped on non-Windows instead of failing.
+    windows_only: bool = False
 
 
 def case_path(name: str) -> Path:
@@ -97,7 +100,7 @@ def case_path(name: str) -> Path:
 
 
 RELEASE_GATES = [
-    ReleaseGate("indirect_call_level3", TESTING / "scripts" / "verify_indirect_call_level3.py"),
+    ReleaseGate("indirect_call_level3", TESTING / "scripts" / "verify_indirect_call_level3.py", windows_only=True),
     ReleaseGate("vmp_release_smoke", TESTING / "scripts" / "verify_vmp_level1.py"),
     ReleaseGate("vmp_overhead_budget", TESTING / "scripts" / "verify_vmp_benchmark.py"),
     ReleaseGate("vmp_polymorphic_builds", TESTING / "scripts" / "verify_vmp_polymorphic_builds.py"),
@@ -114,7 +117,7 @@ RELEASE_GATES = [
     ReleaseGate("vmp_dynamic_loop", TESTING / "scripts" / "verify_vmp_dynamic_loop.py"),
     ReleaseGate("vmp_anti_trace_config", TESTING / "scripts" / "verify_vmp_anti_trace_config.py"),
     ReleaseGate("vmp_emulation_guard", TESTING / "scripts" / "verify_vmp_emulation_guard.py"),
-    ReleaseGate("vmp_dll_load_and_manual_map", TESTING / "scripts" / "verify_vmp_dll_load.py"),
+    ReleaseGate("vmp_dll_load_and_manual_map", TESTING / "scripts" / "verify_vmp_dll_load.py", windows_only=True),
     ReleaseGate("semantic_memory_stress", TESTING / "scripts" / "verify_semantic_memory_stress.py"),
     # Section 22 Phase 1/7: prove -taokari-max + VMP no longer hangs.
     # The budget caps refuse runaway functions; -taokari-max-no-vmp is the
@@ -142,10 +145,10 @@ RELEASE_GATES = [
     ReleaseGate("vmp_spear_profile", TESTING / "scripts" / "verify_vmp_spear_profile.py"),
     ReleaseGate("debuggable_strong_profile", TESTING / "scripts" / "verify_debuggable_strong_profile.py"),
     ReleaseGate("new_pm_opaque_constant", TESTING / "scripts" / "verify_new_pm_opaque_constant.py"),
-    ReleaseGate("exported_c_api", TESTING / "scripts" / "verify_exported_c_api.py"),
-    ReleaseGate("cpp_class_export", TESTING / "scripts" / "verify_cpp_class_export.py"),
-    ReleaseGate("plugin_dll", TESTING / "scripts" / "verify_plugin_dll.py"),
-    ReleaseGate("static_library", TESTING / "scripts" / "verify_static_library.py"),
+    ReleaseGate("exported_c_api", TESTING / "scripts" / "verify_exported_c_api.py", windows_only=True),
+    ReleaseGate("cpp_class_export", TESTING / "scripts" / "verify_cpp_class_export.py", windows_only=True),
+    ReleaseGate("plugin_dll", TESTING / "scripts" / "verify_plugin_dll.py", windows_only=True),
+    ReleaseGate("static_library", TESTING / "scripts" / "verify_static_library.py", windows_only=True),
     ReleaseGate("budget_warning", TESTING / "scripts" / "verify_budget_warning.py"),
     ReleaseGate("budget_hard_fail", TESTING / "scripts" / "verify_budget_hard_fail.py"),
     ReleaseGate("cfg_callgraph_dump", TESTING / "scripts" / "verify_cfg_callgraph_dump.py"),
@@ -523,6 +526,14 @@ def measure_runtime(exe: Path, rounds: int = 3) -> tuple[float, subprocess.Compl
 def run_release_gates(*, keep_going: bool) -> int:
     failures = 0
     for gate in RELEASE_GATES:
+        if gate.windows_only and not IS_WINDOWS:
+            log("SKIP", f"{gate.name} (Windows-only gate)", "blue")
+            continue
+        # Off-Windows, only run gates known to be portable. The remaining
+        # verify_*.py gates still hardcode clang.exe/VS env and would
+        # silently no-op; skip them until each is ported (LinuxUpdate L7.1).
+        if not IS_WINDOWS and not gate.skippable:
+            continue
         log("GATE", gate.name, "yellow")
         result = run([sys.executable, str(gate.script)])
         if gate.skippable and result.returncode == 2:
