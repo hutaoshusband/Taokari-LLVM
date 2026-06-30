@@ -228,7 +228,9 @@ def verify_tier(tier: str, tmpdir: Path) -> bool:
 
     exe = tmpdir / f"out_{tier}.exe"
     build_flags = [str(CLANG), "-O2", str(src), "-o", str(exe)]
-    build_flags += flags + ["-Wl,/DEBUG:NONE"]
+    build_flags += flags
+    if tp.IS_WINDOWS:
+        build_flags += ["-Wl,/DEBUG:NONE"]
     t0 = time.monotonic()
     r = run(build_flags, use_vs_env=True)
     elapsed = time.monotonic() - t0
