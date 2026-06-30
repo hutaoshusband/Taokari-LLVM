@@ -8,6 +8,7 @@
 // surfaces as a wrong constant in the obfuscated binary.
 #include <stdint.h>
 #include <stdio.h>
+#include <assert.h>
 
 #define TAO_VERSION_MAJOR 2
 #define TAO_VERSION_MINOR 3

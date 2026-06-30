@@ -196,9 +196,11 @@ reproduce on Windows (the MSVC ABI masks it). Fixed conservatively.
       rest skip explicitly. Per-`verify_*.py` porting onto
       `_taokari_portable` is the remaining follow-up but no longer a
       silent-pass hazard.
-- [ ] 🧪 **L7.2** Fix the 3 test-fixture source nits (missing includes /
-      narrowing) so those cases also run on Linux — or gate them
-      Windows-only in the harness.
+- [x] 🧪 **L7.2** Fixed the 3 test-fixture source nits: `preprocessor`
+      now `#include <assert.h>` (for `static_assert`), the harness adds
+      `-D_GNU_SOURCE` off-Windows (for `strnlen`), and
+      `indirect_globals_struct` uses a `static_cast` for the narrowing
+      constant. All three cases now pass on both Windows and Linux.
 - [ ] 🧪 **L7.3** `exceptions_raii` crashes on both Windows and Linux
       under the full stack (vtable redirection breaks C++ EH/RAII). The
       Itanium guard in L5b.1 fixes the Linux variant; the Windows

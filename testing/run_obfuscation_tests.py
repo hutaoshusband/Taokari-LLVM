@@ -458,6 +458,7 @@ def compile_case(
         cmd = [str(clang), "-c", str(source), std_flag]
         if not is_cl and not IS_WINDOWS:
             cmd.append("-fdeclspec")
+            cmd.append("-D_GNU_SOURCE")
         if is_cl:
             # clang-cl defaults to /EHs-c- (exceptions off); C++ tests need them.
             cmd.append("/EHsc")

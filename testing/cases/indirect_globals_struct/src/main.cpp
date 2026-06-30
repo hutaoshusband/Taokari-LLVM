@@ -18,7 +18,7 @@ struct Point {
 };
 
 // Large mutable struct global.
-Point g_point = {10, 20, 0xABCDEF1234567890LL, {1, 2, 3, 4}};
+Point g_point = {10, 20, static_cast<int64_t>(0xABCDEF1234567890ULL), {1, 2, 3, 4}};
 
 // Const struct global (read-only after init).
 const Point g_origin = {0, 0, 0, {0, 0, 0, 0}};
