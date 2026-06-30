@@ -10,6 +10,11 @@ import _taokari_portable as tp
 ROOT = Path(__file__).resolve().parents[2]
 CLANG = tp.CLANG
 VSDEVCMD = tp.VSDEVCMD
+if tp.IS_WINDOWS:
+    DYN_APIS = ("IsDebuggerPresent", "CheckRemoteDebuggerPresent",
+                "QueryPerformanceCounter")
+else:
+    DYN_APIS = ("getppid", "clock_gettime", "TracerPid", "@time(")
 
 # Exercises a value, a side effect, and control flow so a check that broke the
 # function body would be caught. The function runs in a clean (non-debugged)
@@ -86,9 +91,7 @@ def main() -> int:
             print(res.stderr, end="", file=sys.stderr)
             return res.returncode
         text = ir.read_text(encoding="utf-8", errors="ignore")
-        checks = sum(name in text for name in
-                     ("IsDebuggerPresent", "CheckRemoteDebuggerPresent",
-                      "QueryPerformanceCounter"))
+        checks = sum(name in text for name in DYN_APIS)
         if checks == 0:
             print("no dynamic check primitive emitted in IR", file=sys.stderr)
             return 1
@@ -105,13 +108,12 @@ def main() -> int:
             print(res.stderr, end="", file=sys.stderr)
             return res.returncode
         plain = plain_ir.read_text(encoding="utf-8", errors="ignore")
-        if "IsDebuggerPresent" in plain or "QueryPerformanceCounter" in plain:
+        if any(api in plain for api in DYN_APIS):
             print("dyn checks emitted without the flag/annotation (not opt-in)",
                   file=sys.stderr)
             return 1
 
-        dynamic_apis = ("IsDebuggerPresent", "CheckRemoteDebuggerPresent",
-                        "QueryPerformanceCounter")
+        dynamic_apis = DYN_APIS
         max_src = tmp / "dyn_max_off.c"
         max_src.write_text(SOURCE.replace(
             '__attribute__((noinline, annotate("+dyn")))',
