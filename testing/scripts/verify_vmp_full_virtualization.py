@@ -12,7 +12,7 @@ import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
 CLANG = tp.CLANG
-STRIP = ROOT / "build" / "taokari-local" / "bin" / "llvm-strip.exe"
+STRIP = tp.tool("llvm-strip")
 OUT = ROOT / "build" / "vmp-validation"
 COMMAND_TIMEOUT_SECONDS = int(os.environ.get("TAOKARI_VMP_VERIFY_TIMEOUT", "180"))
 VSDEVCMD = tp.VSDEVCMD
@@ -89,8 +89,9 @@ MAX_FLAGS = [
     f"-fdebug-prefix-map={ROOT}=.",
     f"-fmacro-prefix-map={ROOT}=.",
     "-mllvm", "-taokari-max",
-    "-Wl,/DEBUG:NONE",
 ]
+if tp.IS_WINDOWS:
+    MAX_FLAGS += ["-Wl,/DEBUG:NONE"]
 
 def command_timeout(
     cmd: list[str], timeout: int, exc: subprocess.TimeoutExpired
@@ -273,14 +274,16 @@ def main() -> int:
     if strip_run.returncode:
         sys.stderr.write(strip_run.stdout + strip_run.stderr)
         return 1
-    strip_pe_debug_directory(protected)
+    if tp.IS_WINDOWS:
+        strip_pe_debug_directory(protected)
     obj_build = compile_output(src, protected_obj, max_protection=True, obj=True)
     if obj_build.returncode:
         sys.stderr.write(obj_build.stdout + obj_build.stderr)
         return 1
     require_max_bytes(protected)
     require_max_bytes(protected_obj)
-    require_no_pe_debug_directory(protected)
+    if tp.IS_WINDOWS:
+        require_no_pe_debug_directory(protected)
     require_metadata_clean(protected)
 
     native_run = run([str(native)])
