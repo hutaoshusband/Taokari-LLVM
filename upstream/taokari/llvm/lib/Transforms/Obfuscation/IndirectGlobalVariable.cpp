@@ -105,6 +105,12 @@ struct IndirectGlobalVariable : public FunctionPass {
             if (GV->getMetadata("noobf")) {
               continue;
             }
+            if (GV->hasName()) {
+              StringRef N = GV->getName();
+              if (N.starts_with("_ZTV") || N.starts_with("_ZTI") ||
+                  N.starts_with("_ZTS"))
+                continue;
+            }
             // Sensitive-globals filter: skip globals smaller than the
             // configured threshold so the page-table cost lands on the larger
             // (more interesting) globals, not low-value single-byte flags.

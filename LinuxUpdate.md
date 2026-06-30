@@ -149,6 +149,21 @@ hash patching prototype is PE-oriented. Provide the ELF equivalent.
 - [x] 🧪 **L5.3** `verify_platform_matrix.py` still passes after the
       matrix edits.
 
+## Phase 5b — Linux-specific obfuscator bugs surfaced by the sweep
+
+The broad Linux case sweep exposed a multi-pass crash that does not
+reproduce on Windows (the MSVC ABI masks it). Fixed conservatively.
+
+- [x] 🧪 **L5b.1** `cse` + `indgv` (string encryption + indirect global)
+      crashed C++ virtual-dispatch / exception programs on Linux x64
+      (`cpp_inheritance` SIGSEGV). Root cause: `IndirectGlobalVariable`
+      redirected Itanium vtable / typeinfo globals (`_ZTV`/`_ZTI`/`_ZTS`),
+      which are ABI-critical constant structures. Guard added so these
+      globals are never redirected. No protection loss: vtables are
+      read-only ABI tables, not data the indirect pool should own. The
+      MSVC eraser / COFF path is unaffected (those names do not exist
+      there). Windows `cpp_inheritance` re-verified green.
+
 ## Phase 6 — Cleanup & final verification
 
 - [ ] 🧪 **L6.1** Remove any Linux-build temp/log artefacts before the
