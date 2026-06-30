@@ -59,8 +59,9 @@ MAX_PROTECTION_FLAGS = [
     "-mllvm", "-taokari-indgv",
     "-mllvm", "-taokari-meta", "-mllvm", "-taokari-level-meta=3",
     "-mllvm", "-taokari-vmp-padding=5",
-    "-Wl,/DEBUG:NONE",
 ]
+if tp.IS_WINDOWS:
+    MAX_PROTECTION_FLAGS += ["-Wl,/DEBUG:NONE"]
 
 SPEEDUP_THRESHOLD_X = 1.3
 
