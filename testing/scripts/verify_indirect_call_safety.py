@@ -53,8 +53,10 @@ def checked(command: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def compile_obj(src: Path, out: Path, extra: list[str]) -> None:
+    flags = ["-fdeclspec", "-D_GNU_SOURCE"] if not tp.IS_WINDOWS else []
     checked([
         str(CLANG), str(src), "-O2", "-fno-discard-value-names",
+        *flags,
         "-mllvm", "-taokari",
         "-mllvm", "-taokari-icall",
         "-mllvm", "-taokari-level-icall=2",

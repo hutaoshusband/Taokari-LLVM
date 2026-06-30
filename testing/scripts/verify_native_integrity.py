@@ -176,6 +176,8 @@ def main() -> int:
     patched[pool_off + byte_idx] ^= (1 << rng.randrange(8))
     patched_exe = tmp / "ni_patched.exe"
     patched_exe.write_bytes(bytes(patched))
+    if not tp.IS_WINDOWS:
+      patched_exe.chmod(0o755)
     try:
       pat_run = run([str(patched_exe)], timeout=10)
     except subprocess.TimeoutExpired:
