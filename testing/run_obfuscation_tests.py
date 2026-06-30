@@ -15,8 +15,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TESTING = ROOT / "testing"
-DEFAULT_CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-DEFAULT_CLANG_CL = ROOT / "build" / "taokari-local" / "bin" / "clang-cl.exe"
+IS_WINDOWS = os.name == "nt"
+EXE = ".exe" if IS_WINDOWS else ""
+OBJ = ".obj" if IS_WINDOWS else ".o"
+DEFAULT_BUILD_DIR = "taokari-local" if IS_WINDOWS else "taokari-linux"
+DEFAULT_CLANG = ROOT / "build" / DEFAULT_BUILD_DIR / "bin" / f"clang{EXE}"
+DEFAULT_CLANG_CL = ROOT / "build" / "taokari-local" / "bin" / f"clang-cl{EXE}"
 VSDEVCMD = Path(r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat")
 
 # Base obfuscation flags: every IR pass enabled at once. RTTI is added by the
@@ -153,6 +157,8 @@ RELEASE_GATES = [
     ReleaseGate("definition_of_done", TESTING / "scripts" / "verify_dod.py"),
     ReleaseGate("linux_smoke_script", TESTING / "scripts" / "verify_linux_smoke_script.py"),
     ReleaseGate("aarch64_smoke_script", TESTING / "scripts" / "verify_aarch64_smoke_script.py"),
+    ReleaseGate("linux_dynamic_protection", TESTING / "scripts" / "verify_dynamic_protection_linux.py", skippable=True),
+    ReleaseGate("itanium_rtti_eraser", TESTING / "scripts" / "verify_itanium_rtti_eraser.py", skippable=True),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
@@ -414,7 +420,7 @@ def run(command: list[str], *, cwd: Path = ROOT, use_vs_env: bool = False) -> su
 
 
 def object_name(source: Path) -> str:
-    return "_".join(source.with_suffix("").parts[-4:]) + ".obj"
+    return "_".join(source.with_suffix("").parts[-4:]) + OBJ
 
 
 def compile_case(
@@ -438,7 +444,7 @@ def compile_case(
     suffix = "" if mode == "default" else f"_{mode}"
     objects: list[Path] = []
     for source in case.sources:
-        out = obj / (f"{os.getpid()}_" + object_name(source).removesuffix(".obj") + suffix + ".obj")
+        out = obj / (f"{os.getpid()}_" + object_name(source).removesuffix(OBJ) + suffix + OBJ)
         log("COMPILE", f"{mode}/{case.name}: {source.relative_to(ROOT)}", "blue")
         is_cpp = source.suffix.lower() in {".cpp", ".cc", ".cxx"}
         is_cl = mode == "clangcl"
@@ -447,6 +453,8 @@ def compile_case(
         else:
             std_flag = "-std=c++17" if is_cpp else "-std=c17"
         cmd = [str(clang), "-c", str(source), std_flag]
+        if not is_cl and not IS_WINDOWS:
+            cmd.append("-fdeclspec")
         if is_cl:
             # clang-cl defaults to /EHs-c- (exceptions off); C++ tests need them.
             cmd.append("/EHsc")
@@ -473,20 +481,27 @@ def compile_case(
                 raise RuntimeError(f"compile {source} did not create {out}\n{result.stdout}{result.stderr}")
         objects.append(out)
 
-    exe = build / f"{case.name}_{os.getpid()}{suffix}.exe"
+    exe = build / f"{case.name}_{os.getpid()}{suffix}{EXE}"
     log("LINK", f"{mode}/{case.name}: {exe.relative_to(ROOT)}", "blue")
-    result = run([str(clang), *map(str, objects), *case.link_flags, *extra, "-o", str(exe)], use_vs_env=True)
+    linker = clang
+    if not IS_WINDOWS and mode != "clangcl":
+        has_cpp = any(s.suffix.lower() in {".cpp", ".cc", ".cxx"} for s in case.sources)
+        if has_cpp:
+            cpp_driver = clang.with_name(clang.name.removesuffix(EXE) + "++" + EXE)
+            if cpp_driver.exists():
+                linker = cpp_driver
+    result = run([str(linker), *map(str, objects), *case.link_flags, *extra, "-o", str(exe)], use_vs_env=True)
     if result.returncode:
         try:
             exe.unlink(missing_ok=True)
         except OSError:
             pass
         time.sleep(0.2)
-        result = run([str(clang), *map(str, objects), *case.link_flags, *extra, "-o", str(exe)], use_vs_env=True)
+        result = run([str(linker), *map(str, objects), *case.link_flags, *extra, "-o", str(exe)], use_vs_env=True)
         if result.returncode:
             raise RuntimeError(f"link {case.name}\n{result.stdout}{result.stderr}")
     if not exe.exists():
-        result = run([str(clang), *map(str, objects), *case.link_flags, *extra, "-o", str(exe)], use_vs_env=True)
+        result = run([str(linker), *map(str, objects), *case.link_flags, *extra, "-o", str(exe)], use_vs_env=True)
         if result.returncode or not exe.exists():
             raise RuntimeError(f"link {case.name} did not create {exe}\n{result.stdout}{result.stderr}")
     return exe
@@ -556,7 +571,7 @@ def main() -> int:
     args = parser.parse_args()
 
     clang = args.clang.resolve()
-    if clang != DEFAULT_CLANG.resolve():
+    if clang not in (DEFAULT_CLANG.resolve(), DEFAULT_CLANG_CL.resolve()):
         print(f"refusing non-local compiler: {clang}", file=sys.stderr)
         print(f"expected: {DEFAULT_CLANG.resolve()}", file=sys.stderr)
         return 2
@@ -565,6 +580,9 @@ def main() -> int:
         return 2
 
     modes = args.mode or list(MODE_FLAGS)
+    if not IS_WINDOWS and "clangcl" in modes:
+        modes = [m for m in modes if m != "clangcl"]
+        log("MODE", "skipping clangcl (MSVC-ABI driver, Windows-only)", "yellow")
     benchmark_rows: list[dict[str, str | int | float]] = []
     failures = 0
     for mode in modes:

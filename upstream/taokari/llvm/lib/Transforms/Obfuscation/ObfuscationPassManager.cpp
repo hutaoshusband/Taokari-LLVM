@@ -13,6 +13,8 @@
 #include "llvm/Transforms/Obfuscation/NativeIntegrity.h"
 #include "llvm/Transforms/Obfuscation/OpaqueConstant.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
+#include "llvm/Transforms/Obfuscation/ItaniumRTTIEraser.h"
+#include "llvm/TargetParser/Triple.h"
 
 #define DEBUG_TYPE "ir-obfuscation"
 
@@ -595,7 +597,11 @@ struct ObfuscationPassManager : public ModulePass {
     add(llvm::createIndirectBranchPass(Options.get()));
 
     if (EnableRttiEraser || Options->rttiOpt()->isEnabled()) {
-      add(llvm::createMsRttiEraserPass(Options.get()));
+      Triple T(M.getTargetTriple());
+      if (T.isOSBinFormatCOFF())
+        add(llvm::createMsRttiEraserPass(Options.get()));
+      else
+        add(llvm::createItaniumRttiEraserPass(Options.get()));
     }
     if (EnableMetadataHygiene || Options->metaOpt()->isEnabled()) {
       add(llvm::createMetadataHygienePass(Options.get()));

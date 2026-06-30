@@ -27,7 +27,7 @@ target once the obfuscator is built for it.
 | FP constant encryption | `-taokari-cfe` | ✅ | ✅ | ✅ |
 | Function outlining | `-taokari-outline` | ✅ | ✅ | ✅ |
 | Metadata / symbol hygiene | `-taokari-meta` | ✅ | ✅ | ✅ |
-| Dynamic protections | `-taokari-dyn` | ⚠️ (Win32 APIs) | ❌ (Win32-only) | ❌ (Win32-only) |
+| Dynamic protections | `-taokari-dyn` | ⚠️ (Win32 APIs) | ⚠️ (ptrace / clock_gettime / `/proc/self/status`) | ❌ (Linux/Win-only) |
 | Code virtualization (VM) | `-taokari-vmp` | ✅ | ✅ | ✅ |
 
 ## Backend / native passes (target-specific)
@@ -35,28 +35,27 @@ target once the obfuscator is built for it.
 | Pass | Flag | Windows x64 | Linux x64 | AArch64 |
 | --- | --- | :---: | :---: | :---: |
 | MIR fortress (`dirtybytes`,`junk`,`sub`,`split`,`fakeprologue`) | `-taokari-mir=...` | ✅ | ❌ (x86/COFF-only) | ❌ (x86-only; parity planned, see `MACHINE_IR_AARCH64_PARITY.md`) |
-| Native integrity (per-function hash, post-link `.text` patch) | (internal/`-taokari-max`) | ✅ | ❌ (PE-oriented) | ❌ |
+| Native integrity (per-function hash, post-link `.text` patch) | (internal/`-taokari-max`) | ✅ | ⚠️ (ELF `.text` patch via `taokari_postlink_hash.py`) | ❌ |
 | Microsoft RTTI eraser | `-taokari-rtti` | ✅ (MSVC ABI) | ❌ (Itanium ABI; no MS RTTI) | ⚠️ (Windows-on-ARM MSVC only) |
+| Itanium RTTI eraser | `-taokari-rtti` | ❌ (no Itanium RTTI) | ✅ (rewrites `_ZTS` type-name strings) | ⚠️ (ELF on AArch64) |
 
 ## Build & verification status
 
 | Capability | Windows x64 | Linux x64 | AArch64 |
 | --- | :---: | :---: | :---: |
 | Build (clang/opt) | ✅ | ✅ | ⚠️ (compile; smoke pending) |
-| Release-gate suite runs | ✅ | ⚠️ (IR-only gates; PE/`LoadLibrary` gates skip) | ❌ |
+| Release-gate suite runs | ✅ | ✅ (cross-platform gates; PE/`LoadLibrary` gates skip) | ❌ |
 | Decompiler snapshots (IDA/Ghidra) | ✅ (when installed) | ⚠️ (skips without tool) | ⚠️ |
 
 ## Unsupported combinations (explicit)
 
-* **Dynamic protections on non-Windows**: `IsDebuggerPresent`,
-  `CheckRemoteDebuggerPresent`, `QueryPerformanceCounter` are Win32; the
-  pass is Windows-only and off by default everywhere.
+* **Dynamic protections on AArch64**: the Linux x64 dynamic-protection path
+  uses `ptrace`, `clock_gettime` and `/proc/self/status`; only Win32 and
+  Linux x64 are emitted today. The pass is off by default everywhere.
 * **MIR fortress on Linux/AArch64**: emits x86 byte snippets and relies on
   COFF section layout; rejected on other targets.
-* **Microsoft RTTI eraser on Linux**: there is no MSVC RTTI to erase under
-  the Itanium C++ ABI.
-* **Native integrity post-link patching on Linux/AArch64**: assumes PE
-  `.text` layout and a patched protected native byte trip.
+* **RTTI eraser is ABI-selected**: the MSVC eraser fires on COFF targets,
+  the Itanium eraser on ELF targets; each is a no-op on the wrong ABI.
 
 ## Notes
 

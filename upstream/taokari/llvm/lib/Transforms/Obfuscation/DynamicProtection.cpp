@@ -33,6 +33,21 @@ static bool supportsWindowsX64(Module &M) {
   return T.isOSWindows() && T.getArch() == Triple::x86_64;
 }
 
+static bool supportsLinuxX64(Module &M) {
+  Triple T(M.getTargetTriple());
+  return T.isOSLinux() && T.getArch() == Triple::x86_64;
+}
+
+static FunctionCallee libcDecl(Module &M, StringRef Name, FunctionType *Ty) {
+  FunctionCallee C = M.getOrInsertFunction(Name, Ty);
+  if (auto *Fn = dyn_cast<Function>(C.getCallee()))
+    Fn->setDSOLocal(true);
+  return C;
+}
+
+Value *emitLinuxTracerPidCheck(Module &M, IRBuilder<> &B);
+Value *emitLinuxMonotonicNanos(Module &M, IRBuilder<> &B);
+
 GlobalVariable *getOrCreateDynamicTamperFlag(Module &M) {
   if (auto *Existing = M.getGlobalVariable("__taokari_dyn_tamper"))
     return Existing;
@@ -48,79 +63,121 @@ GlobalVariable *getOrCreateDynamicTamperFlag(Module &M) {
 }
 
 Value *emitDynamicDebuggerCheck(Module &M, IRBuilder<> &B) {
-  if (!supportsWindowsX64(M))
-    return B.getFalse();
-  auto *I32 = Type::getInt32Ty(M.getContext());
-  auto *FTy = FunctionType::get(I32, false);
-  FunctionCallee Fn = M.getOrInsertFunction("IsDebuggerPresent", FTy);
-  Value *R = B.CreateCall(Fn);
-  return B.CreateICmpNE(R, ConstantInt::get(I32, 0));
+  if (supportsWindowsX64(M)) {
+    auto *I32 = Type::getInt32Ty(M.getContext());
+    auto *FTy = FunctionType::get(I32, false);
+    FunctionCallee Fn = M.getOrInsertFunction("IsDebuggerPresent", FTy);
+    Value *R = B.CreateCall(Fn);
+    return B.CreateICmpNE(R, ConstantInt::get(I32, 0));
+  }
+  if (supportsLinuxX64(M)) {
+    FunctionCallee Getppid = libcDecl(
+        M, "getppid", FunctionType::get(Type::getInt32Ty(M.getContext()), false));
+    auto *I32 = Type::getInt32Ty(M.getContext());
+    Value *Ppid = B.CreateCall(Getppid);
+    return B.CreateICmpEQ(Ppid, ConstantInt::get(I32, 1), "dyn.dbg.reparent");
+  }
+  return B.getFalse();
 }
 
 Value *emitDynamicRemoteDebuggerCheck(Module &M, IRBuilder<> &B) {
-  if (!supportsWindowsX64(M))
-    return B.getFalse();
-  auto &Ctx = M.getContext();
-  auto *I32 = Type::getInt32Ty(Ctx);
-  auto *PtrTy = PointerType::get(Ctx, 0);
-  auto *NoArgs = FunctionType::get(PtrTy, false);
-  FunctionCallee CurProc = M.getOrInsertFunction("GetCurrentProcess", NoArgs);
-  auto *OneArg = FunctionType::get(I32, {PtrTy, PtrTy}, false);
-  FunctionCallee Check =
-      M.getOrInsertFunction("CheckRemoteDebuggerPresent", OneArg);
-  Value *FlagSlot = B.CreateAlloca(I32);
-  B.CreateStore(ConstantInt::get(I32, 0), FlagSlot);
-  Value *Proc = B.CreateCall(CurProc);
-  B.CreateCall(Check, {Proc, FlagSlot});
-  Value *Flag = B.CreateLoad(I32, FlagSlot);
-  return B.CreateICmpNE(Flag, ConstantInt::get(I32, 0));
+  if (supportsWindowsX64(M)) {
+    auto &Ctx = M.getContext();
+    auto *I32 = Type::getInt32Ty(Ctx);
+    auto *PtrTy = PointerType::get(Ctx, 0);
+    auto *NoArgs = FunctionType::get(PtrTy, false);
+    FunctionCallee CurProc = M.getOrInsertFunction("GetCurrentProcess", NoArgs);
+    auto *OneArg = FunctionType::get(I32, {PtrTy, PtrTy}, false);
+    FunctionCallee Check =
+        M.getOrInsertFunction("CheckRemoteDebuggerPresent", OneArg);
+    Value *FlagSlot = B.CreateAlloca(I32);
+    B.CreateStore(ConstantInt::get(I32, 0), FlagSlot);
+    Value *Proc = B.CreateCall(CurProc);
+    B.CreateCall(Check, {Proc, FlagSlot});
+    Value *Flag = B.CreateLoad(I32, FlagSlot);
+    return B.CreateICmpNE(Flag, ConstantInt::get(I32, 0));
+  }
+  if (supportsLinuxX64(M)) {
+    return emitLinuxTracerPidCheck(M, B);
+  }
+  return B.getFalse();
 }
 
 Value *emitDynamicTimingCheck(Module &M, IRBuilder<> &B, uint64_t Threshold) {
-  if (!supportsWindowsX64(M))
-    return B.getFalse();
-  auto &Ctx = M.getContext();
-  auto *I64 = Type::getInt64Ty(Ctx);
-  auto *PtrTy = PointerType::get(Ctx, 0);
-  auto *FTy = FunctionType::get(Type::getInt32Ty(Ctx), {PtrTy}, false);
-  FunctionCallee Qpc = M.getOrInsertFunction("QueryPerformanceCounter", FTy);
-  Value *T0 = B.CreateAlloca(I64);
-  Value *T1 = B.CreateAlloca(I64);
-  B.CreateCall(Qpc, {T0});
-  B.CreateCall(Qpc, {T1});
-  Value *V0 = B.CreateLoad(I64, T0);
-  Value *V1 = B.CreateLoad(I64, T1);
-  Value *Delta = B.CreateSub(V1, V0);
-  return B.CreateICmpUGT(Delta, ConstantInt::get(I64, Threshold));
+  if (supportsWindowsX64(M)) {
+    auto &Ctx = M.getContext();
+    auto *I64 = Type::getInt64Ty(Ctx);
+    auto *PtrTy = PointerType::get(Ctx, 0);
+    auto *FTy = FunctionType::get(Type::getInt32Ty(Ctx), {PtrTy}, false);
+    FunctionCallee Qpc = M.getOrInsertFunction("QueryPerformanceCounter", FTy);
+    Value *T0 = B.CreateAlloca(I64);
+    Value *T1 = B.CreateAlloca(I64);
+    B.CreateCall(Qpc, {T0});
+    B.CreateCall(Qpc, {T1});
+    Value *V0 = B.CreateLoad(I64, T0);
+    Value *V1 = B.CreateLoad(I64, T1);
+    Value *Delta = B.CreateSub(V1, V0);
+    return B.CreateICmpUGT(Delta, ConstantInt::get(I64, Threshold));
+  }
+  if (supportsLinuxX64(M)) {
+    auto &Ctx = M.getContext();
+    auto *I64 = Type::getInt64Ty(Ctx);
+    Value *T0 = emitLinuxMonotonicNanos(M, B);
+    Value *T1 = emitLinuxMonotonicNanos(M, B);
+    Value *Delta = B.CreateSub(T1, T0, "dyn.time.delta");
+    return B.CreateICmpUGT(Delta, ConstantInt::get(I64, Threshold),
+                           "dyn.time.trip");
+  }
+  return B.getFalse();
 }
 
 Value *emitDynamicEmulationCheck(Module &M, IRBuilder<> &B) {
-  if (!supportsWindowsX64(M))
-    return B.getFalse();
-  auto &Ctx = M.getContext();
-  auto *I64 = Type::getInt64Ty(Ctx);
-  auto *PtrTy = PointerType::get(Ctx, 0);
-  auto *QpcTy = FunctionType::get(Type::getInt32Ty(Ctx), {PtrTy}, false);
-  FunctionCallee Qpc =
-      M.getOrInsertFunction("QueryPerformanceCounter", QpcTy);
-  auto *TickTy = FunctionType::get(I64, false);
-  FunctionCallee Tick = M.getOrInsertFunction("GetTickCount64", TickTy);
-  Value *T0 = B.CreateAlloca(I64);
-  Value *T1 = B.CreateAlloca(I64);
-  B.CreateCall(Qpc, {T0});
-  B.CreateCall(Qpc, {T1});
-  Value *V0 = B.CreateLoad(I64, T0);
-  Value *V1 = B.CreateLoad(I64, T1);
-  Value *Backwards = B.CreateICmpULT(V1, V0, "dyn.emu.qpc.backwards");
-  Value *TickValue = B.CreateCall(Tick);
-  Value *ZeroTick =
-      B.CreateICmpEQ(TickValue, ConstantInt::get(I64, 0), "dyn.emu.tick0");
-  Value *ZeroQpc = B.CreateAnd(
-      B.CreateICmpEQ(V0, ConstantInt::get(I64, 0), "dyn.emu.qpc0"),
-      B.CreateICmpEQ(V1, ConstantInt::get(I64, 0), "dyn.emu.qpc1"),
-      "dyn.emu.qpc.zero");
-  return B.CreateOr(Backwards, B.CreateAnd(ZeroTick, ZeroQpc),
-                    "dyn.emu.trip");
+  if (supportsWindowsX64(M)) {
+    auto &Ctx = M.getContext();
+    auto *I64 = Type::getInt64Ty(Ctx);
+    auto *PtrTy = PointerType::get(Ctx, 0);
+    auto *QpcTy = FunctionType::get(Type::getInt32Ty(Ctx), {PtrTy}, false);
+    FunctionCallee Qpc = M.getOrInsertFunction("QueryPerformanceCounter", QpcTy);
+    auto *TickTy = FunctionType::get(I64, false);
+    FunctionCallee Tick = M.getOrInsertFunction("GetTickCount64", TickTy);
+    Value *T0 = B.CreateAlloca(I64);
+    Value *T1 = B.CreateAlloca(I64);
+    B.CreateCall(Qpc, {T0});
+    B.CreateCall(Qpc, {T1});
+    Value *V0 = B.CreateLoad(I64, T0);
+    Value *V1 = B.CreateLoad(I64, T1);
+    Value *Backwards = B.CreateICmpULT(V1, V0, "dyn.emu.qpc.backwards");
+    Value *TickValue = B.CreateCall(Tick);
+    Value *ZeroTick =
+        B.CreateICmpEQ(TickValue, ConstantInt::get(I64, 0), "dyn.emu.tick0");
+    Value *ZeroQpc = B.CreateAnd(
+        B.CreateICmpEQ(V0, ConstantInt::get(I64, 0), "dyn.emu.qpc0"),
+        B.CreateICmpEQ(V1, ConstantInt::get(I64, 0), "dyn.emu.qpc1"),
+        "dyn.emu.qpc.zero");
+    return B.CreateOr(Backwards, B.CreateAnd(ZeroTick, ZeroQpc),
+                      "dyn.emu.trip");
+  }
+  if (supportsLinuxX64(M)) {
+    auto &Ctx = M.getContext();
+    auto *I64 = Type::getInt64Ty(Ctx);
+    Value *Mono0 = emitLinuxMonotonicNanos(M, B);
+    Value *Mono1 = emitLinuxMonotonicNanos(M, B);
+    Value *Backwards =
+        B.CreateICmpULT(Mono1, Mono0, "dyn.emu.mono.backwards");
+    auto *TimeTy = FunctionType::get(I64, {PointerType::get(Ctx, 0)}, false);
+    FunctionCallee Time = libcDecl(M, "time", TimeTy);
+    Value *WallValue = B.CreateCall(Time, {ConstantPointerNull::get(
+                                               PointerType::get(Ctx, 0))});
+    Value *ZeroWall =
+        B.CreateICmpEQ(WallValue, ConstantInt::get(I64, 0), "dyn.emu.wall0");
+    Value *ZeroMono = B.CreateAnd(
+        B.CreateICmpEQ(Mono0, ConstantInt::get(I64, 0), "dyn.emu.mono0"),
+        B.CreateICmpEQ(Mono1, ConstantInt::get(I64, 0), "dyn.emu.mono1"),
+        "dyn.emu.mono.zero");
+    return B.CreateOr(Backwards, B.CreateAnd(ZeroWall, ZeroMono),
+                      "dyn.emu.trip");
+  }
+  return B.getFalse();
 }
 
 Value *emitDynamicRuntimeCheck(Module &M, IRBuilder<> &B, uint32_t Level) {
@@ -145,6 +202,131 @@ Value *emitDynamicRuntimeCheck(Module &M, IRBuilder<> &B, uint32_t Level) {
 void markDynamicTamper(Module &M, IRBuilder<> &B) {
   B.CreateStore(ConstantInt::get(Type::getInt8Ty(M.getContext()), 1),
                 getOrCreateDynamicTamperFlag(M));
+}
+
+Function *getOrCreateLinuxTracerReader(Module &M) {
+  if (auto *Existing = M.getFunction("__taokari_dyn_tracerpid"))
+    return Existing;
+  auto &Ctx = M.getContext();
+  auto *I32 = Type::getInt32Ty(Ctx);
+  auto *I64 = Type::getInt64Ty(Ctx);
+  auto *I8 = Type::getInt8Ty(Ctx);
+  auto *I1 = Type::getInt1Ty(Ctx);
+  auto *PtrTy = PointerType::get(Ctx, 0);
+  auto *FTy = FunctionType::get(I32, false);
+  auto *F = Function::Create(FTy, GlobalValue::InternalLinkage,
+                             "__taokari_dyn_tracerpid", M);
+  F->addFnAttr(Attribute::NoInline);
+  F->addMetadata("noobf", *MDNode::get(Ctx, {}));
+  BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", F);
+  BasicBlock *Loop = BasicBlock::Create(Ctx, "loop", F);
+  BasicBlock *Body = BasicBlock::Create(Ctx, "body", F);
+  BasicBlock *Found = BasicBlock::Create(Ctx, "found", F);
+  BasicBlock *Advance = BasicBlock::Create(Ctx, "advance", F);
+  BasicBlock *NotFound = BasicBlock::Create(Ctx, "notfound", F);
+
+  IRBuilder<> B(Entry);
+  FunctionCallee Open = libcDecl(M, "open",
+                                 FunctionType::get(I32, {PtrTy, I32}, false));
+  FunctionCallee Read = libcDecl(
+      M, "read", FunctionType::get(I64, {I32, PtrTy, I64}, false));
+  FunctionCallee Close =
+      libcDecl(M, "close", FunctionType::get(I32, {I32}, false));
+  Value *Needle = B.CreateGlobalString("TracerPid:\t", "dyn.tracer.needle");
+  Value *Path = B.CreateGlobalString("/proc/self/status", "dyn.tracer.path");
+  Value *Fd = B.CreateCall(Open, {Path, ConstantInt::get(I32, 0)});
+  auto *BufTy = ArrayType::get(I8, 4096);
+  auto *Buf = B.CreateAlloca(BufTy);
+  Value *N = B.CreateCall(Read, {Fd, Buf, ConstantInt::get(I64, 4096)});
+  B.CreateCall(Close, {Fd});
+  Value *Limit = B.CreateSub(N, ConstantInt::get(I64, 11), "dyn.tracer.limit");
+  B.CreateBr(Loop);
+
+  B.SetInsertPoint(Loop);
+  auto *PosPhi = B.CreatePHI(I64, 2, "dyn.tracer.pos");
+  PosPhi->addIncoming(ConstantInt::get(I64, 0), Entry);
+  Value *PastLimit = B.CreateICmpSGE(PosPhi, Limit);
+  B.CreateCondBr(PastLimit, NotFound, Body);
+
+  B.SetInsertPoint(Body);
+  Value *Match = ConstantInt::get(I1, true);
+  Value *IdxV = ConstantInt::get(I64, 0);
+  BasicBlock *CmpLoop = BasicBlock::Create(Ctx, "cmploop", F);
+  BasicBlock *CmpBody = BasicBlock::Create(Ctx, "cmpbody", F);
+  BasicBlock *CmpEnd = BasicBlock::Create(Ctx, "cmpend", F);
+  B.CreateBr(CmpLoop);
+
+  B.SetInsertPoint(CmpLoop);
+  auto *IdxPhi = B.CreatePHI(I64, 2, "dyn.tracer.idx");
+  IdxPhi->addIncoming(IdxV, Body);
+  auto *MatchPhi = B.CreatePHI(I1, 2, "dyn.tracer.match");
+  MatchPhi->addIncoming(Match, Body);
+  Value *Done2 = B.CreateICmpEQ(IdxPhi, ConstantInt::get(I64, 11));
+  B.CreateCondBr(Done2, CmpEnd, CmpBody);
+
+  B.SetInsertPoint(CmpBody);
+  Value *HayPtr = B.CreateGEP(BufTy, Buf,
+                              {ConstantInt::get(I64, 0),
+                               B.CreateAdd(PosPhi, IdxPhi)});
+  Value *NdlPtr = B.CreateGEP(I8, Needle, IdxPhi);
+  Value *Hay = B.CreateLoad(I8, HayPtr);
+  Value *Ndl = B.CreateLoad(I8, NdlPtr);
+  Value *Eq = B.CreateICmpEQ(Hay, Ndl);
+  Value *NewMatch = B.CreateAnd(MatchPhi, Eq);
+  Value *NextIdx = B.CreateAdd(IdxPhi, ConstantInt::get(I64, 1));
+  IdxPhi->addIncoming(NextIdx, CmpBody);
+  MatchPhi->addIncoming(NewMatch, CmpBody);
+  B.CreateBr(CmpLoop);
+
+  B.SetInsertPoint(CmpEnd);
+  B.CreateCondBr(MatchPhi, Found, Advance);
+
+  B.SetInsertPoint(Advance);
+  Value *NextPos = B.CreateAdd(PosPhi, ConstantInt::get(I64, 1));
+  PosPhi->addIncoming(NextPos, Advance);
+  B.CreateBr(Loop);
+
+  B.SetInsertPoint(Found);
+  Value *DigitPtr = B.CreateGEP(BufTy, Buf,
+                                {ConstantInt::get(I64, 0),
+                                 B.CreateAdd(PosPhi, ConstantInt::get(I64, 11))});
+  Value *Digit = B.CreateLoad(I8, DigitPtr);
+  Value *Sub = B.CreateSub(Digit, ConstantInt::get(I8, '0'));
+  Value *IsDigit = B.CreateICmpULT(Sub, ConstantInt::get(I8, 10));
+  Value *NonZero = B.CreateICmpNE(Digit, ConstantInt::get(I8, '0'));
+  Value *Traced = B.CreateAnd(IsDigit, NonZero);
+  B.CreateRet(B.CreateZExt(Traced, I32));
+
+  B.SetInsertPoint(NotFound);
+  B.CreateRet(ConstantInt::get(I32, 0));
+  appendToCompilerUsed(M, {F});
+  return F;
+}
+
+Value *emitLinuxTracerPidCheck(Module &M, IRBuilder<> &B) {
+  Function *Reader = getOrCreateLinuxTracerReader(M);
+  Value *R = B.CreateCall(Reader);
+  return B.CreateICmpNE(R, ConstantInt::get(Type::getInt32Ty(M.getContext()), 0),
+                        "dyn.tracer.trip");
+}
+
+Value *emitLinuxMonotonicNanos(Module &M, IRBuilder<> &B) {
+  auto &Ctx = M.getContext();
+  auto *I32 = Type::getInt32Ty(Ctx);
+  auto *I64 = Type::getInt64Ty(Ctx);
+  auto *TsTy = StructType::get(Ctx, {I64, I64});
+  auto *PtrTy = PointerType::get(Ctx, 0);
+  FunctionCallee ClockGettime = libcDecl(
+      M, "clock_gettime",
+      FunctionType::get(I32, {I32, PtrTy}, false));
+  Value *Slot = B.CreateAlloca(TsTy);
+  B.CreateCall(ClockGettime, {ConstantInt::get(I32, 1), Slot});
+  Value *SecPtr = B.CreateStructGEP(TsTy, Slot, 0);
+  Value *NsecPtr = B.CreateStructGEP(TsTy, Slot, 1);
+  Value *Sec = B.CreateLoad(I64, SecPtr);
+  Value *Nsec = B.CreateLoad(I64, NsecPtr);
+  Value *SecNs = B.CreateMul(Sec, ConstantInt::get(I64, 1000000000));
+  return B.CreateAdd(SecNs, Nsec, "dyn.mono.ns");
 }
 
 }
@@ -192,8 +374,10 @@ struct DynamicProtection : public FunctionPass {
     Module &M = *F.getParent();
     Triple T(M.getTargetTriple());
     bool Windows = T.isOSWindows() && T.getArch() == Triple::x86_64;
+    bool Linux = T.isOSLinux() && T.getArch() == Triple::x86_64;
+    bool Supported = Windows || Linux;
 
-    CheckKind Kind = Windows ? static_cast<CheckKind>(RNG() % 3) : CK_Debugger;
+    CheckKind Kind = Supported ? static_cast<CheckKind>(RNG() % 3) : CK_Debugger;
     const uint32_t Level = Opt.level();
 
     LLVMContext &Ctx = M.getContext();
@@ -224,13 +408,13 @@ struct DynamicProtection : public FunctionPass {
     BasicBlock *Trap = BasicBlock::Create(Ctx, "dyn.trap", &F);
     B.SetInsertPoint(&OrigEntry);
 
-    if (Level >= 2 && Windows)
+    if (Level >= 2 && Supported)
       emitFakeCheck(M, B);
 
     Value *Detected = nullptr;
     Function *Probe = nullptr;
-    if (Level >= 3 && Windows) {
-      Probe = createProbe(M, Kind);
+    if (Level >= 3 && Supported) {
+      Probe = createProbe(M, Kind, Windows);
       auto *I1 = Type::getInt1Ty(Ctx);
       auto *ProbeTy = FunctionType::get(I1, false);
       Detected = B.CreateCall(ProbeTy, Probe, {});
@@ -357,7 +541,7 @@ struct DynamicProtection : public FunctionPass {
     return Tripped;
   }
 
-  Function *createProbe(Module &M, CheckKind Kind) {
+  Function *createProbe(Module &M, CheckKind Kind, bool Windows) {
     auto &Ctx = M.getContext();
     auto *I1 = Type::getInt1Ty(Ctx);
     auto *FTy = FunctionType::get(I1, false);
@@ -369,13 +553,13 @@ struct DynamicProtection : public FunctionPass {
     Value *Result = nullptr;
     switch (Kind) {
     case CK_Debugger:
-      Result = emitDebuggerCheck(M, PB, true);
+      Result = emitDebuggerCheck(M, PB, Windows);
       break;
     case CK_PEB:
-      Result = emitPEBCheck(M, PB, true);
+      Result = emitPEBCheck(M, PB, Windows);
       break;
     case CK_Timing:
-      Result = emitTimingCheck(M, PB, true);
+      Result = emitTimingCheck(M, PB, Windows);
       break;
     }
     PB.CreateRet(Result);
@@ -400,20 +584,25 @@ struct DynamicProtection : public FunctionPass {
     B.CreateCall(Fake);
   }
 
+  bool targetSupported(const Module &M) {
+    Triple T(M.getTargetTriple());
+    return (T.isOSWindows() || T.isOSLinux()) && T.getArch() == Triple::x86_64;
+  }
+
   Value *emitDebuggerCheck(Module &M, IRBuilder<> &B, bool Windows) {
-    if (!Windows)
+    if (!Windows && !targetSupported(M))
       return B.getFalse();
     return taokari::emitDynamicDebuggerCheck(M, B);
   }
 
   Value *emitPEBCheck(Module &M, IRBuilder<> &B, bool Windows) {
-    if (!Windows)
+    if (!Windows && !targetSupported(M))
       return B.getFalse();
     return taokari::emitDynamicRemoteDebuggerCheck(M, B);
   }
 
   Value *emitTimingCheck(Module &M, IRBuilder<> &B, bool Windows) {
-    if (!Windows)
+    if (!Windows && !targetSupported(M))
       return B.getFalse();
     return taokari::emitDynamicTimingCheck(M, B);
   }

@@ -44,7 +44,6 @@ cmake -S upstream/taokari/llvm -B build/taokari-linux -G Ninja \
   -DLLVM_TARGETS_TO_BUILD="X86;AArch64" \
   -DLLVM_ENABLE_RUNTIMES="compiler-rt" \
   -DCOMPILER_RT_BUILD_ORC=OFF \
-  -DLLVM_BUILD_LLVM_C_DYLIB=ON \
   -DLLVM_BUILD_TOOLS=ON \
   -DLLVM_ENABLE_LIBXML2=FORCE_ON \
   -DCLANG_ENABLE_LIBXML2=OFF \

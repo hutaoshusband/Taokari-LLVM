@@ -30,12 +30,16 @@ check() {
   local src="$1"; shift
   local std="$1"; shift
   local -a flags=("$@")
+  local driver="${CLANG}"
+  case "${src}" in
+    *.cpp|*.cc|*.cxx) driver="${CLANG}++" ;;
+  esac
   local plain="${TMP}/${name}.plain"
   local obf="${TMP}/${name}.obf"
-  if ! "${CLANG}" -O2 -std="${std}" "${src}" -o "${plain}" 2>"${TMP}/${name}.perr"; then
+  if ! "${driver}" -O2 -std="${std}" "${src}" -o "${plain}" 2>"${TMP}/${name}.perr"; then
     echo "FAIL ${name}: plain build"; cat "${TMP}/${name}.perr"; FAIL=$((FAIL+1)); return
   fi
-  if ! "${CLANG}" -O2 -std="${std}" "${flags[@]}" "${src}" -o "${obf}" 2>"${TMP}/${name}.oerr"; then
+  if ! "${driver}" -O2 -std="${std}" "${flags[@]}" "${src}" -o "${obf}" 2>"${TMP}/${name}.oerr"; then
     echo "FAIL ${name}: obfuscated build"; cat "${TMP}/${name}.oerr"; FAIL=$((FAIL+1)); return
   fi
   local p o

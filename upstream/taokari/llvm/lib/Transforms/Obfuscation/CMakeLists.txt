@@ -16,6 +16,7 @@ add_llvm_component_library(LLVMObfuscation
   ConstantIntEncryption.cpp
   ConstantFPEncryption.cpp
   MicrosoftRTTIEraser.cpp
+  ItaniumRTTIEraser.cpp
   MetadataHygiene.cpp
   NativeIntegrity.cpp
   DynamicProtection.cpp

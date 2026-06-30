@@ -64,7 +64,7 @@ def pick_section(sections: list[Section], name: str | None) -> Section:
                 return sec
         raise ValueError(f"section not found: {name}")
     for sec in sections:
-        if sec.name == ".text":
+        if sec.name in (".text", ".init"):
             return sec
     for sec in sections:
         if (sec.characteristics & IMAGE_SCN_CNT_CODE and
@@ -78,6 +78,53 @@ def section_bytes(data: bytes, sec: Section) -> bytes:
     if sec.raw_ptr <= 0 or sec.raw_size <= 0 or end > len(data):
         raise ValueError(f"invalid raw span for section {sec.name}")
     return data[sec.raw_ptr:end]
+
+
+SHF_EXECINSTR = 0x4
+SHT_PROGBITS = 1
+
+
+def elf_sections(data: bytes) -> list[Section]:
+    if len(data) < 0x40 or data[:4] != b"\x7fELF":
+        raise ValueError("not an ELF image")
+    is64 = data[4] == 2
+    if not is64:
+        raise ValueError("only ELF64 supported")
+    le = data[5] == 1
+    endian = "<" if le else ">"
+    e_shoff = struct.unpack_from(endian + "Q", data, 0x28)[0]
+    e_shentsize = struct.unpack_from(endian + "H", data, 0x3A)[0]
+    e_shnum = struct.unpack_from(endian + "H", data, 0x3C)[0]
+    e_shstrndx = struct.unpack_from(endian + "H", data, 0x3E)[0]
+    if e_shoff == 0 or e_shnum == 0:
+        raise ValueError("no ELF section table")
+    shstr_hdr = e_shoff + e_shstrndx * e_shentsize
+    shstr_off = struct.unpack_from(endian + "Q", data, shstr_hdr + 0x18)[0]
+    shstr_size = struct.unpack_from(endian + "Q", data, shstr_hdr + 0x20)[0]
+    strtab = data[shstr_off:shstr_off + shstr_size]
+    out: list[Section] = []
+    for i in range(e_shnum):
+        base = e_shoff + i * e_shentsize
+        name_off = struct.unpack_from(endian + "I", data, base)[0]
+        sh_type = struct.unpack_from(endian + "I", data, base + 4)[0]
+        sh_flags = struct.unpack_from(endian + "Q", data, base + 8)[0]
+        sh_addr = struct.unpack_from(endian + "Q", data, base + 0x10)[0]
+        sh_offset = struct.unpack_from(endian + "Q", data, base + 0x18)[0]
+        sh_size = struct.unpack_from(endian + "Q", data, base + 0x20)[0]
+        name = strtab[name_off:strtab.find(b"\0", name_off)].decode(
+            "ascii", errors="replace")
+        rva = sh_addr
+        chars = IMAGE_SCN_CNT_CODE if (sh_flags & SHF_EXECINSTR) else 0
+        if sh_flags & SHF_EXECINSTR:
+            chars |= IMAGE_SCN_MEM_EXECUTE
+        out.append(Section(name, rva, sh_size, sh_size, sh_offset, chars))
+    return out
+
+
+def sections_of(data: bytes) -> tuple[list[Section], bool]:
+    if data[:4] == b"\x7fELF":
+        return elf_sections(data), True
+    return pe_sections(data), False
 
 
 def record_offsets(data: bytes) -> list[int]:
@@ -98,7 +145,7 @@ def expected_record(sec: Section, body: bytes) -> bytes:
 
 def patch(path: Path, section: str | None) -> tuple[int, Section, int]:
     data = bytearray(path.read_bytes())
-    sec = pick_section(pe_sections(data), section)
+    sec = pick_section(sections_of(data)[0], section)
     body = section_bytes(data, sec)
     records = record_offsets(data)
     if not records:
@@ -112,7 +159,7 @@ def patch(path: Path, section: str | None) -> tuple[int, Section, int]:
 
 def verify(path: Path, section: str | None) -> tuple[int, Section, int]:
     data = path.read_bytes()
-    sec = pick_section(pe_sections(data), section)
+    sec = pick_section(sections_of(data)[0], section)
     body = section_bytes(data, sec)
     rec = expected_record(sec, body)
     records = record_offsets(data)
