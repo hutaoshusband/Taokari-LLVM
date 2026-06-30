@@ -358,8 +358,15 @@ namespace llvm {
 static bool isTaokariHelper(const Function &F) {
   StringRef N = F.getName();
   return N.starts_with("__taokari_icall_fake_") ||
+         N.starts_with("__taokari_icall_shard_") ||
          N.starts_with("__taokari_sh_") ||
          N.starts_with("__taokari_bcf_") ||
+         N.starts_with("__taokari_dyn_") ||
+         N.starts_with("__taokari_vmp_interp_") ||
+         N.starts_with("__taokari_nativeint_") ||
+         N.starts_with("__mhf_") ||
+         N.starts_with("goron_scrub_string_") ||
+         N.starts_with("__global_variable_initializer_") ||
          N.contains(".cie.shard.") || N.contains(".shard");
 }
 

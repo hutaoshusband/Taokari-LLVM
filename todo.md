@@ -100,6 +100,10 @@ This section is intentionally compressed. It marks the big systems that are alre
 
 These are the remaining small gaps from the current roadmap. Do these before starting large new research tracks.
 
+## 1.0 Performance Hardening
+
+- [x] Close residual O(N^2) pass-manager re-walk: `isTaokariHelper` skipped `__taokari_icall_fake_` but not the real `__taokari_icall_shard_` bodies (one per call site at icall L3+), so CIE/MBA/FLA/BCF re-walked every shard each sweep. Extended the central skip-net to cover every spawned helper prefix (`__taokari_icall_shard_`, `__taokari_dyn_`, `__taokari_vmp_interp_`, `__taokari_nativeint_`, `__mhf_`, `goron_scrub_string_`, `__global_variable_initializer_`). No protection loss: generated stubs are already obfuscated by their owning pass.
+
 ## 1.1 Control Flow / BCF / MBA
 
 - [x] 🚧 Finish BCF L3 multi-layer bogus graphs.
