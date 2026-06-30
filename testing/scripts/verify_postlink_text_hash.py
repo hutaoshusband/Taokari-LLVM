@@ -6,14 +6,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-from taokari_postlink_hash import MAGIC, patch, pe_sections, pick_section, verify
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _taokari_portable as tp
+from taokari_postlink_hash import (MAGIC, patch, pe_sections, pick_section,
+                                   sections_of, verify)
 
 
-ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+ROOT = tp.ROOT
+CLANG = tp.CLANG
+
 
 SOURCE = r"""
 #include <cstdio>
@@ -27,25 +28,6 @@ int main() {
   return 0;
 }
 """
-
-
-def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    if VSDEVCMD.exists():
-        with tempfile.NamedTemporaryFile("w", suffix=".cmd", delete=False,
-                                         encoding="utf-8") as handle:
-            batch = Path(handle.name)
-            handle.write(
-                "@echo off\n"
-                f'call "{VSDEVCMD}" -arch=x64 -host_arch=x64 >nul\n'
-                f"{subprocess.list2cmdline(command)}\n"
-                "exit /b %ERRORLEVEL%\n"
-            )
-        try:
-            return subprocess.run(["cmd.exe", "/d", "/c", str(batch)], cwd=cwd,
-                                  text=True, capture_output=True)
-        finally:
-            batch.unlink(missing_ok=True)
-    return subprocess.run(command, cwd=cwd, text=True, capture_output=True)
 
 
 def must(result: subprocess.CompletedProcess[str], label: str) -> None:
@@ -62,10 +44,11 @@ def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="taokari-postlink-"))
     try:
         src = tmp / "postlink.cpp"
-        exe = tmp / "postlink.exe"
+        exe = tmp / tp.exe_name("postlink")
         src.write_text(SOURCE, encoding="utf-8")
-        must(run([str(CLANG), str(src), "-O2", "-mllvm", "-taokari",
-                  "-o", str(exe)], tmp), "build")
+        must(tp.run([str(CLANG), str(src), "-O2", "-std=c++17",
+                     *(["-fdeclspec"] if not tp.IS_WINDOWS else []),
+                     "-mllvm", "-taokari", "-o", str(exe)], vs=True), "build")
         data = exe.read_bytes()
         if data.count(MAGIC) != 1:
             raise SystemExit("post-link text hash slot missing or duplicated")
@@ -77,14 +60,14 @@ def main() -> int:
             raise SystemExit("unpatched binary verified unexpectedly")
         patch(exe, ".text")
         verify(exe, ".text")
-        clean = run([str(exe)], tmp)
+        clean = tp.run([str(exe)])
         must(clean, "patched run")
         if clean.stdout != "postlink:78\n":
             raise SystemExit(f"output drift: {clean.stdout!r}")
-        tampered = tmp / "postlink_tampered.exe"
+        tampered = tmp / tp.exe_name("postlink_tampered")
         shutil.copy2(exe, tampered)
         patched = bytearray(tampered.read_bytes())
-        text = pick_section(pe_sections(patched), ".text")
+        text = pick_section(sections_of(patched)[0], ".text")
         if text.raw_size < 16:
             raise SystemExit(".text too small")
         patched[text.raw_ptr + 8] ^= 1

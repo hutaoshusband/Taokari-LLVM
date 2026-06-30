@@ -133,8 +133,10 @@ hash patching prototype is PE-oriented. Provide the ELF equivalent.
 - [x] 🧪 **L4.1** Extend `scripts/taokari_postlink_hash.py` to patch an
       ELF `.text` section in addition to PE (generic `sections_of()`
       dispatches PE vs ELF64; PE path unchanged).
-- [ ] 🧪 **L4.2** Add a release-gate verifier for the ELF post-link patch
+- [x] 🧪 **L4.2** Add a release-gate verifier for the ELF post-link patch
       (patched binary still runs, tamper path trips on byte edit).
+      `verify_postlink_text_hash.py` refactored onto the portable helper
+      and passes on both Windows (PE) and Linux (ELF).
 
 ## Phase 5 — Platform matrix & docs accuracy
 
