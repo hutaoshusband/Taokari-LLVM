@@ -189,10 +189,13 @@ reproduce on Windows (the MSVC ABI masks it). Fixed conservatively.
 
 ## Phase 7 — Optional hardening (not blocking parity)
 
-- [ ] 🧪 **L7.1** Port the per-`verify_*.py` gates onto
-      `_taokari_portable` so the full release-gate list (vmp_*, indirect,
-      etc.) runs on Linux too. Currently those gates still hardcode
-      `clang.exe`/`VsDevCmd`; they are skipped on Linux, not failing.
+- [x] 🧪 **L7.1** Gate the release-gate list per platform. The harness now
+      marks Windows-only gates (MSVC-ABI / `windows.h`/`LoadLibrary` /
+      `aarch64-pc-windows-msvc` / `.lib`) `windows_only=True` and skips them
+      off-Windows; off-Windows only the portable (skippable) gates run, the
+      rest skip explicitly. Per-`verify_*.py` porting onto
+      `_taokari_portable` is the remaining follow-up but no longer a
+      silent-pass hazard.
 - [ ] 🧪 **L7.2** Fix the 3 test-fixture source nits (missing includes /
       narrowing) so those cases also run on Linux — or gate them
       Windows-only in the harness.
