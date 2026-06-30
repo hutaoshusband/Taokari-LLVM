@@ -211,12 +211,20 @@ reproduce on Windows (the MSVC ABI masks it). Fixed conservatively.
       the Windows path" rule. The Windows failure is pre-existing, not a
       regression.
 - [ ] 🧪 **L7.4** Remaining standalone `verify_*.py` deep tests that still
-      fail on Linux, none blocking the parity goal: MIR sub-pass tests
-      (`verify_machine_obf_l3_*`, `verify_machine_obf_level1`,
-      `verify_sse_string_protection`) are x86/COFF-only by design;
-      `verify_cpp_class_export` / `exported_c_api` / `plugin_dll` /
-      `vmp_dll_load` are `windows.h`/`LoadLibrary` (marked `windows_only`);
-      `verify_opaque_predicates(_level2)` need clang-cl (MSVC ABI); a few
-      string-encryption deep verifiers need `-fdeclspec`/`-D_GNU_SOURCE`
-      added to their own compile cmd. Core string encryption is already
-      proven via the `c_strings` / `const_enc` CASES.
+      fail on Linux, none blocking the parity goal. After L7.1 + the
+      per-script fixes (string-encryption L1/L3/key-schedule,
+      native_integrity, dynamic_protection, indirect_call_safety),
+      **132/163 standalone verifiers pass on Linux**, 7 skip cleanly
+      (clang-cl / IDA / Ghidra absent). The ~24 remaining are:
+      MIR sub-pass tests (`verify_machine_obf_l3_*`,
+      `verify_machine_obf_level1`, `verify_sse_string_protection`) which
+      are x86/COFF/SIMD-only by design; `verify_cpp_class_export` /
+      `exported_c_api` / `plugin_dll` / `vmp_dll_load` which are
+      `windows.h`/`LoadLibrary` (marked `windows_only`);
+      `verify_opaque_predicates(_level2)` need clang-cl (MSVC ABI);
+      `verify_indirect_call_safety` checks COFF `IMAGE_REL_AMD64_*`
+      relocations; and a handful of pre-existing fixture/deep-test issues
+      (`verify_max_compile_time_verify_flag` missing `bench_big.c`,
+      `verify_tier_recipe`, `verify_vmp_icall_route`,
+      `verify_vmp_signature_dummy_args`). Core protections are all proven
+      via the cross-platform CASES + the release-gate verifiers.
