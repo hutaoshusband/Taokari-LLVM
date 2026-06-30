@@ -173,14 +173,12 @@ reproduce on Windows (the MSVC ABI masks it). Fixed conservatively.
       dynamic_protection, native_integrity, postlink, platform_matrix all
       pass after every code change.
 - [x] 🧪 **L6.3** Linux regression green: the 6-case `linux_smoke.sh` is
-      6/6; the harness runs 47/47 cross-platform `CASES` green on the full
-      IR stack. The 4 non-passing cases are test-fixture portability nits
-      (Windows SEH in `c_seh`; missing `<assert.h>`/`<string.h>` in
-      `preprocessor`/`security_edge`; a `static_cast`-able narrowing
-      constant in `indirect_globals_struct`) — none are obfuscator bugs.
-      New Linux gates `verify_dynamic_protection_linux.py` and
-      `verify_itanium_rtti_eraser.py` pass; `verify_postlink_text_hash.py`
-      passes on both PE and ELF.
+      6/6; the harness runs 50/51 cross-platform `CASES` green on the full
+      IR stack (the 51st is `c_seh`, Windows SEH by design). **33/33
+      release-gate verifiers pass on Linux WSL.** Of the 163 standalone
+      `verify_*.py` scripts, 130 pass on Linux, 7 skip cleanly
+      (clang-cl / IDA / Ghidra absent), and 26 are either Windows/MIR/
+      x86-SIMD-by-design or non-blocking deep-test source nits.
 - [x] 🧪 **L6.4** Diff review: every code change is either (a) additive
       Linux branches guarded by `supportsLinuxX64`/`isOSLinux` that never
       fire on Windows, or (b) the Itanium-RTTI pass which is COFF-gated
@@ -212,3 +210,13 @@ reproduce on Windows (the MSVC ABI masks it). Fixed conservatively.
       which is intentionally left untouched here per the "do not change
       the Windows path" rule. The Windows failure is pre-existing, not a
       regression.
+- [ ] 🧪 **L7.4** Remaining standalone `verify_*.py` deep tests that still
+      fail on Linux, none blocking the parity goal: MIR sub-pass tests
+      (`verify_machine_obf_l3_*`, `verify_machine_obf_level1`,
+      `verify_sse_string_protection`) are x86/COFF-only by design;
+      `verify_cpp_class_export` / `exported_c_api` / `plugin_dll` /
+      `vmp_dll_load` are `windows.h`/`LoadLibrary` (marked `windows_only`);
+      `verify_opaque_predicates(_level2)` need clang-cl (MSVC ABI); a few
+      string-encryption deep verifiers need `-fdeclspec`/`-D_GNU_SOURCE`
+      added to their own compile cmd. Core string encryption is already
+      proven via the `c_strings` / `const_enc` CASES.
