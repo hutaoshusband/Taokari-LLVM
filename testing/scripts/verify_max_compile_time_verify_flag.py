@@ -35,14 +35,12 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
 DEFAULT_SOURCE = ROOT / "build" / "max-protection" / "bench_big.c"
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community"
-    r"\Common7\Tools\VsDevCmd.bat"
-)
+VSDEVCMD = tp.VSDEVCMD
 
 # The Max Protection recipe from build_max_protection.bat, minus the
 # path-rewrite flags that depend on caller context (added at runtime).

@@ -21,14 +21,12 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
+CLANG = tp.CLANG
 SPEAR_CFG = ROOT / "testing" / "configs" / "profile-vmp-spear.json"
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+VSDEVCMD = tp.VSDEVCMD
 
 VMP_TARGET = "spear_victim"
 PLAIN_FN = "spear_plain"

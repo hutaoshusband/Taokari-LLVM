@@ -19,15 +19,13 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-BIN = ROOT / "build" / "taokari-local" / "bin"
-CLANG = BIN / "clang.exe"
-LLVM_AR = BIN / "llvm-ar.exe"
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+BIN = tp.BIN
+CLANG = tp.CLANG
+LLVM_AR = tp.tool("llvm-ar")
+VSDEVCMD = tp.VSDEVCMD
 
 
 def run(command: list[str], *, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:

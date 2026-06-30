@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import _taokari_portable as tp
 
 from verify_page_table_fake_ratio import (
     BRANCH_SOURCE,

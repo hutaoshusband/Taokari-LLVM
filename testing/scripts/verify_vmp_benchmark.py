@@ -6,14 +6,12 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
+CLANG = tp.CLANG
 SRC = ROOT / "testing" / "cases" / "vmp_benchmark" / "src" / "main.c"
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+VSDEVCMD = tp.VSDEVCMD
 DEFAULT_ITERS = 1_000_000
 MIN_NATIVE_NS = 1_000_000
 CASE_BUDGETS = {

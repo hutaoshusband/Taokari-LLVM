@@ -22,6 +22,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+import _taokari_portable as tp
 
 from verify_vmp_coverage import CLANG, run
 

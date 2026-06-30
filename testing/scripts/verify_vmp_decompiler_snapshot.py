@@ -32,15 +32,15 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import _taokari_portable as tp
+
 from typing import Callable
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
+CLANG = tp.CLANG
 DEFAULT_IDA = Path(r"C:\Program Files\IDA Professional 9.1\ida.exe")
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+VSDEVCMD = tp.VSDEVCMD
 MAP_RE = re.compile(r"\s+[0-9A-Fa-f]+:[0-9A-Fa-f]+\s+(\S+)\s+([0-9A-Fa-f]{16})\s")
 
 SOURCE = r"""

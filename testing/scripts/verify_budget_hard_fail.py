@@ -15,10 +15,10 @@ import importlib.util
 import subprocess
 import sys
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
+CLANG = tp.CLANG
 DASHBOARD = ROOT / "testing" / "scripts" / "tier_release_dashboard.py"
 
 

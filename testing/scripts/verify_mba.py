@@ -4,11 +4,11 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-VSDEVCMD = Path(r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat")
+CLANG = tp.CLANG
+VSDEVCMD = tp.VSDEVCMD
 
 # Exercises every Level-1 MBA identity (add/sub/xor/and/or) across i32 and i64.
 SOURCE = r"""

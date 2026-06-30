@@ -4,6 +4,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+import _taokari_portable as tp
 
 from verify_vmp_basic_block_bytecode import CLANG, ROOT, run
 

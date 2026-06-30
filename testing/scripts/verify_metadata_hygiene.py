@@ -5,16 +5,16 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-BIN = ROOT / "build" / "taokari-local" / "bin"
-CLANG = BIN / "clang.exe"
+BIN = tp.BIN
+CLANG = tp.CLANG
 CLANG_CL = BIN / "clang-cl.exe"
-READOBJ = BIN / "llvm-readobj.exe"
-OBJDUMP = BIN / "llvm-objdump.exe"
-READELF = BIN / "llvm-readelf.exe"
-VSDEVCMD = Path(r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat")
+READOBJ = tp.tool("llvm-readobj")
+OBJDUMP = tp.tool("llvm-objdump")
+READELF = tp.tool("llvm-readelf")
+VSDEVCMD = tp.VSDEVCMD
 BUILD_DIR = ROOT / "build" / "taokari-local"
 
 LEAK_PATH = "C:/taokari_meta_source_leak/metadata_fixture.cpp"

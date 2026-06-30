@@ -11,7 +11,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
 DOC = ROOT / "docs" / "BUILD_LINUX.md"

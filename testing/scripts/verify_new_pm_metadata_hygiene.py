@@ -25,15 +25,13 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-BIN = ROOT / "build" / "taokari-local" / "bin"
-CLANG = BIN / "clang.exe"
-OPT = BIN / "opt.exe"
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+BIN = tp.BIN
+CLANG = tp.CLANG
+OPT = tp.tool("opt")
+VSDEVCMD = tp.VSDEVCMD
 
 SECRET = "taokari_newpm_secret_helper"
 

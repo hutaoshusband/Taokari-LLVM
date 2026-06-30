@@ -19,11 +19,11 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
 DASHBOARD = ROOT / "testing" / "scripts" / "tier_release_dashboard.py"
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
+CLANG = tp.CLANG
 
 
 REQUIRED_FIELDS = (

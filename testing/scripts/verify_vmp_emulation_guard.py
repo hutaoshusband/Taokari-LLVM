@@ -5,6 +5,7 @@ import re
 import sys
 import tempfile
 from pathlib import Path
+import _taokari_portable as tp
 
 from verify_vmp_basic_block_bytecode import CLANG, ROOT, run
 
@@ -89,13 +90,14 @@ def main() -> int:
         dyn_text = build(tmp, "dyn", False)
         vmp_text = build(tmp, "vmp", True)
 
-    if "GetTickCount64" not in dyn_text or "dyn.emu" not in dyn_text:
+    emu_api = "GetTickCount64" if tp.IS_WINDOWS else "time"
+    if emu_api not in dyn_text or "dyn.emu" not in dyn_text:
         raise SystemExit("normal DynamicProtection level 4 lacks emulation guard")
     match = INTERP_RE.search(vmp_text)
     if not match:
         raise SystemExit("missing VMP interpreter")
     body = match.group("body")
-    if "GetTickCount64" not in body or "dyn.emu" not in body:
+    if emu_api not in body or "dyn.emu" not in body:
         raise SystemExit("VMP interpreter loop lacks emulation guard")
     if "__taokari_dyn_tamper" not in vmp_text:
         raise SystemExit("VMP emulation guard did not use dynamic tamper flag")

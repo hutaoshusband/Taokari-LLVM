@@ -108,7 +108,7 @@ RELEASE_GATES = [
     ReleaseGate("vmp_basic_block_bytecode", TESTING / "scripts" / "verify_vmp_basic_block_bytecode.py"),
     ReleaseGate("vmp_handler_mba", TESTING / "scripts" / "verify_vmp_handler_mba.py"),
     ReleaseGate("vmp_handler_bcf", TESTING / "scripts" / "verify_vmp_handler_bcf.py"),
-    ReleaseGate("vmp_handler_mir_noise", TESTING / "scripts" / "verify_vmp_handler_mir_noise.py"),
+    ReleaseGate("vmp_handler_mir_noise", TESTING / "scripts" / "verify_vmp_handler_mir_noise.py", windows_only=True),
     ReleaseGate("vmp_handler_table_seed", TESTING / "scripts" / "verify_vmp_handler_table_seed.py"),
     ReleaseGate("vmp_cross_bytecode_integrity", TESTING / "scripts" / "verify_vmp_cross_bytecode_integrity.py"),
     ReleaseGate("vmp_cross_function_state", TESTING / "scripts" / "verify_vmp_cross_function_state.py"),
@@ -529,11 +529,6 @@ def run_release_gates(*, keep_going: bool) -> int:
     for gate in RELEASE_GATES:
         if gate.windows_only and not IS_WINDOWS:
             log("SKIP", f"{gate.name} (Windows-only gate)", "blue")
-            continue
-        # Off-Windows, only run gates known to be portable. The remaining
-        # verify_*.py gates still hardcode clang.exe/VS env and would
-        # silently no-op; skip them until each is ported (LinuxUpdate L7.1).
-        if not IS_WINDOWS and not gate.skippable:
             continue
         log("GATE", gate.name, "yellow")
         result = run([sys.executable, str(gate.script)])

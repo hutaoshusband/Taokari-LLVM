@@ -29,14 +29,12 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-OPT = ROOT / "build" / "taokari-local" / "bin" / "opt.exe"
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+CLANG = tp.CLANG
+OPT = tp.tool("opt")
+VSDEVCMD = tp.VSDEVCMD
 
 
 def run(command: list[str], **kw) -> subprocess.CompletedProcess[str]:
@@ -44,6 +42,8 @@ def run(command: list[str], **kw) -> subprocess.CompletedProcess[str]:
 
 
 def run_vs(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+  if not tp.IS_WINDOWS:
+    return subprocess.run(command, cwd=cwd, text=True, capture_output=True)
   with tempfile.NamedTemporaryFile("w", suffix=".cmd", delete=False,
                                    encoding="utf-8") as handle:
     batch = Path(handle.name)

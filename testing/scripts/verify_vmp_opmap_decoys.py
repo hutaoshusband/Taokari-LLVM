@@ -7,10 +7,10 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
+CLANG = tp.CLANG
 SOURCE_PATH = (
     ROOT / "upstream" / "taokari" / "llvm" / "lib" / "Transforms"
     / "Obfuscation" / "Virtualization" / "CodeVirtualization.cpp"

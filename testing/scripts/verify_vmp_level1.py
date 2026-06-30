@@ -5,13 +5,13 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-LLVM_NM = ROOT / "build" / "taokari-local" / "bin" / "llvm-nm.exe"
+CLANG = tp.CLANG
+LLVM_NM = tp.tool("llvm-nm")
 SRC = ROOT / "testing" / "cases" / "vmp_basic" / "src" / "main.c"
-VSDEVCMD = Path(r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat")
+VSDEVCMD = tp.VSDEVCMD
 EXPECTED = "vmp-basic:40:25\n"
 
 

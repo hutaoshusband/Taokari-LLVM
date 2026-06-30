@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import _taokari_portable as tp
 
 from verify_tier_recipe import TIER_C_FLAGS, parse_compat_report
 from verify_vmp_coverage import CLANG, run

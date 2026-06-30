@@ -29,16 +29,14 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-LLVM_DIS = ROOT / "build" / "taokari-local" / "bin" / "opt.exe"  # round-trips .bc via -S
-OBJDUMP = ROOT / "build" / "taokari-local" / "bin" / "llvm-objdump.exe"
+CLANG = tp.CLANG
+LLVM_DIS = tp.tool("opt")  # round-trips .bc via -S
+OBJDUMP = tp.tool("llvm-objdump")
 DEFAULT_IDA = Path(r"C:\Program Files\IDA Professional 9.1\ida.exe")
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+VSDEVCMD = tp.VSDEVCMD
 SRC = ROOT / "testing" / "cases" / "sse_string" / "src" / "main.c"
 PROBE = "taokari_sse_strlen_probe"
 
@@ -62,6 +60,8 @@ def run(command: list[str], **kw) -> subprocess.CompletedProcess[str]:
 
 
 def run_vs(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    if not tp.IS_WINDOWS:
+      return subprocess.run(command, cwd=cwd, text=True, capture_output=True)
     with tempfile.NamedTemporaryFile("w", suffix=".cmd", delete=False, encoding="utf-8") as h:
         batch = Path(h.name)
         h.write(

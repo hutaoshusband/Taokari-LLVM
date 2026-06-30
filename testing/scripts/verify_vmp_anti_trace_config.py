@@ -5,6 +5,7 @@ import re
 import sys
 import tempfile
 from pathlib import Path
+import _taokari_portable as tp
 
 from verify_vmp_basic_block_bytecode import CLANG, run
 
@@ -98,13 +99,15 @@ def main() -> int:
         light = build(tmp, "light", False)
         strong = build(tmp, "strong", False)
 
-    if "dyn.loop.trap" in off or "GetTickCount64" in off:
+    timing_api = "QueryPerformanceCounter" if tp.IS_WINDOWS else "clock_gettime"
+    emu_api = "GetTickCount64" if tp.IS_WINDOWS else "@time("
+    if "dyn.loop.trap" in off or emu_api in off:
         raise SystemExit("vm.anti_trace=off did not suppress VMP loop checks")
-    if "dyn.loop.trap" not in light or "QueryPerformanceCounter" not in light:
+    if "dyn.loop.trap" not in light or timing_api not in light:
         raise SystemExit("vm.anti_trace=light did not enable timing checks")
-    if "GetTickCount64" in light:
+    if emu_api in light:
         raise SystemExit("vm.anti_trace=light enabled emulation checks")
-    if "dyn.loop.trap" not in strong or "GetTickCount64" not in strong:
+    if "dyn.loop.trap" not in strong or emu_api not in strong:
         raise SystemExit("vm.anti_trace=strong did not enable emulation checks")
 
     print("vmp anti-trace config: ok")

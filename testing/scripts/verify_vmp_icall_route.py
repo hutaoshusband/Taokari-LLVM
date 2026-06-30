@@ -5,6 +5,7 @@ import re
 import sys
 import tempfile
 from pathlib import Path
+import _taokari_portable as tp
 
 from verify_vmp_coverage import CLANG, SOURCE, run
 

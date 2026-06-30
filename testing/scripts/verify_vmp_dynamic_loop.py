@@ -5,6 +5,7 @@ import re
 import sys
 import tempfile
 from pathlib import Path
+import _taokari_portable as tp
 
 from verify_vmp_basic_block_bytecode import CLANG, ROOT, run
 
@@ -97,6 +98,9 @@ def main() -> int:
         "IsDebuggerPresent",
         "CheckRemoteDebuggerPresent",
         "QueryPerformanceCounter",
+        "clock_gettime",
+        "getppid",
+        "TracerPid",
     )
     if "dyn.loop.trap" in off_body or any(api in off_body for api in dynamic_apis):
         raise SystemExit("VMP interpreter emitted dynamic checks without dyn")

@@ -8,16 +8,14 @@ import sys
 import tempfile
 import struct
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
+CLANG = tp.CLANG
 STRIP = ROOT / "build" / "taokari-local" / "bin" / "llvm-strip.exe"
 OUT = ROOT / "build" / "vmp-validation"
 COMMAND_TIMEOUT_SECONDS = int(os.environ.get("TAOKARI_VMP_VERIFY_TIMEOUT", "180"))
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+VSDEVCMD = tp.VSDEVCMD
 DIRTY_STACK = bytes.fromhex(
     "9c 50 51 48 89 e0 48 8d 48 01 48 0f af c1 a8 01 74 08 0f 0b eb fe cc f1 0f 0b 59 58 9d"
 )
