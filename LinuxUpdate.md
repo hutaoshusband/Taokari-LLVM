@@ -230,3 +230,37 @@ reproduce on Windows (the MSVC ABI masks it). Fixed conservatively.
       `verify_bcf_fla_dispatcher`, `verify_vmp_icall_route`,
       `verify_vmp_signature_dummy_args`). Core protections are all proven
       via the cross-platform CASES + the 33/33 release-gate verifiers.
+
+## Phase 8 — Protection-layer evidence (parity audit)
+
+Direct verification that each Linux protection matches Windows, run in
+WSL with the Linux clang build. Every item below passes on both Windows
+and Linux unless noted.
+
+- [x] 🧪 **L8.1** Debug stripping (`-taokari-meta`): `StripDebugInfo`
+      removes `llvm.dbg.*` / `DICompileUnit` / `DISubprogram` /
+      `llvm.ident` / `llvm.commandline` on both platforms. Renamed
+      private symbols (`__mhf_` / `__mhg_`) emitted on both. The
+      module-level `source_filename` path is left on both platforms
+      (symmetric — not a Linux-only gap), so debug-stripping parity holds.
+- [x] 🧪 **L8.2** Leak bars (gnarliness gates) all pass on Linux:
+      `verify_string_leak_bar` (0/2 secrets leaked),
+      `verify_symbol_leak_bar` (0/3 secret symbols),
+      `verify_call_graph_breakage`, `verify_fake_case_density_bar`,
+      `verify_indirect_rewrite_count_bar`.
+- [x] 🧪 **L8.3** Dynamic protections: `verify_dynamic_protection` +
+      `verify_dynamic_protection_linux` both pass; Linux primitives
+      (`getppid`, `clock_gettime`, `TracerPid`, `@time()`) emitted.
+- [x] 🧪 **L8.4** RTTI: `verify_itanium_rtti_eraser` passes on Linux
+      (`_ZTS` class names scrambled, not in `.rodata`/symbol table);
+      `verify_metadata_hygiene` (MSVC RTTI path) passes on Windows.
+- [x] 🧪 **L8.5** Native integrity: `verify_native_integrity` passes on
+      both (Linux adds `chmod +x` for the patched binary);
+      `verify_postlink_text_hash` passes on PE and ELF.
+- [x] 🧪 **L8.6** IR obfuscation core on Linux: flattening, BCF, MBA,
+      opaque predicates/constants, string/const encryption, indirect
+      branch/call/global, function outlining, VMP — all proven via the
+      50/51 cross-platform CASES (the 51st is Windows-SEH-only `c_seh`).
+- [x] 🧪 **L8.7** Windows regression locked: 19/19 sampled release
+      gates green after every change; no Windows code path altered
+      (every change is Linux-gated, COFF-gated, or Itanium-name-gated).
