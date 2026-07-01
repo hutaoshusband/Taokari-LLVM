@@ -272,3 +272,9 @@ and Linux unless noted.
 - [x] 🧪 **L8.7** Windows regression locked: 19/19 sampled release
       gates green after every change; no Windows code path altered
       (every change is Linux-gated, COFF-gated, or Itanium-name-gated).
+- [x] 🧪 **L8.8** New `verify_metadata_hygiene_linux.py` gate: a Linux
+      verifier for the section-randomization + debug/source-path stripping
+      that previously only had a Windows verifier. Confirms 5 randomized
+      ELF sections (`.text.X`/`.rodata.X`/`.data.X`), debug-info and
+      source-path stripped from IR, no internal-symbol leak, runtime
+      matches native. Wired into the harness as a skippable gate.
