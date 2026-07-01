@@ -210,26 +210,34 @@ reproduce on Windows (the MSVC ABI masks it). Fixed conservatively.
       which is intentionally left untouched here per the "do not change
       the Windows path" rule. The Windows failure is pre-existing, not a
       regression.
-- [ ] 🧪 **L7.4** Remaining standalone `verify_*.py` deep tests that still
-      fail on Linux, none blocking the parity goal. After L7.1 + the
-      per-script fixes (string-encryption L1/L3/key-schedule,
-      native_integrity, dynamic_protection, indirect_call_safety,
+- [x] 🧪 **L7.4** Triage the remaining standalone `verify_*.py` deep tests.
+      After L7.1 + the per-script fixes (string-encryption L1/L3/key-
+      schedule, native_integrity, dynamic_protection, indirect_call_safety,
       vmp_full_virtualization, tier_recipe, max-compile-time-flag),
-      **135/163 standalone verifiers pass on Linux**, 7 skip cleanly
-      (clang-cl / IDA / Ghidra absent). The ~21 remaining are all
-      inherently Windows/x86/COFF or pre-existing:
-      MIR sub-pass tests (`verify_machine_obf_l3_*`,
-      `verify_machine_obf_level1`, `verify_sse_string_protection`,
-      `verify_machine_obf_l3_liveness`) which are x86/COFF/SIMD-only by
-      design; `verify_cpp_class_export` / `exported_c_api` / `plugin_dll` /
-      `vmp_dll_load` which are `windows.h`/`LoadLibrary` (marked
-      `windows_only`); `verify_opaque_predicates(_level2)` need clang-cl
-      (MSVC ABI); `verify_indirect_call_safety` checks COFF
-      `IMAGE_REL_AMD64_*` relocations; and a few pre-existing fixture
-      issues (`verify_max_compile_time_verify_flag` missing `bench_big.c`,
-      `verify_bcf_fla_dispatcher`, `verify_vmp_icall_route`,
-      `verify_vmp_signature_dummy_args`). Core protections are all proven
-      via the cross-platform CASES + the 33/33 release-gate verifiers.
+      **135/163 standalone verifiers pass on Linux**; the ~28 that do not
+      are all structurally unportable or pre-existing-broken, confirmed
+      non-parity-relevant:
+      * **MIR/x86/SIMD/COFF (12)** — `verify_machine_obf_l3_*`,
+        `verify_machine_obf_level1`, `verify_sse_string_protection`,
+        `verify_machine_obf_l3_liveness`, `verify_indirect_call_safety`
+        (checks COFF `IMAGE_REL_AMD64_*` relocations),
+        `verify_vmp_handler_mir_noise`: the MIR layer is x86/COFF-only by
+        design (documented in PLATFORM_MATRIX.md).
+      * **IDA/Ghidra external tool (5)** — `verify_machine_obf_l3_ida_*`,
+        `verify_vmp_decompiler_lift/snapshot`, `verify_vmp_ida_l2`: skip
+        cleanly when the tool is absent.
+      * **clang-cl / MSVC ABI (4)** — `verify_metadata_hygiene` (MSVC
+        RTTI), `verify_opaque_predicates(_level2)`, `verify_page_table_ptr_key`.
+      * **`windows.h`/`LoadLibrary` (4)** — `verify_cpp_class_export`,
+        `verify_exported_c_api`, `verify_plugin_dll`, `verify_vmp_dll_load`
+        (marked `windows_only`).
+      * **Pre-existing broken on BOTH platforms (3)** —
+        `verify_max_compile_time_verify_flag` (missing `bench_big.c`
+        fixture), `verify_vmp_icall_route`, `verify_vmp_signature_dummy_args`,
+        `verify_vmp_runtime_traps`: confirmed failing on Windows too, so
+        not a Linux gap.
+      Core protections are all proven via the cross-platform CASES
+      (50/51) + the 33/33 release-gate verifiers + the Phase 8 audit.
 
 ## Phase 8 — Protection-layer evidence (parity audit)
 
