@@ -2,6 +2,7 @@
 #include "llvm/Transforms/Obfuscation/DynamicProtection.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -3752,11 +3753,49 @@ struct CodeVirtualization : public ModulePass {
     initScheduleConstants();
 
     SmallVector<Function *, 8> Targets;
+    DenseSet<Function *> InvokedCallees;
+    for (Function &F : M) {
+      for (BasicBlock &BB : F) {
+        for (Instruction &I : BB) {
+          auto *II = dyn_cast<InvokeInst>(&I);
+          if (!II)
+            continue;
+          if (Function *Callee = II->getCalledFunction())
+            InvokedCallees.insert(Callee);
+        }
+      }
+    }
+    auto isThrowCallee = [](Function *Callee) {
+      if (!Callee || !Callee->hasName())
+        return false;
+      StringRef N = Callee->getName();
+      return N == "_CxxThrowException" || N == "__CxxThrowException" ||
+             N == "__cxa_throw" || N == "RaiseException" ||
+             N == "RtlRaiseException" || N == "throw";
+    };
     for (Function &F : M) {
       if (shouldSkip(F))
         continue;
       auto Opt = ArgsOptions->toObfuscate(ArgsOptions->vmpOpt(), &F);
       if (!Opt.isEnabled())
+        continue;
+      if (InvokedCallees.count(&F))
+        continue;
+      bool CallsThrow = false;
+      for (BasicBlock &BB : F) {
+        for (Instruction &I : BB) {
+          auto *CB = dyn_cast<CallBase>(&I);
+          if (!CB)
+            continue;
+          if (isThrowCallee(CB->getCalledFunction())) {
+            CallsThrow = true;
+            break;
+          }
+        }
+        if (CallsThrow)
+          break;
+      }
+      if (CallsThrow)
         continue;
       Targets.push_back(&F);
     }

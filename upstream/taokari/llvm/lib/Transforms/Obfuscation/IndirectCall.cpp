@@ -1,5 +1,6 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/Transforms/Obfuscation/IndirectCall.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
@@ -29,6 +30,38 @@ Function *getDirectCallee(CallBase &CB) {
 bool isGeneratedIcallFunction(Function &F) {
   return F.getName().starts_with("__taokari_icall_shard_") ||
          F.getName().starts_with("__taokari_icall_fake_");
+}
+
+bool isOutlinedShard(Function &Callee) {
+  return Callee.hasLocalLinkage() && Callee.getName().contains(".shard");
+}
+
+bool isNonLocalJumpFn(StringRef Name) {
+  return Name == "setjmp" || Name == "_setjmp" || Name == "longjmp" ||
+         Name == "sigsetjmp" || Name == "siglongjmp" ||
+         Name == "__llvm_sjlj_setjmp";
+}
+
+bool moduleUsesNonLocalJumps(Module &M) {
+  for (Function &F : M) {
+    if (!F.hasName())
+      continue;
+    if (isNonLocalJumpFn(F.getName()))
+      return true;
+  }
+  for (Function &F : M) {
+    if (F.isDeclaration())
+      continue;
+    for (Instruction &I : instructions(F)) {
+      auto *CB = dyn_cast<CallBase>(&I);
+      if (!CB)
+        continue;
+      Function *Callee = CB->getCalledFunction();
+      if (Callee && isNonLocalJumpFn(Callee->getName()))
+        return true;
+    }
+  }
+  return false;
 }
 
 bool isSafeCallee(CallBase &CB, Function *Callee) {
@@ -68,6 +101,7 @@ struct IndirectCall : public FunctionPass {
   uint64_t                         ModulePacSalt = 0;
 
   bool RunOnFuncChanged = false;
+  bool SkipOutlinedShards = false;
 
   IndirectCall(ObfuscationOptions *argsOptions) : FunctionPass(ID) {
     this->ArgsOptions = argsOptions;
@@ -242,8 +276,9 @@ struct IndirectCall : public FunctionPass {
   }
 
   Function *fortressCallee(Module &M, Function *Callee) {
-    return ArgsOptions->iCallOpt()->level() > 2 ? getOrCreateCallShard(M, Callee)
-                                                : Callee;
+    if (ArgsOptions->iCallOpt()->level() <= 2 || SkipOutlinedShards)
+      return Callee;
+    return getOrCreateCallShard(M, Callee);
   }
 
   uint64_t pacDiscriminator(Function *Fn, Function *Callee) const {
@@ -266,6 +301,9 @@ struct IndirectCall : public FunctionPass {
             auto CB = dyn_cast<CallBase>(&I);
             auto Callee = getDirectCallee(*CB);
             if (!isSafeCallee(*CB, Callee)) {
+              continue;
+            }
+            if (SkipOutlinedShards && Callee && isOutlinedShard(*Callee)) {
               continue;
             }
 
@@ -292,6 +330,7 @@ struct IndirectCall : public FunctionPass {
     CalleeShards.clear();
     ModulePacSeed = nextNonZeroKey();
     ModulePacSalt = nextNonZeroKey();
+    SkipOutlinedShards = moduleUsesNonLocalJumps(M);
 
     NumberCallees(M);
     if (!Callees.size()) {
@@ -345,6 +384,8 @@ struct IndirectCall : public FunctionPass {
       CallBase *CB = CI;
       auto *Callee = getDirectCallee(*CB);
       if (!isSafeCallee(*CB, Callee))
+        continue;
+      if (SkipOutlinedShards && Callee && isOutlinedShard(*Callee))
         continue;
       if (std::uniform_int_distribution<unsigned>(1, 100)(RNG) >
           probabilityOrFull(opt.probability()))
@@ -457,6 +498,8 @@ struct IndirectCall : public FunctionPass {
 
       Function *Callee = getDirectCallee(*CB);
       if (!isSafeCallee(*CB, Callee))
+        continue;
+      if (SkipOutlinedShards && Callee && isOutlinedShard(*Callee))
         continue;
 
       auto CacheIt = CalleeDedupCache.find(Callee);

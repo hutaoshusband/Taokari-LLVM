@@ -326,6 +326,60 @@ def main() -> int:
                       f"({ran.stdout!r} vs {ref_run.stdout!r})", file=sys.stderr)
                 return 1
 
+        fla_o0_src = tmp / "dyn_fla_o0.c"
+        fla_o0_src.write_text(
+            "#include <stdio.h>\n"
+            "__attribute__((noinline, annotate(\"+dyn\")))\n"
+            "int looper(int n){int s=0;for(int i=0;i<n;i++)s+=i;return s;}\n"
+            "int main(void){printf(\"fla-o0:%d\\n\",looper(10));return 0;}\n",
+            encoding="utf-8")
+        for opt in ("-O0", "-O2"):
+            exe_f = tmp / f"dyn_fla_o0_{opt}.exe"
+            res = run([str(CLANG), str(fla_o0_src), opt,
+                       "-mllvm", "-taokari", "-mllvm", "-taokari-dyn",
+                       "-mllvm", "-taokari-fla", "-mllvm", "-taokari-level-fla=4",
+                       "-o", str(exe_f)])
+            if res.returncode:
+                print(f"fla+dyn {opt}: compile failed", file=sys.stderr)
+                print(res.stderr, end="", file=sys.stderr)
+                return res.returncode
+            ran = run([str(exe_f)])
+            if ran.returncode:
+                print(f"fla+dyn {opt}: runtime crashed (rc={ran.returncode}) -- "
+                      f"dyn split a flattened entry", file=sys.stderr)
+                return 1
+            if ran.stdout != "fla-o0:45\n":
+                print(f"fla+dyn {opt}: output drift {ran.stdout!r} vs "
+                      f"'fla-o0:45\\n'", file=sys.stderr)
+                return 1
+
+        ni_src = tmp / "ni_fla_o0.c"
+        ni_src.write_text(
+            "#include <stdio.h>\n"
+            "__attribute__((noinline, annotate(\"+nativeint\")))\n"
+            "int looper(int n){int s=0;for(int i=0;i<n;i++)s+=i;return s;}\n"
+            "int main(void){printf(\"ni-o0:%d\\n\",looper(10));return 0;}\n",
+            encoding="utf-8")
+        for opt in ("-O0", "-O2"):
+            exe_n = tmp / f"ni_fla_o0_{opt}.exe"
+            res = run([str(CLANG), str(ni_src), opt,
+                       "-mllvm", "-taokari",
+                       "-mllvm", "-taokari-fla", "-mllvm", "-taokari-level-fla=4",
+                       "-o", str(exe_n)])
+            if res.returncode:
+                print(f"nativeint+fla {opt}: compile failed", file=sys.stderr)
+                print(res.stderr, end="", file=sys.stderr)
+                return res.returncode
+            ran = run([str(exe_n)])
+            if ran.returncode:
+                print(f"nativeint+fla {opt}: runtime crashed (rc={ran.returncode}) "
+                      f"-- nativeint split a flattened entry", file=sys.stderr)
+                return 1
+            if ran.stdout != "ni-o0:45\n":
+                print(f"nativeint+fla {opt}: output drift {ran.stdout!r}",
+                      file=sys.stderr)
+                return 1
+
     print("dyn: PASS")
     return 0
 

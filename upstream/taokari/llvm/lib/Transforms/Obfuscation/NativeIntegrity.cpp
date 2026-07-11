@@ -27,6 +27,36 @@ extern cl::opt<bool> TaokariMaxProtection;
 
 namespace {
 
+static bool isNonLocalJumpFn(StringRef Name) {
+  return Name == "setjmp" || Name == "_setjmp" || Name == "longjmp" ||
+         Name == "sigsetjmp" || Name == "siglongjmp" ||
+         Name == "__llvm_sjlj_setjmp";
+}
+
+static bool moduleUsesNonLocalJumps(Module &M) {
+  for (Function &F : M) {
+    if (!F.hasName())
+      continue;
+    if (isNonLocalJumpFn(F.getName()))
+      return true;
+  }
+  for (Function &F : M) {
+    if (F.isDeclaration())
+      continue;
+    for (BasicBlock &BB : F) {
+      for (Instruction &I : BB) {
+        auto *CB = dyn_cast<CallBase>(&I);
+        if (!CB)
+          continue;
+        Function *Callee = CB->getCalledFunction();
+        if (Callee && isNonLocalJumpFn(Callee->getName()))
+          return true;
+      }
+    }
+  }
+  return false;
+}
+
 // Per-function native-code integrity check. Emits a private pool whose
 // bytes are randomly chosen at build time. At function entry, the
 // function loads every word of the pool, folds it into a running hash
@@ -41,6 +71,8 @@ struct NativeIntegrity : public FunctionPass {
   ObfuscationOptions *ArgsOptions;
   std::mt19937_64 RNG;
   GlobalVariable *TextHashSlot = nullptr;
+  Module *CheckedModule = nullptr;
+  bool ModuleHasNonLocalJump = false;
 
   NativeIntegrity(ObfuscationOptions *argsOptions)
       : FunctionPass(ID), ArgsOptions(argsOptions) {
@@ -97,6 +129,15 @@ struct NativeIntegrity : public FunctionPass {
     if (F.getName().starts_with("__taokari_nativeint_"))
       return false;
 
+    Module &M = *F.getParent();
+
+    if (CheckedModule != &M) {
+      ModuleHasNonLocalJump = moduleUsesNonLocalJumps(M);
+      CheckedModule = &M;
+    }
+    if (ModuleHasNonLocalJump)
+      return false;
+
     // The prototype runs on functions explicitly marked `+nativeint`,
     // OR (when Taokari Max Protection is enabled) on every non-trivial
     // function in the module. Max mode is the "protect everything"
@@ -119,8 +160,9 @@ struct NativeIntegrity : public FunctionPass {
     // into every caller, blowing up code size, so skip them too.
     if (F.hasFnAttribute(Attribute::AlwaysInline))
       return false;
+    if (F.hasFnAttribute("taokari-flattened"))
+      return false;
 
-    Module &M = *F.getParent();
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
     Type *I32 = Type::getInt32Ty(Ctx);

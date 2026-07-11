@@ -124,6 +124,7 @@ RELEASE_GATES = [
     # escape hatch when VMP is off entirely.
     ReleaseGate("max_build_no_vmp_hang", TESTING / "scripts" / "verify_max_build_no_vmp_hang.py"),
     ReleaseGate("max_build_vmp_budgeted", TESTING / "scripts" / "verify_max_build_vmp_budgeted.py"),
+    ReleaseGate("setjmp_eh_unwind_safety", TESTING / "scripts" / "verify_setjmp_unwind_safety.py"),
     # Section 10/12: the new opt-in passes and their full-stack compose.
     ReleaseGate("function_outlining", TESTING / "scripts" / "verify_function_outlining.py"),
     ReleaseGate("dynamic_protection", TESTING / "scripts" / "verify_dynamic_protection.py"),

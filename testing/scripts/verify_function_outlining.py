@@ -404,6 +404,46 @@ def main() -> int:
                   file=sys.stderr)
             return 1
 
+        jb_src = tmp / "jb_icall_outline.c"
+        jb_src.write_text(
+            "#include <stdio.h>\n"
+            "#include <setjmp.h>\n"
+            "static jmp_buf jb;\n"
+            "__attribute__((noinline)) int deep(int d,int t){\n"
+            "    if(d==t) longjmp(jb,t+100);\n"
+            "    return deep(d+1,t)+1;\n"
+            "}\n"
+            "int main(void){\n"
+            "    int v=setjmp(jb);\n"
+            "    if(v==0){ deep(0,3); return 1; }\n"
+            "    printf(\"jb:%d\\n\",v);\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8")
+        for lvl in (3, 4):
+            for opt in ("-O0", "-O2"):
+                jb_exe = tmp / f"jb_icall{lvl}_{opt}.exe"
+                res = run([str(CLANG), str(jb_src), opt,
+                           "-mllvm", "-taokari",
+                           "-mllvm", "-taokari-icall",
+                           "-mllvm", "-taokari-outline",
+                           "-mllvm", f"-taokari-level-icall={lvl}",
+                           "-o", str(jb_exe)])
+                if res.returncode:
+                    print(f"jb icall-L{lvl} {opt}: compile failed", file=sys.stderr)
+                    print(res.stderr, end="", file=sys.stderr)
+                    return res.returncode
+                jb_ran = run([str(jb_exe)])
+                if jb_ran.returncode:
+                    print(f"jb icall-L{lvl} {opt}: runtime crashed (rc="
+                          f"{jb_ran.returncode}) -- icall indirected an outline "
+                          f"shard across a longjmp frame", file=sys.stderr)
+                    return 1
+                if jb_ran.stdout != "jb:103\n":
+                    print(f"jb icall-L{lvl} {opt}: output drift {jb_ran.stdout!r}",
+                          file=sys.stderr)
+                    return 1
+
     print("outline: PASS")
     return 0
 

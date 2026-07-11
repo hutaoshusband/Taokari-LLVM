@@ -274,6 +274,7 @@ struct FunctionOutlining : public FunctionPass {
 
     Shard->setLinkage(GlobalValue::InternalLinkage);
     Shard->addFnAttr(Attribute::NoInline);
+    Shard->addFnAttr(Attribute::UWTable);
     if (Level >= 2)
       Shard->setName(shardName(FuncRNG));
     else
@@ -384,6 +385,7 @@ struct FunctionOutlining : public FunctionPass {
       auto *Fake = Function::Create(FTy, GlobalValue::InternalLinkage,
                                     shardName(FuncRNG), M);
       Fake->addFnAttr(Attribute::NoInline);
+      Fake->addFnAttr(Attribute::UWTable);
       BasicBlock *BB = BasicBlock::Create(M.getContext(), "entry", Fake);
       IRBuilder<> B(BB);
       Type *RetTy = FTy->getReturnType();
@@ -450,6 +452,7 @@ struct FunctionOutlining : public FunctionPass {
     auto *Fake = Function::Create(FTy, GlobalValue::InternalLinkage,
                                   shardName(FuncRNG), M);
     Fake->addFnAttr(Attribute::NoInline);
+    Fake->addFnAttr(Attribute::UWTable);
     BasicBlock *FBB = BasicBlock::Create(M.getContext(), "entry", Fake);
     IRBuilder<> FB(FBB);
     Type *RetTy = FTy->getReturnType();
@@ -527,6 +530,7 @@ struct FunctionOutlining : public FunctionPass {
     }
     Sub->setLinkage(GlobalValue::InternalLinkage);
     Sub->addFnAttr(Attribute::NoInline);
+    Sub->addFnAttr(Attribute::UWTable);
     Sub->setName(shardName(FuncRNG));
 
     wrapWithDispatcher(M, Shard, Sub, FuncRNG);
@@ -557,6 +561,7 @@ struct FunctionOutlining : public FunctionPass {
     auto *Fake = Function::Create(FTy, GlobalValue::InternalLinkage,
                                   shardName(FuncRNG), M);
     Fake->addFnAttr(Attribute::NoInline);
+    Fake->addFnAttr(Attribute::UWTable);
     BasicBlock *FBB = BasicBlock::Create(Ctx, "entry", Fake);
     IRBuilder<> FB(FBB);
     Type *RetTy = FTy->getReturnType();
@@ -575,6 +580,7 @@ struct FunctionOutlining : public FunctionPass {
     auto *Disp = Function::Create(DispFTy, GlobalValue::InternalLinkage,
                                   shardName(FuncRNG), M);
     Disp->addFnAttr(Attribute::NoInline);
+    Disp->addFnAttr(Attribute::UWTable);
     BasicBlock *DispEntry = BasicBlock::Create(Ctx, "entry", Disp);
     BasicBlock *RealBB = BasicBlock::Create(Ctx, "real", Disp);
     BasicBlock *FakeBB = BasicBlock::Create(Ctx, "fake", Disp);

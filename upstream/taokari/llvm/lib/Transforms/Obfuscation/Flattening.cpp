@@ -127,6 +127,7 @@ bool Flattening::runOnFunction(Function &F) {
   }
   if (flatten(tmp)) {
     ++Flattened;
+    F.addFnAttr("taokari-flattened");
     result = true;
   }
 
