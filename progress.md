@@ -79,7 +79,23 @@ Build a real, reproducible Linux differential-test loop that exercises the *curr
 
 ## In progress
 
-- [🚧] **C20 — Final consolidated differential re-run** to confirm the full corpus + matrix is green after all three fixes.
+(none — see Next Candidates below)
+
+## Final consolidated validation (2026-07-12, after all 3 fixes)
+
+| check | result |
+|---|---|
+| Differential O0/O1/O2/O3/Os/Oz × 51 cases | **300/300 valid Linux variants match** (306 minus 6 `c_seh` Windows-only) |
+| ASan × 6 memory/pointer cases | 6/6 |
+| UBSan × 6 arithmetic/exception cases | 6/6 |
+| TSan × multithreading | 1/1 |
+| Exceptions across obfuscated boundaries (5 mixed-TU configs) | 5/5 |
+| dlopen/dlsym shared-lib differential | pass |
+| ELF integrity (10 properties) | 10/10 |
+| AArch64 all 10 passes IR+codegen | 10/10 |
+| Release-gate suite | 209 PASS, 0 unexpected FAIL |
+| Performance (median compile/runtime/size) | 1.65× / 1.23× / 3.18× |
+| New verifiers (6) | 6/6 rc=0 |
 
 
 ## Differential baseline (verified 2026-07-12)
