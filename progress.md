@@ -124,13 +124,6 @@ Build a real, reproducible Linux differential-test loop that exercises the *curr
 
 ## Next Candidates (priority order)
 
-- [ ] **C2** — `progress.md` + `AGENTS.md` planning files committed.
-- [ ] **C3** — Reusable WSL differential harness: compile baseline + obfuscated, diff stdout/stderr/exit, normalise nondeterminism, deterministic seeds.
-- [ ] **C4** — Differential corpus sweep at `-O0/-O1/-O2/-O3/-Os` × PIE/non-PIE × static/dynamic × each pass + combos; record every mismatch.
-- [ ] **C5** — Exception/unwind differential across obfuscated functions (throw through flattened frames, destructors during unwind).
-- [ ] **C6** — Shared library + `dlopen`/`dlsym` differential; verify PLT/GOT + visibility survive each pass.
-- [ ] **C7** — Threads + atomics + TLS differential; run under TSan where the runtime is available.
-- [ ] **C8** — ELF inspection: relocations, init/fini arrays, RELRO, GNU_HASH, PT_GNU_STACK after each pass.
-- [ ] **C9** — Sanitizer sweep (ASan/UBSan/LSan) on the differential corpus.
-- [ ] **C10** — Performance + binary-size baseline + regression gates.
-- [ ] **C11+** — Protection-hardening improvements (only after the compatibility loop is green).
+- [ ] **C13 (deferred)** — Deep-root-cause the `-taokari-max`+`-O0`+setjmp residual. Refined diagnosis: the crash persists even with `deep` (the longjmp caller) fully excluded via `noobf`, and `main` is already `!noobf`. So the culprit is **module-level obfuscator state** (constant/string pools or decrypted stack buffers in `main`) being inconsistent after `longjmp` restores the stack — not any single function's control-flow transform. Needs gdb/dynamic tracing to pinpoint which global/pool. Narrow opt-in-max preset only; tracked via the skippable `setjmp_eh_unwind_safety` gate. The flattening-specific half is fixed and covered by `verify_setjmp_flatten_safety.py`.
+- [ ] **C21+** — Protection-hardening (only after compatibility is mature, which it now is). Opaque-predicate solver-resistance and constant-context verifiers already pass on Linux; any new transform must preserve the 300/300 differential + 209-gate baseline.
+
