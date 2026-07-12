@@ -165,6 +165,7 @@ RELEASE_GATES = [
     ReleaseGate("itanium_rtti_eraser", TESTING / "scripts" / "verify_itanium_rtti_eraser.py", skippable=True),
     ReleaseGate("linux_metadata_hygiene", TESTING / "scripts" / "verify_metadata_hygiene_linux.py", skippable=True),
     ReleaseGate("exceptions_xboundary", TESTING / "scripts" / "verify_exceptions_xboundary.py"),
+    ReleaseGate("cie_wide_int_os", TESTING / "scripts" / "verify_cie_wide_int_os.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
@@ -220,7 +221,8 @@ CASES = [
     # exponentiation. Stresses ConstantFPEncryption / ConstantIntEncryption
     # and MBA on FP and wide-integer math, and FP precision preservation.
     Case("math_heavy", (case_path("math_heavy") / "src" / "main.c",),
-         "math:57.5000:1024:1305938385386173474:4.0709:407\n"),
+         "math:57.5000:1024:1305938385386173474:4.0709:407\n",
+         link_flags=("-lm",)),
     # Parser / state-machine fixture: a recursive-descent arithmetic parser
     # (mutual recursion + many branches) and a DFA-style number validator with
     # 7 states. Stresses Flattening, BCF and IndirectBranch on dense branching

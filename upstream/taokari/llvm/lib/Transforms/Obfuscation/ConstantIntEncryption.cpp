@@ -253,8 +253,10 @@ struct ConstantIntEncryption : public FunctionPass {
             opt.level(), nullptr, opt.volatileSeed(),
             opt.constDecryptorMBA());
         Value *RetVal = Dec;
-        if (E.BitWidth != 64) {
+        if (E.BitWidth < 64) {
           RetVal = B.CreateZExt(Dec, I64, "cie.shard.zext");
+        } else if (E.BitWidth > 64) {
+          RetVal = B.CreateTrunc(Dec, I64, "cie.shard.trunc");
         }
         cast<ReturnInst>(Ret)->setOperand(0, RetVal);
         E.Shard = Shard;
@@ -362,6 +364,9 @@ struct ConstantIntEncryption : public FunctionPass {
               if (IntTy->getBitWidth() < 64) {
                 CipherConstant =
                     IRB.CreateTrunc(Call, IntTy, "cie.shard.trunc");
+              } else if (IntTy->getBitWidth() > 64) {
+                CipherConstant =
+                    IRB.CreateZExt(Call, IntTy, "cie.shard.zext");
               } else {
                 CipherConstant = Call;
               }
