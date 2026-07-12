@@ -91,6 +91,13 @@ Defensive hardening: CIE/CFE now disable the volatile runtime constant-decrypt s
 - Static-link differential (`-static`): plain == obfuscated, ldd confirms genuinely static.
 - These complete the codegen-mode matrix (PIE/non-PIE/shared/static/LTO all proven).
 
+## ABI edge-case probes (2026-07-12, all match baseline)
+
+- **Variadic functions**: `va_list`/`va_start`/`va_arg`/`vsnprintf` survive the full stack (`sum:150 varargs:42:ok:X`).
+- **COMDAT across TUs**: the same template instantiated in two TUs (linker-deduped via COMDAT/linkonce_odr) survives (`comdat:986124:6902908`).
+- **Virtual inheritance (diamond)**: virtual base + `this`-adjustment + vtable thunks survive (`vh:10:10:1:1`) — the IndirectGlobalVariable vtable guard holds.
+- **`__float128` / `long double` (x86_fp80)**: ConstantFPEncryption handles both.
+
 ## Final consolidated validation (2026-07-12, after all 3 fixes)
 
 | check | result |
