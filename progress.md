@@ -81,6 +81,10 @@ Build a real, reproducible Linux differential-test loop that exercises the *curr
 
 (none — see Next Candidates below)
 
+## Per-pass `-Oz` stress (2026-07-12)
+
+After the CIE `-Os` fix, confirmed no analogous crash at `-Oz`: all 9 passes (fla/bcf/mba/cse/cie/cfe/indbr/icall/indgv) at L4 compile + run correctly under `-Oz` (5/5 each on the smoke source, output matches). The size-optimization corner is clean at both `-Os` and `-Oz`.
+
 ## Final post-guard UBSan lock (2026-07-12)
 
 Full corpus (`default` mode) under UBSan differential, after the volatile-seed guard: **50/51 match** (only `c_seh` Windows-only excluded). Confirms the CIE/CFE volatile-seed change introduced no UB and no behavioral regression.
