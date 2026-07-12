@@ -81,6 +81,10 @@ Build a real, reproducible Linux differential-test loop that exercises the *curr
 
 (none — see Next Candidates below)
 
+## Volatile-seed guard (2026-07-12)
+
+Defensive hardening: CIE/CFE now disable the volatile runtime constant-decrypt seed for functions that call a `returnsTwice` function (setjmp/getcontext/vfork), since the volatile nonce can change across the setjmp/longjmp boundary. Independently correct (latent unsoundness) even though it did not fix the separate NULL-pool-base SIGSEGV in the `-taokari-max`+setjmp case (gdb: `rsi=0` in a page-table byte-load post-longjmp). Full gate suite re-run: 209 PASS, 0 unexpected FAIL.
+
 ## Additional compatibility coverage (2026-07-12)
 
 - LTO differential (`-flto -fuse-ld=lld`, whole-program): 15/15 representative cases match baseline.
