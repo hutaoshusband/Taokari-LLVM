@@ -105,6 +105,7 @@ Defensive hardening: CIE/CFE now disable the volatile runtime constant-decrypt s
 - **`__float128` / `long double` (x86_fp80)**: ConstantFPEncryption handles both.
 - **SIMD intrinsics + auto-vectorization**: `_mm_loadu_si128`/`_mm_mullo_epi32` and auto-vec loops survive `-O3 -msse4.1` obfuscation (42 vector instructions still present; `simd:1632:424` matches).
 - **Inline assembly**: `rdtsc`/`cpuid`/`add` with clobber lists and register constraints are left untouched (`asm:30:...` matches).
+- **Deep exception unwind**: throw 6 frames deep, unwind through 5 intermediate flattened frames with destructor-order tracking — matches baseline at `-O0` and `-O2` (`deep-exc:34:539201889:-1097051585`).
 
 ## Final consolidated validation (2026-07-12, after all 3 fixes)
 
