@@ -30,12 +30,29 @@ Build a real, reproducible Linux differential-test loop that exercises the *curr
 ## Completed
 
 - [x] **C1 — Rebuild the Linux source mirror so it reflects the repo.**
-      Old `sync-to-wsl.sh` hand-copied 6 files; rewrote it to mirror all 62 Taokari files (4 wholesale dirs via rsync-or-cp + 11 modified-upstream files + 3 clang driver files). Verified 0 byte mismatches across the tree. Rebuild pending.
+      Old `sync-to-wsl.sh` hand-copied 6 files; rewrote it to mirror all 62 Taokari files (4 wholesale dirs via rsync-or-cp + 11 modified-upstream files + 3 clang driver files). Verified 0 byte mismatches across the tree. Rebuilt clang-22 + opt; full IR obfuscation stack smoke matches native output.
 - [x] Mission-start repo/build/WSL investigation and environment capture.
+- [x] **C2 — Planning files.** `AGENTS.md` (conventions, build/test loop, rules) and `progress.md` (this log) committed.
+- [x] **C3 — Differential harness.** Added `--diff` baseline-vs-obfuscated mode to `testing/run_obfuscation_tests.py` with an `--opt-level`/`--pie`/`--no-pie`/`--shared`/`--sanitize` matrix. Compile-both-from-same-source + stdout/stderr/exit comparison with address normalization. Existing path unchanged. Verified 5/5 across O0–Os × PIE for `mba_basic`.
+- [x] **C4b — compiler-rt built.** The WSL build shipped without sanitizer runtimes (`lib/clang/22/lib` empty). Built `compiler-rt`; ASan/UBSan/LSan/TSan now all link + run with the Taokari clang. Sanitizer differential unblocked.
+- [x] **C5 — Cross-TU exception boundary.** `verify_exceptions_xboundary.py` compiles thrower/middle/catcher as separate TUs and links them in 5 mixed obfuscation configs (incl. exception unwinding *through* a flattened frame). All 5 match baseline on Linux.
+- [x] **C6-defect — FIX: CIE wide-int crash at `-Os`.** The opt-level differential sweep surfaced a **hard compiler crash** (`Do not know how to expand this operator's operand`) at `-Os`/`-Oz` with CIE level ≥3. Root cause: CIE helper shards return i64, but when the encrypted constant was wider than i64 (e.g. an i128 shift-amount constant that clang emits at `-Os` for the `mulhi` 64×64 high-multiply pattern), the shard body zext'd i128→i64 (illegal) and the call site substituted the raw i64 into an i128 operand, emitting malformed IR (`lshr i128 x, i64`) that SelectionDAG rejected. Fix: trunc in the shard body (lossless for 64-bit-fitting constants) + zext back at the call site, symmetric with the existing <64 trunc path. Regression verifier `verify_cie_wide_int_os.py` added; 0/5→5/5 on the repro, all 8 configs (cie 3/4 × O2/O3/Os/Oz) green. **Any `-Os` user + CIE L3+ was crashing before this.**
+- [x] **C6-fixture — math_heavy `-lm`.** `math_heavy` used `sin`/`cos` but only linked at O2 (where the calls constant-fold). Added `-lm` to its `link_flags` so it builds at every opt level.
 
 ## In progress
 
-- [🚧] Rebuild `clang` + `opt` against the synced sources, then re-smoke the IR obfuscation stack.
+- [🚧] **C4 — Full opt-level differential sweep.** Re-running after the CIE fix to confirm the whole corpus is now clean at O0/O1/O2/O3/Os/Oz.
+
+## Differential baseline (verified 2026-07-12)
+
+| matrix | result |
+|---|---|
+| default O2, full corpus | 50/51 (`c_seh` Windows-only by design) |
+| O0/O1/O2/O3/Os/Oz × 51 cases (pre-CIE-fix) | 296/306 — 10 failures, all `math_heavy` at O0/O1/Os/Oz from the CIE `-Os` crash |
+| O0/O1/O2/O3/Os/Oz × 51 cases (post-CIE-fix) | running |
+| 4 sanity cases × 6 opt levels (post-fix) | 24/24 |
+
+
 
 ## Next Candidates (priority order)
 
