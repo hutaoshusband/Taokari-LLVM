@@ -97,6 +97,8 @@ Defensive hardening: CIE/CFE now disable the volatile runtime constant-decrypt s
 - **COMDAT across TUs**: the same template instantiated in two TUs (linker-deduped via COMDAT/linkonce_odr) survives (`comdat:986124:6902908`).
 - **Virtual inheritance (diamond)**: virtual base + `this`-adjustment + vtable thunks survive (`vh:10:10:1:1`) — the IndirectGlobalVariable vtable guard holds.
 - **`__float128` / `long double` (x86_fp80)**: ConstantFPEncryption handles both.
+- **SIMD intrinsics + auto-vectorization**: `_mm_loadu_si128`/`_mm_mullo_epi32` and auto-vec loops survive `-O3 -msse4.1` obfuscation (42 vector instructions still present; `simd:1632:424` matches).
+- **Inline assembly**: `rdtsc`/`cpuid`/`add` with clobber lists and register constraints are left untouched (`asm:30:...` matches).
 
 ## Final consolidated validation (2026-07-12, after all 3 fixes)
 
