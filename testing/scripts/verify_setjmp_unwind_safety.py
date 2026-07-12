@@ -9,6 +9,7 @@ import _taokari_portable as tp
 ROOT = Path(__file__).resolve().parents[2]
 CLANG = tp.CLANG
 VSDEVCMD = tp.VSDEVCMD
+IS_WINDOWS = tp.IS_WINDOWS
 
 SETJMP_SRC = (
     "#include <stdio.h>\n"
@@ -65,8 +66,19 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def build_run(src: Path, exe: Path, flags: list[str], opt: str) -> tuple[int, str]:
-    std = "-std=c++17" if src.suffix.lower() in {".cpp", ".cc", ".cxx"} else "-std=c17"
-    cmd = [str(CLANG), opt, std, "-fdeclspec", "-D_GNU_SOURCE"] + flags + [str(src), "-o", str(exe)]
+    is_cpp = src.suffix.lower() in {".cpp", ".cc", ".cxx"}
+    std = "-std=c++17" if is_cpp else "-std=c17"
+    # C++ sources need the clang++ driver so the C++ runtime (libc++/libstdc++
+    # and __cxa_allocate_exception for EH) is linked. The C driver leaves the
+    # EH runtime unresolved for a .cpp.
+    driver = CLANG
+    if is_cpp and not IS_WINDOWS:
+        cpp_driver = CLANG.with_name(CLANG.name.replace("clang", "clang++"))
+        if cpp_driver.exists():
+            driver = cpp_driver
+    if is_cpp:
+        flags = flags + ["-fcxx-exceptions"]
+    cmd = [str(driver), opt, std, "-fdeclspec", "-D_GNU_SOURCE"] + flags + [str(src), "-o", str(exe)]
     r = run(cmd)
     if r.returncode or not exe.exists():
         return r.returncode, f"BUILD_FAIL: {r.stderr[:200]}"
