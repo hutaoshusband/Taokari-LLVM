@@ -43,6 +43,25 @@ Build a real, reproducible Linux differential-test loop that exercises the *curr
 
 - [🚧] **C10d — Full release-gate suite regression check** (re-running after the flattening setjmp fix).
 
+## Performance & binary-size baseline (verified 2026-07-12, post-fixes)
+
+10 representative cases, default mode (full IR obfuscation stack at level 4):
+
+| case | compile× | runtime× | size× | obf KB |
+|---|---|---|---|---|
+| multithreading | 2.36 | 1.70 | 3.75 | 686 |
+| tiny_aes | 3.64 | 1.47 | 9.24 | 148 |
+| atomics | 1.62 | 1.33 | 2.49 | 39 |
+| flattening_stress | 2.70 | 1.31 | 8.63 | 135 |
+| pointer_heavy | 1.69 | 1.23 | 2.98 | 47 |
+| hashing | 1.35 | 1.22 | 2.17 | 34 |
+| arith_logic | 2.99 | 1.17 | 9.16 | 143 |
+| dynamic_memory | 1.39 | 1.06 | 3.39 | 120 |
+| math_heavy | 1.24 | 0.89 | 2.43 | 38 |
+| mba_basic | 1.34 | 0.83 | 2.19 | 34 |
+
+**Medians: compile 1.65×, runtime 1.23×, size 3.18×.** The CIE wide-int and flattening setjmp fixes added no measurable overhead (math_heavy 1.24× compile / 0.89× runtime).
+
 ## Completed (additional)
 
 - [x] **C7 — Concurrency differential under sanitizers.** `atomics`, `multithreading`, `thread_local_storage` cases pass differential under UBSan (3/3) and the multithreading case under TSan (1/1). No data races or atomic-ordering defects introduced by obfuscation.
