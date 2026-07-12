@@ -436,6 +436,7 @@ def compile_case(
     obfuscate: bool = True,
     level: int | None = None,
     rtti: bool = False,
+    extra_flags: tuple[str, ...] = (),
 ) -> Path:
     case_root = case_path(case.name)
     build = case_root / "build"
@@ -445,7 +446,7 @@ def compile_case(
     build.mkdir(parents=True, exist_ok=True)
     obj.mkdir(parents=True, exist_ok=True)
 
-    extra = MODE_FLAGS[mode]
+    extra = list(MODE_FLAGS[mode]) + list(extra_flags)
     suffix = "" if mode == "default" else f"_{mode}"
     objects: list[Path] = []
     for source in case.sources:
@@ -555,6 +556,139 @@ def run_release_gates(*, keep_going: bool) -> int:
     return failures
 
 
+def normalize_output(text: str) -> str:
+    # Scrub known-nondeterministic fields so a true semantic diff is compared.
+    # Addresses/pointers printed by a test are not part of its contract.
+    import re
+    text = re.sub(r"0x[0-9a-fA-F]{6,}", "0xADDR", text)
+    return text
+
+
+def run_case_differential(
+    driver: Path,
+    case: Case,
+    mode: str,
+    *,
+    level: int | None,
+    rtti: bool,
+    extra_flags: tuple[str, ...],
+) -> None:
+    # True baseline-vs-obfuscated comparison: compile the same source twice
+    # (unobfuscated then obfuscated), run both, and fail on any divergence of
+    # stdout/stderr/exit. Unlike the hardcoded expected_stdout path, this
+    # catches subtle miscompilations where the expected output drifted.
+    tag = f"{mode}/{case.name}"
+    baseline = compile_case(driver, case, mode, obfuscate=False,
+                            extra_flags=extra_flags)
+    obf = compile_case(driver, case, mode, level=level, rtti=rtti,
+                       extra_flags=extra_flags)
+    base_run = run([str(baseline)])
+    obf_run = run([str(obf)])
+    base_out = normalize_output(base_run.stdout)
+    obf_out = normalize_output(obf_run.stdout)
+    base_err = normalize_output(base_run.stderr)
+    obf_err = normalize_output(obf_run.stderr)
+    if obf_run.returncode != base_run.returncode or obf_out != base_out or obf_err != base_err:
+        detail = [f"run {tag} DIFFERENTIAL MISMATCH"]
+        if obf_run.returncode != base_run.returncode:
+            detail.append(f"exit: obf={obf_run.returncode} baseline={base_run.returncode}")
+        if obf_out != base_out:
+            detail.append(f"stdout obf={obf_run.stdout!r}\n       base={base_run.stdout!r}")
+        if obf_err != base_err:
+            detail.append(f"stderr obf={obf_run.stderr!r}\n        base={base_run.stderr!r}")
+        raise RuntimeError("\n".join(detail))
+    log("PASS", f"{tag} (diff)", "green")
+
+
+def run_diff_matrix(
+    *,
+    modes: list[str],
+    cases: list[Case],
+    level: int,
+    rtti: bool,
+    opt_levels: list[str] | None,
+    pie: bool,
+    no_pie: bool,
+    shared: bool,
+    sanitize: list[str] | None,
+    keep_going: bool,
+) -> int:
+    import itertools
+
+    # The differential matrix: for every (mode, case, opt-level, link-style,
+    # sanitizer) combination, compile a fresh unobfuscated baseline and an
+    # obfuscated variant from the SAME source and compare stdout/stderr/exit.
+    # opt-level and sanitizer both override OBF_FLAGS' default -O2, so when a
+    # matrix axis is set it is injected into BOTH builds (the comparison is
+    # only valid if baseline and obfuscated share the same -O and sanitizer).
+    opt_axis = opt_levels or ["O2"]
+    link_axis: list[tuple[str, ...]] = []
+    if shared:
+        link_axis.append(("-fPIC", "-shared"))
+    else:
+        if pie:
+            link_axis.append(("-fPIE", "-pie", "-fPIC"))
+        if no_pie:
+            link_axis.append(("-fno-pie", "-no-pie"))
+        if not pie and not no_pie:
+            link_axis.append(())  # default linking
+    san_axis = sanitize or [None]
+    drivers_seen: set[str] = set()
+    failures = 0
+    runs = 0
+    for mode in modes:
+        driver = MODE_DRIVER[mode]
+        if not driver.exists():
+            print(f"missing driver for mode {mode}: {driver}", file=sys.stderr)
+            return 2
+        if str(driver) not in drivers_seen:
+            log("DRIVER", f"{driver.name}", "yellow")
+            drivers_seen.add(str(driver))
+        for case in cases:
+            if case.modes is not None and mode not in case.modes:
+                continue
+            for opt in opt_axis:
+                for link_flags in link_axis:
+                    for san in san_axis:
+                        extra: list[str] = [f"-{opt}"]
+                        extra += list(link_flags)
+                        if san:
+                            extra += [f"-fsanitize={san}"]
+                        style = ("shared" if shared
+                                 else ("pie" if ("-pie" in link_flags or "-fPIE" in link_flags)
+                                       else ("nopie" if "-no-pie" in link_flags else "default")))
+                        tag = f"{mode}/{case.name}/{opt}/{style}{('/'+san) if san else ''}"
+                        runs += 1
+                        try:
+                            if shared:
+                                _diff_link_only(driver, case, mode, level, rtti,
+                                                tuple(extra))
+                            else:
+                                run_case_differential(driver, case, mode,
+                                                      level=level, rtti=rtti,
+                                                      extra_flags=tuple(extra))
+                        except Exception as exc:
+                            failures += 1
+                            log("FAIL", f"{tag}: {exc}", "red")
+                            if not keep_going:
+                                return 1
+    log("DIFF", f"{runs - failures}/{runs} differential variants matched", "green" if not failures else "yellow")
+    return 1 if failures else 0
+
+
+def _diff_link_only(driver: Path, case: Case, mode: str, level: int,
+                    rtti: bool, extra_flags: tuple[str, ...]) -> None:
+    # Compile-only differential for shared-object targets: verify the
+    # obfuscated object links without error relative to the baseline object.
+    tag = f"{mode}/{case.name}/shared"
+    baseline = compile_case(driver, case, mode, obfuscate=False,
+                            extra_flags=extra_flags)
+    obf = compile_case(driver, case, mode, level=level, rtti=rtti,
+                       extra_flags=extra_flags)
+    if not baseline.exists() or not obf.exists():
+        raise RuntimeError(f"link-only {tag} did not produce objects")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compile and run Taokari obfuscation tests.")
     parser.add_argument("--clang", type=Path, default=DEFAULT_CLANG)
@@ -577,6 +711,27 @@ def main() -> int:
     parser.add_argument("--benchmark-json", type=Path,
                         help="write the same plain-vs-obfuscated measurements "
                              "as JSON (one record per mode/case)")
+    parser.add_argument("--diff", action="store_true",
+                        help="differential mode: compile a fresh unobfuscated "
+                             "baseline per case and compare obfuscated output "
+                             "(stdout/stderr/exit) against it, instead of the "
+                             "hardcoded expected_stdout/expected_exit")
+    parser.add_argument("--opt-level", action="append", default=None,
+                        choices=["O0", "O1", "O2", "O3", "Os", "Oz"],
+                        help="extra optimization -O level(s) to inject into both "
+                             "baseline and obfuscated builds; repeatable. Only "
+                             "used with --diff")
+    parser.add_argument("--pie", action="store_true",
+                        help="with --diff: add -fPIE -pie (PIE executable)")
+    parser.add_argument("--no-pie", action="store_true",
+                        help="with --diff: add -fno-pie -no-pie (non-PIE executable)")
+    parser.add_argument("--shared", action="store_true",
+                        help="with --diff: build a shared object (-fPIC -shared) "
+                             "and skip execution (link-only differential)")
+    parser.add_argument("--sanitize", action="append", default=None,
+                        choices=["address", "undefined", "thread", "leak"],
+                        help="with --diff: link with -fsanitize=<mode>; repeatable. "
+                             "applied to both baseline and obfuscated builds")
     args = parser.parse_args()
 
     clang = args.clang.resolve()
@@ -592,6 +747,21 @@ def main() -> int:
     if not IS_WINDOWS and "clangcl" in modes:
         modes = [m for m in modes if m != "clangcl"]
         log("MODE", "skipping clangcl (MSVC-ABI driver, Windows-only)", "yellow")
+
+    if args.diff:
+        return run_diff_matrix(
+            modes=modes,
+            cases=[c for c in CASES if not args.case or c.name in args.case],
+            level=args.level,
+            rtti=args.rtti,
+            opt_levels=args.opt_level,
+            pie=args.pie,
+            no_pie=args.no_pie,
+            shared=args.shared,
+            sanitize=args.sanitize,
+            keep_going=args.keep_going,
+        )
+
     benchmark_rows: list[dict[str, str | int | float]] = []
     failures = 0
     for mode in modes:
