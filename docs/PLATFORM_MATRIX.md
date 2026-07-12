@@ -2,8 +2,11 @@
 
 Which obfuscation passes are supported per target platform. The Windows
 x64 path is the primary, fully-tested release target. Linux x64 covers the
-IR layer. AArch64 covers IR passes (the pointer-auth indirect path) with the
-MIR layer still x86-only.
+IR layer. AArch64 covers IR passes; pointer authentication (PAC) on the
+indirect path is emitted only when the target actually has the `+pauth`
+feature (`armv8.3-a+`), so the indirect passes work on default
+`aarch64-linux-gnu` and gain PAC signing on PAC-enabled targets. The
+MIR layer is still x86-only.
 
 Legend: ✅ supported · ⚠️ partial · ❌ unsupported (Windows-only by design)
 
