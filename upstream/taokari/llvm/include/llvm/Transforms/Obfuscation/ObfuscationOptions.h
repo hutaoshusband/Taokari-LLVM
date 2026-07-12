@@ -6,6 +6,8 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/YAMLParser.h"
 
+#include <cstdint>
+
 #include <utility>
 #include <vector>
 
@@ -36,6 +38,24 @@ protected:
   uint32_t StringReencryptAfterUse = 0;
   uint32_t VolatileSeed = 1;
   uint32_t ConstDecryptorMBA = 0;
+  // CIE Fortress (L3): collect every encrypted integer constant of a function
+  // into one per-function byte-array global (the "pool") instead of emitting
+  // one GlobalVariable per constant. Each use site GEPs into the pool at its
+  // own offset and decrypts, so a reverser cannot grep individual constant
+  // globals. Off by default; auto-enabled at cie.level >= 3.
+  uint32_t ConstPerFunctionPool = 0;
+  // CIE Fortress (L3): resolve the pool base through an opaque indirect
+  // pointer slot instead of a direct @pool reference, so each use site loads
+  // the pool base from a separate global and GEPs through it. Removes the
+  // single static @pool reference a reverser can grep. Off by default;
+  // auto-enabled at cie.level >= 3 when the pool is on.
+  uint32_t ConstIndirectPoolRef = 0;
+  // CIE Fortress (L3): route each constant access through an outlined helper
+  // shard function (<fn>.cie.shard.<n>) that encapsulates the pool load +
+  // decrypt, so each use site is a call rather than inlined decrypt IR. One
+  // shard per distinct encrypted constant (deduped). Off by default;
+  // auto-enabled at cie.level >= 3.
+  uint32_t ConstHelperShards = 0;
   uint32_t ReleaseStrip = 0;
   uint32_t RandomizeSections = 0;
   std::vector<std::string> ExportAllowlist;
@@ -48,6 +68,11 @@ protected:
   uint32_t StringFakePools = 0;          // emit junk-only decoy pools
   uint32_t StringPageTableAccess = 0;    // look up pool ptr via indgv page tbl
   uint32_t StringDelayedDecrypt = 0;     // decrypt-on-touch, scrub before ret
+  // Per-function VMP bytecode-words budget override. UINT32_MAX = unset, fall
+  // back to the global -taokari-vmp-max-bytecode-words cap. Set by the
+  // `vmp-budget=N` annotation so a single explicitly-tuned +vmp function can
+  // raise (or lower) its own VM size ceiling without touching the global cap.
+  uint32_t VmpBudget = UINT32_MAX;
 
 public:
   ObfOpt(bool enable, uint32_t level, const std::string &attributeName) {
@@ -164,6 +189,24 @@ public:
 
   bool constDecryptorMBA() const { return this->ConstDecryptorMBA; }
 
+  void setConstPerFunctionPool(bool pool) {
+    this->ConstPerFunctionPool = pool;
+  }
+
+  bool constPerFunctionPool() const { return this->ConstPerFunctionPool; }
+
+  void setConstIndirectPoolRef(bool ref) {
+    this->ConstIndirectPoolRef = ref;
+  }
+
+  bool constIndirectPoolRef() const { return this->ConstIndirectPoolRef; }
+
+  void setConstHelperShards(bool shards) {
+    this->ConstHelperShards = shards;
+  }
+
+  bool constHelperShards() const { return this->ConstHelperShards; }
+
   void setReleaseStrip(bool releaseStrip) { this->ReleaseStrip = releaseStrip; }
 
   bool releaseStrip() const { return this->ReleaseStrip; }
@@ -196,6 +239,10 @@ public:
 
   const std::string &attributeName() const { return this->AttributeName; }
 
+  void setVmpBudget(uint32_t budget) { this->VmpBudget = budget; }
+
+  uint32_t vmpBudget() const { return this->VmpBudget; }
+
   ObfOpt none() const {
     ObfOpt Result{false, 0, this->attributeName()};
     Result.setMaxInsts(MaxInsts);
@@ -212,6 +259,9 @@ public:
     Result.setStringReencryptAfterUse(StringReencryptAfterUse);
     Result.setVolatileSeed(VolatileSeed);
     Result.setConstDecryptorMBA(ConstDecryptorMBA);
+    Result.setConstPerFunctionPool(ConstPerFunctionPool);
+    Result.setConstIndirectPoolRef(ConstIndirectPoolRef);
+    Result.setConstHelperShards(ConstHelperShards);
     Result.setReleaseStrip(ReleaseStrip);
     Result.setRandomizeSections(RandomizeSections);
     Result.setExportAllowlist(ExportAllowlist);
@@ -222,6 +272,7 @@ public:
     Result.setStringFakePools(StringFakePools);
     Result.setStringPageTableAccess(StringPageTableAccess);
     Result.setStringDelayedDecrypt(StringDelayedDecrypt);
+    Result.setVmpBudget(VmpBudget);
     return Result;
   }
 };
@@ -237,9 +288,13 @@ protected:
   std::shared_ptr<ObfOpt> CfeOpt = nullptr;
   std::shared_ptr<ObfOpt> BcfOpt = nullptr;
   std::shared_ptr<ObfOpt> MbaOpt = nullptr;
+  std::shared_ptr<ObfOpt> OutlineOpt = nullptr;
+  std::shared_ptr<ObfOpt> DynOpt = nullptr;
   std::shared_ptr<ObfOpt> RttiOpt = nullptr;
   std::shared_ptr<ObfOpt> MetaOpt = nullptr;
   std::shared_ptr<ObfOpt> VmpOpt = nullptr;
+  std::shared_ptr<ObfOpt> OcnstOpt = nullptr;
+  uint32_t VmpAntiTraceMode = 0;
 
   SmallString<32> RandomSeed;
 
@@ -255,9 +310,11 @@ public:
     allOpt.push_back(CfeOpt);
     allOpt.push_back(BcfOpt);
     allOpt.push_back(MbaOpt);
+    allOpt.push_back(OutlineOpt);
     allOpt.push_back(RttiOpt);
     allOpt.push_back(MetaOpt);
     allOpt.push_back(VmpOpt);
+    allOpt.push_back(OcnstOpt);
     return allOpt;
   }
 
@@ -270,9 +327,12 @@ public:
                      const std::shared_ptr<ObfOpt> &cfeOpt,
                      const std::shared_ptr<ObfOpt> &bcfOpt,
                      const std::shared_ptr<ObfOpt> &mbaOpt,
+                     const std::shared_ptr<ObfOpt> &outlineOpt,
+                     const std::shared_ptr<ObfOpt> &dynOpt,
                      const std::shared_ptr<ObfOpt> &rttiOpt,
                      const std::shared_ptr<ObfOpt> &metaOpt,
-                     const std::shared_ptr<ObfOpt> &vmpOpt) {
+                     const std::shared_ptr<ObfOpt> &vmpOpt,
+                     const std::shared_ptr<ObfOpt> &ocnstOpt) {
     this->IndBrOpt = indBrOpt;
     this->ICallOpt = iCallOpt;
     this->IndGvOpt = indGvOpt;
@@ -282,9 +342,12 @@ public:
     this->CfeOpt = cfeOpt;
     this->BcfOpt = bcfOpt;
     this->MbaOpt = mbaOpt;
+    this->OutlineOpt = outlineOpt;
+    this->DynOpt = dynOpt;
     this->RttiOpt = rttiOpt;
     this->MetaOpt = metaOpt;
     this->VmpOpt = vmpOpt;
+    this->OcnstOpt = ocnstOpt;
   }
 
   ObfuscationOptions()
@@ -297,9 +360,12 @@ public:
                            std::make_shared<ObfOpt>("cfe"),
                            std::make_shared<ObfOpt>("bcf"),
                            std::make_shared<ObfOpt>("mba"),
+                           std::make_shared<ObfOpt>("outline"),
+                           std::make_shared<ObfOpt>("dyn"),
                            std::make_shared<ObfOpt>("rtti"),
                            std::make_shared<ObfOpt>("meta"),
-                           std::make_shared<ObfOpt>("vmp")} {}
+                           std::make_shared<ObfOpt>("vmp"),
+                           std::make_shared<ObfOpt>("ocnst")} {}
 
   auto indBrOpt() const { return IndBrOpt; }
 
@@ -319,11 +385,23 @@ public:
 
   auto mbaOpt() const { return MbaOpt; }
 
+  auto outlineOpt() const { return OutlineOpt; }
+
+  auto dynOpt() const { return DynOpt; }
+
   auto rttiOpt() const { return RttiOpt; }
 
   auto metaOpt() const { return MetaOpt; }
 
   auto vmpOpt() const { return VmpOpt; }
+
+  auto ocnstOpt() const { return OcnstOpt; }
+
+  void setVmpAntiTraceMode(uint32_t Mode) {
+    VmpAntiTraceMode = Mode <= 3 ? Mode : 0;
+  }
+
+  uint32_t vmpAntiTraceMode() const { return VmpAntiTraceMode; }
 
   auto &randomSeed() { return RandomSeed; }
 

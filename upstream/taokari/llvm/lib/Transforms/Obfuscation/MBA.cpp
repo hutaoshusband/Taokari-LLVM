@@ -22,6 +22,12 @@ using namespace llvm;
 static cl::opt<uint32_t>
     MBAProbability("taokari-mba-prob", cl::init(40), cl::NotHidden,
                    cl::desc("MBA instruction substitution probability, 0..100."));
+static cl::opt<uint32_t>
+    MBAMaxSubs("taokari-mba-max-substitutions", cl::init(0), cl::NotHidden,
+               cl::desc("Overhead budget: hard cap on MBA substitutions per "
+                        "function. 0 = uncapped (probability alone controls "
+                        "density). Bounds compile time and binary size on "
+                        "huge functions."));
 
 namespace {
 struct MBA : public FunctionPass {
@@ -77,25 +83,47 @@ struct MBA : public FunctionPass {
     std::mt19937_64 FuncRNG(RNG());
     uint32_t EffectiveLevel =
         F.getName().starts_with("__taokari_vmp_interp_") ? 1 : Opt.level();
+    // Overhead budget: once MaxSubs substitutions land in this function, stop.
+    // The probability already limits density, but a very large function can
+    // still produce hundreds of substitutions; this caps the absolute count.
+    const uint32_t MaxSubs = MBAMaxSubs.getValue();
+    uint32_t SubsDone = 0;
     bool Changed = false;
     for (BinaryOperator *BO : Candidates) {
+      if (MaxSubs && SubsDone >= MaxSubs)
+        break;
       if ((FuncRNG() % 100) >= Probability)
         continue;
       switch (BO->getOpcode()) {
       case Instruction::Add:
-        Changed |= substituteAdd(*BO, EffectiveLevel, FuncRNG);
+        if (substituteAdd(*BO, EffectiveLevel, FuncRNG)) {
+          ++SubsDone;
+          Changed = true;
+        }
         break;
       case Instruction::Sub:
-        Changed |= substituteSub(*BO, EffectiveLevel, FuncRNG);
+        if (substituteSub(*BO, EffectiveLevel, FuncRNG)) {
+          ++SubsDone;
+          Changed = true;
+        }
         break;
       case Instruction::Xor:
-        Changed |= substituteXor(*BO, EffectiveLevel, FuncRNG);
+        if (substituteXor(*BO, EffectiveLevel, FuncRNG)) {
+          ++SubsDone;
+          Changed = true;
+        }
         break;
       case Instruction::And:
-        Changed |= substituteAnd(*BO, EffectiveLevel, FuncRNG);
+        if (substituteAnd(*BO, EffectiveLevel, FuncRNG)) {
+          ++SubsDone;
+          Changed = true;
+        }
         break;
       case Instruction::Or:
-        Changed |= substituteOr(*BO, EffectiveLevel, FuncRNG);
+        if (substituteOr(*BO, EffectiveLevel, FuncRNG)) {
+          ++SubsDone;
+          Changed = true;
+        }
         break;
       default:
         break;
@@ -117,7 +145,22 @@ struct MBA : public FunctionPass {
                                           Name + ".vload");
     Value *Odd = IRB.CreateOr(Loaded, ConstantInt::get(Ty, 1),
                               Name + ".odd");
-    return IRB.CreateMul(Loaded, Odd, Name + ".noise");
+    switch (FuncRNG() % 4) {
+    case 0:
+      return IRB.CreateMul(Loaded, Odd, Name + ".noise.mul");
+    case 1:
+      return IRB.CreateXor(IRB.CreateAdd(Loaded, Odd, Name + ".noise.add"),
+                           Odd, Name + ".noise.xor");
+    case 2:
+      return IRB.CreateSub(IRB.CreateOr(Loaded, Odd, Name + ".noise.or"),
+                           IRB.CreateAnd(Loaded, Odd, Name + ".noise.and"),
+                           Name + ".noise.sub");
+    default:
+      return IRB.CreateMul(
+          IRB.CreateAdd(Loaded, IRB.CreateXor(Loaded, Odd, Name + ".noise.xor"),
+                        Name + ".noise.add"),
+          Odd, Name + ".noise.mul");
+    }
   }
 
   static Value *hardenResult(BinaryOperator &BO, IRBuilder<NoFolder> &IRB,
@@ -126,7 +169,12 @@ struct MBA : public FunctionPass {
     if (Level < 2)
       return Result;
 
-    for (unsigned I = 0; I < 1; ++I) {
+    // Higher levels add MBA rounds. Each round folds in a fresh
+    // runtime-derived noise value with a randomly selected identity so
+    // the expression tree deepens and the optimizer must redo its work.
+    // Level 2 = 1 round, Level 3 = 2 rounds, Level 4 = 3 rounds.
+    const unsigned Rounds = std::min<unsigned>(Level - 1, 3);
+    for (unsigned I = 0; I < Rounds; ++I) {
       Value *Noise = opaqueNoise(BO, IRB, FuncRNG,
                                  BO.getName() + ".mba.noise" + Twine(I));
       switch (FuncRNG() % 3) {
@@ -157,44 +205,76 @@ struct MBA : public FunctionPass {
     Type *Ty = BO.getType();
     Value *A = BO.getOperand(0);
     Value *B = BO.getOperand(1);
-    Value *Xor = IRB.CreateXor(A, B, BO.getName() + ".mba.xor");
-    Value *And = IRB.CreateAnd(A, B, BO.getName() + ".mba.and");
-    Value *Carry =
-        IRB.CreateShl(And, ConstantInt::get(Ty, 1), BO.getName() + ".mba.carry");
-    Value *Res = IRB.CreateAdd(Xor, Carry, BO.getName() + ".mba.add");
+    Value *Res = nullptr;
+    // Polymorphic templates: the same a+b expands differently per use so a
+    // reverser cannot match one signature. Both forms are algebraically
+    // exact for all integer widths under wraparound.
+    if (FuncRNG() & 1) {
+      // a + b = (a ^ b) + 2 * (a & b)
+      Value *Xor = IRB.CreateXor(A, B, BO.getName() + ".mba.xor");
+      Value *And = IRB.CreateAnd(A, B, BO.getName() + ".mba.and");
+      Value *Carry = IRB.CreateShl(And, ConstantInt::get(Ty, 1),
+                                   BO.getName() + ".mba.carry");
+      Res = IRB.CreateAdd(Xor, Carry, BO.getName() + ".mba.add");
+    } else {
+      // a + b = (a | b) + (a & b)
+      Value *Or = IRB.CreateOr(A, B, BO.getName() + ".mba.or");
+      Value *And = IRB.CreateAnd(A, B, BO.getName() + ".mba.and");
+      Res = IRB.CreateAdd(Or, And, BO.getName() + ".mba.add");
+    }
     Res = hardenResult(BO, IRB, Res, Level, FuncRNG);
     BO.replaceAllUsesWith(Res);
     BO.eraseFromParent();
     return true;
   }
 
-  // a - b = (a + ~b) + 1
+  // a - b = (a + ~b) + 1  OR  ~(~a + b)  (polymorphic, both exact)
   static bool substituteSub(BinaryOperator &BO, uint32_t Level,
                             std::mt19937_64 &FuncRNG) {
     IRBuilder<NoFolder> IRB(&BO);
     Type *Ty = BO.getType();
     Value *A = BO.getOperand(0);
     Value *B = BO.getOperand(1);
-    Value *NotB = IRB.CreateXor(B, ConstantInt::getAllOnesValue(Ty),
-                                BO.getName() + ".mba.not");
-    Value *Sum = IRB.CreateAdd(A, NotB, BO.getName() + ".mba.sum");
-    Value *Res = IRB.CreateAdd(Sum, ConstantInt::get(Ty, 1),
-                               BO.getName() + ".mba.add");
+    Value *Res = nullptr;
+    if (FuncRNG() & 1) {
+      Value *NotB = IRB.CreateXor(B, ConstantInt::getAllOnesValue(Ty),
+                                  BO.getName() + ".mba.not");
+      Value *Sum = IRB.CreateAdd(A, NotB, BO.getName() + ".mba.sum");
+      Res = IRB.CreateAdd(Sum, ConstantInt::get(Ty, 1),
+                          BO.getName() + ".mba.add");
+    } else {
+      Value *NotA = IRB.CreateXor(A, ConstantInt::getAllOnesValue(Ty),
+                                  BO.getName() + ".mba.nota");
+      Value *Sum = IRB.CreateAdd(NotA, B, BO.getName() + ".mba.sum");
+      Res = IRB.CreateXor(Sum, ConstantInt::getAllOnesValue(Ty),
+                          BO.getName() + ".mba.not");
+    }
     Res = hardenResult(BO, IRB, Res, Level, FuncRNG);
     BO.replaceAllUsesWith(Res);
     BO.eraseFromParent();
     return true;
   }
 
-  // a ^ b = (a | b) - (a & b)
+  // a ^ b = (a | b) - (a & b)  OR  (a & ~b) | (~a & b)  (polymorphic)
   static bool substituteXor(BinaryOperator &BO, uint32_t Level,
                             std::mt19937_64 &FuncRNG) {
     IRBuilder<NoFolder> IRB(&BO);
+    Type *Ty = BO.getType();
     Value *A = BO.getOperand(0);
     Value *B = BO.getOperand(1);
-    Value *Or = IRB.CreateOr(A, B, BO.getName() + ".mba.or");
-    Value *And = IRB.CreateAnd(A, B, BO.getName() + ".mba.and");
-    Value *Res = IRB.CreateSub(Or, And, BO.getName() + ".mba.sub");
+    Value *Res = nullptr;
+    if (FuncRNG() & 1) {
+      Value *Or = IRB.CreateOr(A, B, BO.getName() + ".mba.or");
+      Value *And = IRB.CreateAnd(A, B, BO.getName() + ".mba.and");
+      Res = IRB.CreateSub(Or, And, BO.getName() + ".mba.sub");
+    } else {
+      Value *AllOnes = ConstantInt::getAllOnesValue(Ty);
+      Value *NB = IRB.CreateXor(B, AllOnes, BO.getName() + ".mba.nb");
+      Value *NA = IRB.CreateXor(A, AllOnes, BO.getName() + ".mba.na");
+      Value *L = IRB.CreateAnd(A, NB, BO.getName() + ".mba.l");
+      Value *R = IRB.CreateAnd(NA, B, BO.getName() + ".mba.r");
+      Res = IRB.CreateOr(L, R, BO.getName() + ".mba.or");
+    }
     Res = hardenResult(BO, IRB, Res, Level, FuncRNG);
     BO.replaceAllUsesWith(Res);
     BO.eraseFromParent();
@@ -222,19 +302,28 @@ struct MBA : public FunctionPass {
   }
 
   // a | b = ~(~a & ~b)  (De Morgan)
+  // a | b = ~(~a & ~b) (De Morgan)  OR  a + b - (a & b)  (polymorphic)
   static bool substituteOr(BinaryOperator &BO, uint32_t Level,
                            std::mt19937_64 &FuncRNG) {
     IRBuilder<NoFolder> IRB(&BO);
     Type *Ty = BO.getType();
     Value *A = BO.getOperand(0);
     Value *B = BO.getOperand(1);
-    Value *NA = IRB.CreateXor(A, ConstantInt::getAllOnesValue(Ty),
-                              BO.getName() + ".mba.na");
-    Value *NB = IRB.CreateXor(B, ConstantInt::getAllOnesValue(Ty),
-                              BO.getName() + ".mba.nb");
-    Value *And = IRB.CreateAnd(NA, NB, BO.getName() + ".mba.and");
-    Value *Res = IRB.CreateXor(And, ConstantInt::getAllOnesValue(Ty),
-                               BO.getName() + ".mba.not");
+    Value *Res = nullptr;
+    if (FuncRNG() & 1) {
+      Value *NA = IRB.CreateXor(A, ConstantInt::getAllOnesValue(Ty),
+                                BO.getName() + ".mba.na");
+      Value *NB = IRB.CreateXor(B, ConstantInt::getAllOnesValue(Ty),
+                                BO.getName() + ".mba.nb");
+      Value *And = IRB.CreateAnd(NA, NB, BO.getName() + ".mba.and");
+      Res = IRB.CreateXor(And, ConstantInt::getAllOnesValue(Ty),
+                          BO.getName() + ".mba.not");
+    } else {
+      // a | b = a + b - (a & b)
+      Value *And = IRB.CreateAnd(A, B, BO.getName() + ".mba.and");
+      Value *Sum = IRB.CreateAdd(A, B, BO.getName() + ".mba.sum");
+      Res = IRB.CreateSub(Sum, And, BO.getName() + ".mba.sub");
+    }
     Res = hardenResult(BO, IRB, Res, Level, FuncRNG);
     BO.replaceAllUsesWith(Res);
     BO.eraseFromParent();

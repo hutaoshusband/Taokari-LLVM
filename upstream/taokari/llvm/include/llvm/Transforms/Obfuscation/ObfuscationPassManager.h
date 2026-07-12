@@ -12,13 +12,18 @@
 #include "llvm/Transforms/Obfuscation/MicrosoftRTTIEraser.h"
 #include "llvm/Passes/PassBuilder.h"
 
+#include <memory>
+
 // Namespace
 namespace llvm {
 class ModulePass;
 class PassRegistry;
+class ObfuscationOptions;
 
 ModulePass *createObfuscationPassManager();
 void        initializeObfuscationPassManagerPass(PassRegistry &Registry);
+
+std::shared_ptr<ObfuscationOptions> getTaokariObfuscationOptions();
 
 class ObfuscationPassManagerPass
     : public PassInfoMixin<ObfuscationPassManagerPass> {

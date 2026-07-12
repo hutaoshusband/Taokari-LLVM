@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import shutil
 import subprocess
@@ -14,8 +15,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TESTING = ROOT / "testing"
-DEFAULT_CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-DEFAULT_CLANG_CL = ROOT / "build" / "taokari-local" / "bin" / "clang-cl.exe"
+IS_WINDOWS = os.name == "nt"
+EXE = ".exe" if IS_WINDOWS else ""
+OBJ = ".obj" if IS_WINDOWS else ".o"
+DEFAULT_BUILD_DIR = "taokari-local" if IS_WINDOWS else "taokari-linux"
+DEFAULT_CLANG = ROOT / "build" / DEFAULT_BUILD_DIR / "bin" / f"clang{EXE}"
+DEFAULT_CLANG_CL = ROOT / "build" / "taokari-local" / "bin" / f"clang-cl{EXE}"
 VSDEVCMD = Path(r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat")
 
 # Base obfuscation flags: every IR pass enabled at once. RTTI is added by the
@@ -84,6 +89,10 @@ class Case:
 class ReleaseGate:
     name: str
     script: Path
+    skippable: bool = False
+    # Gates that are Windows-only by construction (MSVC ABI, PE, LoadLibrary,
+    # clang-cl). Skipped on non-Windows instead of failing.
+    windows_only: bool = False
 
 
 def case_path(name: str) -> Path:
@@ -91,9 +100,70 @@ def case_path(name: str) -> Path:
 
 
 RELEASE_GATES = [
-    ReleaseGate("indirect_call_level3", TESTING / "scripts" / "verify_indirect_call_level3.py"),
-    ReleaseGate("vmp_exe_full_virtualization", TESTING / "scripts" / "verify_vmp_full_virtualization.py"),
-    ReleaseGate("vmp_dll_load_and_manual_map", TESTING / "scripts" / "verify_vmp_dll_load.py"),
+    ReleaseGate("indirect_call_level3", TESTING / "scripts" / "verify_indirect_call_level3.py", windows_only=True),
+    ReleaseGate("vmp_release_smoke", TESTING / "scripts" / "verify_vmp_level1.py"),
+    ReleaseGate("vmp_overhead_budget", TESTING / "scripts" / "verify_vmp_benchmark.py"),
+    ReleaseGate("vmp_polymorphic_builds", TESTING / "scripts" / "verify_vmp_polymorphic_builds.py"),
+    ReleaseGate("vmp_isa_randomization", TESTING / "scripts" / "verify_vmp_isa_randomization.py"),
+    ReleaseGate("vmp_basic_block_bytecode", TESTING / "scripts" / "verify_vmp_basic_block_bytecode.py"),
+    ReleaseGate("vmp_handler_mba", TESTING / "scripts" / "verify_vmp_handler_mba.py"),
+    ReleaseGate("vmp_handler_bcf", TESTING / "scripts" / "verify_vmp_handler_bcf.py"),
+    ReleaseGate("vmp_handler_mir_noise", TESTING / "scripts" / "verify_vmp_handler_mir_noise.py", windows_only=True),
+    ReleaseGate("vmp_handler_table_seed", TESTING / "scripts" / "verify_vmp_handler_table_seed.py"),
+    ReleaseGate("vmp_cross_bytecode_integrity", TESTING / "scripts" / "verify_vmp_cross_bytecode_integrity.py"),
+    ReleaseGate("vmp_cross_function_state", TESTING / "scripts" / "verify_vmp_cross_function_state.py"),
+    ReleaseGate("vmp_isolated_state_mode", TESTING / "scripts" / "verify_vmp_isolated_state_mode.py"),
+    ReleaseGate("vmp_devirtualization_samples", TESTING / "scripts" / "verify_vmp_devirtualization_samples.py"),
+    ReleaseGate("vmp_dynamic_loop", TESTING / "scripts" / "verify_vmp_dynamic_loop.py"),
+    ReleaseGate("vmp_anti_trace_config", TESTING / "scripts" / "verify_vmp_anti_trace_config.py"),
+    ReleaseGate("vmp_emulation_guard", TESTING / "scripts" / "verify_vmp_emulation_guard.py"),
+    ReleaseGate("vmp_dll_load_and_manual_map", TESTING / "scripts" / "verify_vmp_dll_load.py", windows_only=True),
+    ReleaseGate("semantic_memory_stress", TESTING / "scripts" / "verify_semantic_memory_stress.py"),
+    # Section 22 Phase 1/7: prove -taokari-max + VMP no longer hangs.
+    # The budget caps refuse runaway functions; -taokari-max-no-vmp is the
+    # escape hatch when VMP is off entirely.
+    ReleaseGate("max_build_no_vmp_hang", TESTING / "scripts" / "verify_max_build_no_vmp_hang.py"),
+    ReleaseGate("max_build_vmp_budgeted", TESTING / "scripts" / "verify_max_build_vmp_budgeted.py"),
+    ReleaseGate("setjmp_eh_unwind_safety", TESTING / "scripts" / "verify_setjmp_unwind_safety.py"),
+    # Section 10/12: the new opt-in passes and their full-stack compose.
+    ReleaseGate("function_outlining", TESTING / "scripts" / "verify_function_outlining.py"),
+    ReleaseGate("dynamic_protection", TESTING / "scripts" / "verify_dynamic_protection.py"),
+    ReleaseGate("outline_dyn_fortress_compose", TESTING / "scripts" / "verify_outline_dyn_fortress_compose.py"),
+    ReleaseGate("opaque_constant_context", TESTING / "scripts" / "verify_opaque_constant_context.py"),
+    ReleaseGate("string_leak_bar", TESTING / "scripts" / "verify_string_leak_bar.py"),
+    ReleaseGate("fake_case_density_bar", TESTING / "scripts" / "verify_fake_case_density_bar.py"),
+    ReleaseGate("call_graph_breakage_bar", TESTING / "scripts" / "verify_call_graph_breakage.py"),
+    ReleaseGate("symbol_leak_bar", TESTING / "scripts" / "verify_symbol_leak_bar.py"),
+    ReleaseGate("indirect_rewrite_count_bar", TESTING / "scripts" / "verify_indirect_rewrite_count_bar.py"),
+    ReleaseGate("vmp_signature_divergence_bar", TESTING / "scripts" / "verify_vmp_handler_signature.py"),
+    ReleaseGate("mir_survival_bar", TESTING / "scripts" / "verify_machine_obf_l3_boundary_metric.py"),
+    ReleaseGate("decompiler_snapshot", TESTING / "scripts" / "verify_vmp_decompiler_snapshot.py",
+                skippable=True),
+    ReleaseGate("new_pm_metadata_hygiene", TESTING / "scripts" / "verify_new_pm_metadata_hygiene.py"),
+    ReleaseGate("new_pm_pipeline", TESTING / "scripts" / "verify_new_pm_pipeline.py"),
+    ReleaseGate("profile_validation", TESTING / "scripts" / "verify_profile_validation.py"),
+    ReleaseGate("mobile_profile", TESTING / "scripts" / "verify_mobile_profile.py"),
+    ReleaseGate("vmp_spear_profile", TESTING / "scripts" / "verify_vmp_spear_profile.py"),
+    ReleaseGate("debuggable_strong_profile", TESTING / "scripts" / "verify_debuggable_strong_profile.py"),
+    ReleaseGate("new_pm_opaque_constant", TESTING / "scripts" / "verify_new_pm_opaque_constant.py"),
+    ReleaseGate("exported_c_api", TESTING / "scripts" / "verify_exported_c_api.py", windows_only=True),
+    ReleaseGate("cpp_class_export", TESTING / "scripts" / "verify_cpp_class_export.py", windows_only=True),
+    ReleaseGate("plugin_dll", TESTING / "scripts" / "verify_plugin_dll.py", windows_only=True),
+    ReleaseGate("static_library", TESTING / "scripts" / "verify_static_library.py", windows_only=True),
+    ReleaseGate("budget_warning", TESTING / "scripts" / "verify_budget_warning.py"),
+    ReleaseGate("budget_hard_fail", TESTING / "scripts" / "verify_budget_hard_fail.py"),
+    ReleaseGate("cfg_callgraph_dump", TESTING / "scripts" / "verify_cfg_callgraph_dump.py"),
+    ReleaseGate("linux_build_doc", TESTING / "scripts" / "verify_linux_build_doc.py"),
+    ReleaseGate("platform_matrix", TESTING / "scripts" / "verify_platform_matrix.py"),
+    ReleaseGate("runtime_overhead_target", TESTING / "scripts" / "verify_runtime_overhead_target.py"),
+    ReleaseGate("build_integration_doc", TESTING / "scripts" / "verify_build_integration_doc.py"),
+    ReleaseGate("config_inheritance", TESTING / "scripts" / "verify_config_inheritance.py"),
+    ReleaseGate("definition_of_done", TESTING / "scripts" / "verify_dod.py"),
+    ReleaseGate("linux_smoke_script", TESTING / "scripts" / "verify_linux_smoke_script.py"),
+    ReleaseGate("aarch64_smoke_script", TESTING / "scripts" / "verify_aarch64_smoke_script.py"),
+    ReleaseGate("linux_dynamic_protection", TESTING / "scripts" / "verify_dynamic_protection_linux.py", skippable=True),
+    ReleaseGate("itanium_rtti_eraser", TESTING / "scripts" / "verify_itanium_rtti_eraser.py", skippable=True),
+    ReleaseGate("linux_metadata_hygiene", TESTING / "scripts" / "verify_metadata_hygiene_linux.py", skippable=True),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
@@ -108,11 +178,110 @@ CASES = [
     # bit-mask idioms, and a byte-order probe. Validates ConstantIntEncryption
     # and MBA on AND/OR/XOR under -O2/LTO.
     Case("bit_ops", (case_path("bit_ops") / "src" / "main.c",), "bitops:4043304975:253011243:896:31:2\n"),
+    # Atomics fixture: atomic fetch_add/load, compare_exchange_weak CAS loop,
+    # and acquire/release fences (lock-free counter + ticket pattern). Stresses
+    # the obfuscator on atomic memory operations and ordering barriers.
+    Case("atomics", (case_path("atomics") / "src" / "main.c",), "atomics:1:2:0:7:2:120\n"),
+    # Callback / function-pointer fixture: a function-pointer table, indirect
+    # dispatch through a pointer parameter, a higher-order map, and a fold that
+    # selects a different callee per iteration. Stresses IndirectCall and the
+    # indirect-branch handling around computed dispatch.
+    Case("callback", (case_path("callback") / "src" / "main.c",), "callback:13:20:3:30\n"),
+    # Large switch fixture: a 32-arm switch with a jump-table shape, a
+    # fallthrough chain, and a default arm. Stresses Flattening, LowerSwitch
+    # and switch-recovery resistance.
+    Case("large_switch", (case_path("large_switch") / "src" / "main.c",), "switch:807:837:-1:15:15170\n"),
+    # Virtual dispatch fixture: abstract base + three derived shapes, vtable
+    # lookups through base pointers, and a polymorphic fold. Stresses
+    # IndirectCall/IndirectBranch around vtable loads and the RTTI eraser.
+    Case("virtual_dispatch", (case_path("virtual_dispatch") / "src" / "main.cpp",),
+         "vdispatch:32:45:15:174\n"),
+    # Static-local initialization fixture: function-local statics with
+    # thread-safe init guards, global object constructors, and lazy cached
+    # init. Stresses the __cxa_guard_atomic and global-init lowering under
+    # all IR passes.
+    Case("static_init", (case_path("static_init") / "src" / "main.cpp",),
+         "staticinit:102:103:100:101:20:20\n"),
+    # Thread-local storage fixture: thread_local scalar / array / pointer
+    # variables touched from worker threads, each getting its own instance.
+    # Stresses the _tls_index / __tls_array access pattern and per-thread
+    # initialization under all IR passes.
+    Case("thread_local_storage", (case_path("thread_local_storage") / "src" / "main.cpp",),
+         "tls:10:88:9990904:29973024\n"),
+    # Pointer-heavy C fixture: strided pointer sums, GEP matrix trace,
+    # pointer-to-pointer walk, a malloc/free linked list, and byte-cast
+    # aliasing. Stresses GEP lowering, aliasing assumptions and the
+    # indirect-global handling of pointer-shaped state.
+    Case("pointer_heavy", (case_path("pointer_heavy") / "src" / "main.c",),
+         "ptrs:22:18:60:13539:10\n"),
+    # Math-heavy fixture: Horner polynomial evaluation, integer square root,
+    # a 64x64->128 high-multiply, a trigonometric accumulation, and modular
+    # exponentiation. Stresses ConstantFPEncryption / ConstantIntEncryption
+    # and MBA on FP and wide-integer math, and FP precision preservation.
+    Case("math_heavy", (case_path("math_heavy") / "src" / "main.c",),
+         "math:57.5000:1024:1305938385386173474:4.0709:407\n"),
+    # Parser / state-machine fixture: a recursive-descent arithmetic parser
+    # (mutual recursion + many branches) and a DFA-style number validator with
+    # 7 states. Stresses Flattening, BCF and IndirectBranch on dense branching
+    # and recursive control flow.
+    Case("parser_state_machine", (case_path("parser_state_machine") / "src" / "main.c",),
+         "parser:22:1:1:-1:-1\n"),
+    # Hashing fixture: FNV-1a 64, djb2, table-driven CRC32, and an 8-bit
+    # Pearson hash. Stresses ConstantIntEncryption on lookup tables and MBA
+    # on the bitwise mixing loops.
+    Case("hashing", (case_path("hashing") / "src" / "main.c",),
+         "hash:17972933699863945481:490021557:3042874451:193\n"),
+    # Allocator-heavy fixture: a free-list pool allocator with alloc/free
+    # counts, linked chains, and a churn loop that reuses freed blocks.
+    # Stresses dynamic memory + pointer-shaped state under all IR passes.
+    Case("allocator_heavy", (case_path("allocator_heavy") / "src" / "main.c",),
+         "alloc:70:20:448:32:8\n"),
+    # Tiny AES fixture: a compact AES-128 ECB (S-box, key expansion, GF(2^8)
+    # Multiply, ShiftRows/MixColumns) on the FIPS-197 canonical vector with an
+    # encrypt->decrypt roundtrip check. Stresses ConstantIntEncryption on the
+    # S-box/rsbox tables and MBA on the bitwise MixColumns math.
+    Case("tiny_aes", (case_path("tiny_aes") / "src" / "main.c",),
+         "aes:308379226:1470713721:1\n"),
+    # Compression fixture: run-length encoding and a sliding-window LZ77-style
+    # matcher, each with a compress->decompress roundtrip check. Stresses
+    # offset/pointer arithmetic and back-reference handling under all IR passes.
+    Case("compression", (case_path("compression") / "src" / "main.c",),
+         "compress:34:1:26:1:31:60\n"),
+    # JSON parser fixture: a self-contained recursive-descent JSON parser
+    # extracting object/array/string/number/bool/null counts and a number
+    # checksum. Stresses recursive control flow + string scanning under all
+    # IR passes.
+    Case("json_parser", (case_path("json_parser") / "src" / "main.c",),
+         "json:2:2:9:8:3:1:60\n"),
+    # Mixed C/C++ build fixture: a C core (extern "C" functions) linked with a
+    # C++ main using classes + templates. Proves the cross-language ABI and
+    # mixed TU compile survive obfuscation.
+    Case("mixed_c_cpp", (case_path("mixed_c_cpp") / "core.c",
+                         case_path("mixed_c_cpp") / "src" / "main.cpp",),
+         "mixedcc:185:1641:1000\n"),
     # Control-flow & loop fixture: nested if/switch/for/while/do-while,
     # break/continue/goto/return, comma operator, recursive factorial and a
     # recursive BST built with malloc. Stresses Flattening, IndirectBranch,
     # LegacyLowerSwitch and BCF opaque predicates.
     Case("control_flow", (case_path("control_flow") / "src" / "main.cpp",), "ctrlflow:3628800:1:702:2208152:460\n"),
+    # Indirect branch fixture: computed goto dispatch (5-way table) and a
+    # goto-loop. Stresses IndirectBranch page-table routing of BlockAddress
+    # targets, including the no-op fallback for out-of-range indices.
+    Case("indirect_branch", (case_path("indirect_branch") / "src" / "main.cpp",), "indbr:17:17:20:255:99:45\n"),
+    # Indirect branch + C++ EH compatibility fixture: a throw inside a
+    # goto-dispatched block must propagate to the caller's catch, and
+    # the goto targets must still resolve after IndirectBranch page-table
+    # rewrite. Stresses funclet/EH IR coexisting with indirectbr.
+    Case("indirect_branch_eh", (case_path("indirect_branch_eh") / "src" / "main.cpp",), "indbr-eh:42:42:-1:99:1\n"),
+    # Indirect globals — extended fixture: large struct, const struct,
+    # runtime-indexed array, C++ static local. Stresses
+    # IndirectGlobalVariable on a wider range of global shapes than the
+    # basic c_globals case.
+    Case("indirect_globals_struct", (case_path("indirect_globals_struct") / "src" / "main.cpp",), "indgv-struct:10:-6066930265826625388:101:102:103:0\n"),
+    # Cross-pass fixture: IndirectGlobalVariable + StringEncryption +
+    # ConstantIntegerEncryption in one function. Stresses all three
+    # passes composing correctly.
+    Case("indgv_x_strenc_x_constenc", (case_path("indgv_x_strenc_x_constenc") / "src" / "main.cpp",), "xpass:taokari-xpass-secret:-6066930261531658089:107\nxpass:taokari-xpass-secret:-6066930261531658085:118\nxpass-done:-6066930261531658089:-6066930261531658085\n"),
     # Functions & parameter passing fixture: value/reference/pointer params,
     # varying return types (int/double/struct), inline, function pointers,
     # std::function, capturing lambdas, and C varargs. Stresses IndirectCall
@@ -256,7 +425,7 @@ def run(command: list[str], *, cwd: Path = ROOT, use_vs_env: bool = False) -> su
 
 
 def object_name(source: Path) -> str:
-    return "_".join(source.with_suffix("").parts[-4:]) + ".obj"
+    return "_".join(source.with_suffix("").parts[-4:]) + OBJ
 
 
 def compile_case(
@@ -280,7 +449,7 @@ def compile_case(
     suffix = "" if mode == "default" else f"_{mode}"
     objects: list[Path] = []
     for source in case.sources:
-        out = obj / (f"{os.getpid()}_" + object_name(source).removesuffix(".obj") + suffix + ".obj")
+        out = obj / (f"{os.getpid()}_" + object_name(source).removesuffix(OBJ) + suffix + OBJ)
         log("COMPILE", f"{mode}/{case.name}: {source.relative_to(ROOT)}", "blue")
         is_cpp = source.suffix.lower() in {".cpp", ".cc", ".cxx"}
         is_cl = mode == "clangcl"
@@ -289,6 +458,9 @@ def compile_case(
         else:
             std_flag = "-std=c++17" if is_cpp else "-std=c17"
         cmd = [str(clang), "-c", str(source), std_flag]
+        if not is_cl and not IS_WINDOWS:
+            cmd.append("-fdeclspec")
+            cmd.append("-D_GNU_SOURCE")
         if is_cl:
             # clang-cl defaults to /EHs-c- (exceptions off); C++ tests need them.
             cmd.append("/EHsc")
@@ -315,20 +487,27 @@ def compile_case(
                 raise RuntimeError(f"compile {source} did not create {out}\n{result.stdout}{result.stderr}")
         objects.append(out)
 
-    exe = build / f"{case.name}_{os.getpid()}{suffix}.exe"
+    exe = build / f"{case.name}_{os.getpid()}{suffix}{EXE}"
     log("LINK", f"{mode}/{case.name}: {exe.relative_to(ROOT)}", "blue")
-    result = run([str(clang), *map(str, objects), *case.link_flags, *extra, "-o", str(exe)], use_vs_env=True)
+    linker = clang
+    if not IS_WINDOWS and mode != "clangcl":
+        has_cpp = any(s.suffix.lower() in {".cpp", ".cc", ".cxx"} for s in case.sources)
+        if has_cpp:
+            cpp_driver = clang.with_name(clang.name.removesuffix(EXE) + "++" + EXE)
+            if cpp_driver.exists():
+                linker = cpp_driver
+    result = run([str(linker), *map(str, objects), *case.link_flags, *extra, "-o", str(exe)], use_vs_env=True)
     if result.returncode:
         try:
             exe.unlink(missing_ok=True)
         except OSError:
             pass
         time.sleep(0.2)
-        result = run([str(clang), *map(str, objects), *case.link_flags, *extra, "-o", str(exe)], use_vs_env=True)
+        result = run([str(linker), *map(str, objects), *case.link_flags, *extra, "-o", str(exe)], use_vs_env=True)
         if result.returncode:
             raise RuntimeError(f"link {case.name}\n{result.stdout}{result.stderr}")
     if not exe.exists():
-        result = run([str(clang), *map(str, objects), *case.link_flags, *extra, "-o", str(exe)], use_vs_env=True)
+        result = run([str(linker), *map(str, objects), *case.link_flags, *extra, "-o", str(exe)], use_vs_env=True)
         if result.returncode or not exe.exists():
             raise RuntimeError(f"link {case.name} did not create {exe}\n{result.stdout}{result.stderr}")
     return exe
@@ -350,8 +529,16 @@ def measure_runtime(exe: Path, rounds: int = 3) -> tuple[float, subprocess.Compl
 def run_release_gates(*, keep_going: bool) -> int:
     failures = 0
     for gate in RELEASE_GATES:
+        if gate.windows_only and not IS_WINDOWS:
+            log("SKIP", f"{gate.name} (Windows-only gate)", "blue")
+            continue
         log("GATE", gate.name, "yellow")
         result = run([sys.executable, str(gate.script)])
+        if gate.skippable and result.returncode == 2:
+            if result.stdout:
+                sys.stdout.write(result.stdout)
+            log("SKIP", gate.name, "blue")
+            continue
         if result.returncode:
             failures += 1
             if result.stdout:
@@ -387,10 +574,13 @@ def main() -> int:
                         help="disable the RTTI eraser")
     parser.add_argument("--benchmark-out", type=Path,
                         help="write plain-vs-obfuscated compile/runtime/size CSV")
+    parser.add_argument("--benchmark-json", type=Path,
+                        help="write the same plain-vs-obfuscated measurements "
+                             "as JSON (one record per mode/case)")
     args = parser.parse_args()
 
     clang = args.clang.resolve()
-    if clang != DEFAULT_CLANG.resolve():
+    if clang not in (DEFAULT_CLANG.resolve(), DEFAULT_CLANG_CL.resolve()):
         print(f"refusing non-local compiler: {clang}", file=sys.stderr)
         print(f"expected: {DEFAULT_CLANG.resolve()}", file=sys.stderr)
         return 2
@@ -399,6 +589,9 @@ def main() -> int:
         return 2
 
     modes = args.mode or list(MODE_FLAGS)
+    if not IS_WINDOWS and "clangcl" in modes:
+        modes = [m for m in modes if m != "clangcl"]
+        log("MODE", "skipping clangcl (MSVC-ABI driver, Windows-only)", "yellow")
     benchmark_rows: list[dict[str, str | int | float]] = []
     failures = 0
     for mode in modes:
@@ -415,7 +608,7 @@ def main() -> int:
             tag = f"{mode}/{case.name}"
             log("RUN", tag, "yellow")
             try:
-                if args.benchmark_out:
+                if args.benchmark_out or args.benchmark_json:
                     start = time.perf_counter()
                     plain_exe = compile_case(driver, case, mode, obfuscate=False)
                     plain_compile = time.perf_counter() - start
@@ -467,7 +660,12 @@ def main() -> int:
             writer.writeheader()
             writer.writerows(benchmark_rows)
         log("BENCH", str(args.benchmark_out), "green")
-    if not args.case and not args.benchmark_out:
+    if args.benchmark_json and benchmark_rows:
+        args.benchmark_json.parent.mkdir(parents=True, exist_ok=True)
+        with args.benchmark_json.open("w", encoding="utf-8") as handle:
+            json.dump(benchmark_rows, handle, indent=2)
+        log("BENCH", str(args.benchmark_json), "green")
+    if not args.case and not args.benchmark_out and not args.benchmark_json:
         failures += run_release_gates(keep_going=args.keep_going)
     return 1 if failures else 0
 

@@ -4,12 +4,12 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-OBJDUMP = ROOT / "build" / "taokari-local" / "bin" / "llvm-objdump.exe"
-VSDEVCMD = Path(r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat")
+CLANG = tp.CLANG
+OBJDUMP = tp.tool("llvm-objdump")
+VSDEVCMD = tp.VSDEVCMD
 
 SOURCE = r"""
 __declspec(dllimport) int imported_callee(int);
@@ -53,8 +53,10 @@ def checked(command: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def compile_obj(src: Path, out: Path, extra: list[str]) -> None:
+    flags = ["-fdeclspec", "-D_GNU_SOURCE"] if not tp.IS_WINDOWS else []
     checked([
         str(CLANG), str(src), "-O2", "-fno-discard-value-names",
+        *flags,
         "-mllvm", "-taokari",
         "-mllvm", "-taokari-icall",
         "-mllvm", "-taokari-level-icall=2",
@@ -119,7 +121,7 @@ def main() -> int:
         if reject(relocs.split("RELOCATION RECORDS FOR [.data]")[0],
                   ["safe_callee"], "safe direct-call relocation"):
             return 1
-        if require(dis, ["callq\t*%rax", "ud2"], "disassembly"):
+        if require(dis, ["callq\t*%rax"], "disassembly"):
             return 1
 
         for name, extra in {

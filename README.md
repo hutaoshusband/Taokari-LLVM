@@ -49,13 +49,14 @@ Notes:
 
 - **x86_64-only.** Gated by `getTargetTriple().isX86_64()`; the emitted bytes use REX
   prefixes and 64-bit registers. No AArch64 hook exists yet.
-- **Level 1** is infrastructure only — a semantically-neutral `lea rax,[rax+0]` marker
-  (`48 8D 40 00`) chosen because clang never emits that exact form (the optimizer folds the
-  `+0` away), so detecting it at function entry is a reliable "the pass fired" signal.
+- **Per-sub-pass config.** `-taokari-mir=dirtybytes:75,junk:50,sub:40,split,
+  fakeprologue` — the numeric suffix is the apply probability, and per-function
+  annotation parsing (`+mir:dirtybytes`) selects sub-passes per function.
 - **Dual pass-manager registration**: legacy `MachineFunctionPass` (the live codegen path
   today) plus a new-PM `PassInfoMixin` companion with `isRequired() = true`, so an
-  obfuscation gate cannot be peephole-pruned away. See
-  [`docs/MACHINE_IR_OBFUSCATION.md`](docs/MACHINE_IR_OBFUSCATION.md).
+  obfuscation gate cannot be peephole-pruned away. The new-PM codegen pipeline hook is
+  not yet wired in `X86CodeGenPassBuilder` — only the legacy `addPreEmitPass` path is
+  live. See [`docs/MACHINE_IR_OBFUSCATION.md`](docs/MACHINE_IR_OBFUSCATION.md).
 
 ### Optimizer-resistant IR transforms
 
@@ -87,8 +88,8 @@ transforms that survive the LLVM cleanup pipeline:
 - **Bogus control flow** with the unfoldable `x*(x+1)` guard, Level-2 fake-body mutation,
   and configurable placement before/after flattening (`-taokari-bcf-before-fla` /
   `-taokari-bcf-after-fla`).
-- **MBA** — `add`/`sub`/`xor`/`and`/`or` substitution with `IRBuilder<NoFolder>`
-  (today: single-round basic identities; multi-round/opaque-constant is on the roadmap).
+- **MBA** — `add`/`sub`/`xor`/`and`/`or` substitution with `IRBuilder<NoFolder>`;
+  L2 adds multi-round, opaque-constant, and runtime-nonce-mixed identities.
 
 ---
 
@@ -103,7 +104,7 @@ capped at 4.
 | --- | --- | --- | --- |
 | **fla** — control-flow flattening | `-irobf-fla` | 0-4 | Rolling-XOR dispatch state, per-function state key, random per-BB case IDs, opaque-gated fake cases, Fortress polymorphic dispatchers (L3), **no-jump-table / indirectbr dispatchers (L4)** that defeat IDA switch recovery |
 | **bcf** — bogus control flow | `-irobf-bcf` | 0-4 | *(Taokari addition)* Unfoldable `x*(x+1)` guard seeded from a runtime nonce, L2 fake-body mutation, before/after-fla placement, internal `NoInline`+`OptimizeNone` junk function |
-| **mba** — mixed boolean arithmetic | `-irobf-mba` | 0-4* | *(Taokari addition)* `add`/`sub`/`xor`/`and`/`or` identities, `IRBuilder<NoFolder>`, `-taokari-mba-prob`. *Level reserved for future multi-round L2.* |
+| **mba** — mixed boolean arithmetic | `-irobf-mba` | 0-4 | *(Taokari addition)* `add`/`sub`/`xor`/`and`/`or` identities, `IRBuilder<NoFolder>`, `-taokari-mba-prob`, multi-round L2 with runtime-nonce-mixed identities, applied to flattening dispatch-state updates |
 | **cie** — constant int encryption | `-irobf-cie` | 0-3 | Runtime-mixed decryptor (`-taokari-const-volatile-seed`), optional `-taokari-const-decryptor-mba`, per-function dedup cache |
 | **cfe** — constant FP encryption | `-irobf-cfe` | 0-3 | Same runtime-mixing and MBA decryptor as `cie` |
 | **cse** — string encryption | `-irobf-cse` | — | Encrypted sentinel, per-build nonce, per-string key schedule, randomised decryptor shape, stack/heap/re-encrypt placement, UTF-16 support |
@@ -158,6 +159,29 @@ clang -O2 -mllvm -taokari-mir=dirtybytes,junk,sub main.c -o main_mir.exe
 ```
 
 Or via the MSVC ABI driver: swap `clang` for `clang-cl` and use `/std:` / `/EHsc`.
+
+### Recommended default: Tier B (strong blanket, no VMP)
+
+For most binaries the right starting point is the **strong blanket**
+recipe (Tier B in `docs/TIERS.md`): every cheap, IDA-visible pass applied
+globally, VMP off. The blanket makes non-VMP'd regions look noisy in IDA
+without paying for VM virtualisation. The one-line entry point is
+`build_strong.bat`:
+
+```bat
+build_strong.bat               :: demo target
+build_strong.bat my_app.c      :: your source
+```
+
+Add VMP later by annotating 1-N sensitive functions in source with
+`__attribute__((noinline, annotate("+vmp")))` and re-running the script;
+the VMP budget caps (Section 22 Phase 1) refuse runaway functions for
+you. That grows the build toward Tier C (`build_max_protection.bat`).
+
+`-mllvm -taokari-max` is safe to combine with `-mllvm -taokari-vmp`
+since Section 22 Phase 1: the same caps budget it. Pass
+`-mllvm -taokari-max-no-vmp` to keep every other max-strength pass on
+while forcing VMP off entirely.
 
 ---
 
@@ -251,55 +275,97 @@ mathematically impossible. The full living list is in [`todo.md`](todo.md).
 
 **Shipped:**
 
-- IR-layer L1/L2 across all passes (opaque predicates L1+L2, flattening L1-L4, BCF L1+L2,
-  MBA L1, runtime-mixed constant encryption L1+L2, string encryption L1+L2, page tables
-  L1, MSVC RTTI eraser).
-- MIR L1 infrastructure and L2 core passes (`dirtybytes`, `junk`, `sub`, `unmodelled`).
-- MIR L3 hardening: runtime-dependent dirty-byte guards, Fortress performance budget.
-- Metadata hygiene: `-irobf-meta` / `-taokari-meta`, helper renaming, export allowlists,
-  and section randomization at higher levels.
-- Literal maximum protection flag: `-mllvm -taokari-max`.
-- VMP L1 and L1.5: selected-function virtualization, arithmetic/memory/branch opcodes,
-  PHI lowering, VM-local loads/stores, direct-call trampolines, differential tests,
-  baseline benchmark, and build-time bounds checks.
-- VMP L2 work already landed after the last README update: pointer support, runtime traps,
-  bytecode integrity fuzzing, DLL load verification, runtime-derived keys, separate
-  immediate streams, opcode permutation tables, per-function interpreter diversity,
-  callee-table token hardening, per-block keys, indirect handler dispatch, fake handlers,
-  bytecode and overhead guardrails, dummy opcode padding, BCF/MBA-hardened call thunks,
-  manual-map DLL validation, and IDA/Hex-Rays inspection gates.
-- VMP compatibility coverage landed: `void` functions, raw `switch` lowering,
-  `memcpy`/`memset`/`memmove` intrinsics, multi-index / struct-field GEP, pointer args
-  and pointer returns in direct calls, indirect/function-pointer call stubs with
-  split-around fallback, function splitting (VM-supported regions become bytecode,
-  unsupported islands stay native), a per-function compatibility report
-  (`-taokari-vmp-compat-report=<path>`), the `INT_MIN / -1` signed div/rem overflow
-  guard, and release-blocking EXE / normal-DLL / manual-map / native↔VM interop gates.
+- IR-layer L1/L2/L3 across all passes (opaque predicates L1+L2 with a shared L3
+  engine — registry, nesting, solver-resistance suites; flattening L1-L4; BCF
+  L1+L2 with multi-layer bogus graphs and fake exception-looking regions
+  integrated with the flattening dispatcher; MBA L1+L2 with multi-round
+  identities and runtime-nonce mixing applied to flattening dispatch-state
+  updates; runtime-mixed constant encryption L1+L2 with per-function encrypted
+  pools and indirect-constant-via-helper-shard access; string encryption L1+L2;
+  page tables L1; MSVC RTTI eraser; post-link `.text` hash patching).
+- MIR L1 infrastructure, L2 core passes (`dirtybytes`, `junk`, `sub`,
+  `unmodelled`), and per-sub-pass config keys (probability + per-function
+  annotation parsing, validated).
+- MIR L3 hardening: runtime-dependent dirty-byte guards, Fortress performance
+  budget, function splitting, fake prologue/epilogue bytes, and decompiler
+  snapshot tests.
+- Metadata hygiene L3: `-irobf-meta` / `-taokari-meta`, helper renaming, export
+  allowlists, section/helper randomization, source-path stripping, and leak
+  tests.
+- Function outlining L3: shards, fake shard graph, shard dispatcher, integrity
+  checks, and cross-shard pools; shard calls route through the icall page table
+  when both passes are on.
+- Dynamic / anti-debug runtime protections L1/L2/L3: anti-debug, timing, fake
+  checks, delayed checks, tamper-flag propagation, function integrity,
+  encrypted hash table, randomized placement, tamper policy, and a native
+  integrity prototype.
+- Literal maximum protection flag: `-mllvm -taokari-max` and
+  `-mllvm -taokari-max-no-vmp`.
+- Release profiles: `dev` / `balanced` / `strong` / `fortress`, plus `mobile`,
+  `debuggable-strong`, and `vmp-spear`, with profile inheritance and
+  validation.
+- Budget system: per-pass, global binary-size, global compile-time, global
+  runtime-overhead, and per-function VMP budgets, with hard-fail mode.
+- Config generator (`taokari-config-wizard.py`), tier recipes (A/B/C/D), and the
+  release dashboard (per-tier summary, pass cost, slowest pass, transformed
+  function count, VM compatibility, skipped-function reasons, CI artifacts).
+- Decompiler snapshot pipeline (IDA + Ghidra headless, with CFG / pseudocode /
+  switch-recovery / call-graph metrics) and gnarliness gates.
+- VMP L1, L1.5, and full L2: selected-function virtualization, arithmetic /
+  memory / branch opcodes, PHI lowering, VM-local loads/stores, direct-call
+  trampolines, differential tests, baseline benchmark, build-time bounds,
+  pointer support, globals, GEP, alignment, aliasing tests, runtime key
+  derivation, separate immediate streams, opcode permutation tables, integrity
+  tags, per-function interpreter clones, indirect handler dispatch, handler
+  flattening, callee-table hardening, per-block keys, fake handlers, anti-
+  frequency padding, mutation fuzzing, and property-based differential tests.
+- VMP L3 hardening: PC encryption, stack/locals encryption between handlers,
+  opmap self-verification, varied tamper responses, anti-debug/anti-trace and
+  anti-emulation inside the interpreter loop (through the DynamicProtection
+  framework, with `off/light/strong` knobs), cross-function VM state, and
+  per-build handler-table obfuscation seed verification.
+- VMP compatibility coverage: `void` functions, raw `switch` lowering,
+  `memcpy`/`memset`/`memmove` intrinsics, multi-index / struct-field GEP,
+  pointer args and pointer returns in direct calls, indirect/function-pointer
+  call stubs with split-around fallback, function splitting, a per-function
+  compatibility report, the `INT_MIN / -1` signed div/rem overflow guard, and
+  release-blocking EXE / normal-DLL / manual-map / native↔VM interop gates.
 
 **Partial**
 
-- MIR per-sub-pass config keys (the numeric suffix after `:` / `=` in
-  `-taokari-mir=dirtybytes:75` is parsed but currently ignored).
-- Opaque-predicate L3 engine (registry, nesting, solver-resistance test suites) and
-  cross-pass integration so flattening/BCF call the shared helpers instead of hand-rolling
-  their own predicates inline.
-- New-PM codegen wiring: the new-PM `TaokariMachineObfPass` class is registered but not
-  yet plugged into `X86CodeGenPassBuilder` — only the legacy `addPreEmitPass` hook is live.
-- VMP is strong enough to be a real selected-function protection path now, and the
-  compatibility report plus function splitting make unsupported IR explicit rather than
-  fatal. It is still not full-program virtualization: wider pointer / aggregate coverage
-  and the remaining L3 hardening below are still work.
-- VMP L3 is not done: PC encryption, stack/locals encryption between handlers,
-  anti-debug/anti-trace behavior inside the interpreter loop, cross-function VM state,
-  and devirtualization sample gates are still work.
+- New-PM codegen wiring for MIR: the new-PM `TaokariMachineObfPass` class is
+  registered but not yet plugged into `X86CodeGenPassBuilder` — only the legacy
+  `addPreEmitPass` hook is live. (The IR passes have new-PM prototypes and run
+  under the new-PM pipeline; full new-PM migration of every IR pass is still
+  work.)
+- VMP is strong selected-function protection with L3 hardening, but it is still
+  not full-program virtualization: wider aggregate coverage and a few remaining
+  hardening items below are still work.
 
-**Backlog (not implemented — will be implemented):**
+**Now implemented (newly landed):**
 
-- Function outlining / callout obfuscation.
-- Dynamic / anti-debug runtime protections.
-- Full symbol/debug-info cleanup beyond the current metadata hygiene pass.
-- Release profiles (`dev` / `balanced` / `strong` / `fortress`).
-- AArch64 MIR port; new-PM migration of the IR passes.
+- **Function outlining / callout obfuscation** — splits basic-block tails into
+  internal shard helpers (L1), then hardens the shard layer with opaque names,
+  per-arg/return XOR scrambling, fake shards and a max-insts guardrail (L2),
+  and a fortress callout with multi-layer split, token-switched dispatcher,
+  integrity-check guard and fake call graph (L3). Shard calls route through the
+  icall page table for free when both passes are on. Opt in via `+outline` /
+  `-taokari-outline`.
+- **Dynamic / anti-debug runtime protections** — opt-in per-function
+  debugger/timing probes (IsDebuggerPresent / CheckRemoteDebuggerPresent /
+  QueryPerformanceCounter) with opaque-predicate result mixing, a runtime-nonce
+  seed, a shared module tamper flag, delayed placement, indirect probe
+  functions and an anti-patch sentinel. Off by default (kept out of
+  `-taokari-max`). Opt in via `+dyn` / `-taokari-dyn`.
+
+**Backlog (not implemented yet):**
+
+- Full symbol / debug-info cleanup beyond the current metadata hygiene pass.
+- AArch64 MIR port (no-op infrastructure + a dirtybytes-equivalent), and full
+  new-PM migration of the remaining IR passes.
+- Page-table-backed constants, fake recovery paths for indirect branches, and
+  split global storage (still open in the constant/branch/global track).
+- Exception-heavy C++ fixture in the real-world compatibility suite.
 
 ---
 
@@ -309,8 +375,8 @@ mathematically impossible. The full living list is in [`todo.md`](todo.md).
   built from constants and a `constant` global, so any re-running optimizer can fold it
   back. Runtime-mixing (level 2) is what survives; `minConstSize` also skips narrow
   immediates. See [`docs/CONSTANT_FOLDING_AUDIT.md`](docs/CONSTANT_FOLDING_AUDIT.md).
-- **MBA is single-round today.** Level-2 multi-round and opaque-constant variants are
-  reserved but not shipped.
+- **MBA is multi-round at L2.** Single-round basic identities ship at L1; L2
+  adds multi-round, opaque-constant, and runtime-nonce-mixed identities.
 - **The MIR layer is x86_64-only.** No 32-bit x86, no AArch64.
 - **VMP is selected-function protection, not automatic whole-program protection.** Loader
   glue, CRT startup, EH-heavy code, TLS setup, hot loops, and unsupported IR stay native

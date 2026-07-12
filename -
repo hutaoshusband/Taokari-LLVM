@@ -1,0 +1,81 @@
+{
+  "tiers": [
+    {
+      "tier": "A",
+      "correct": true,
+      "compile_s": 1.63,
+      "compile_budget_s": 5,
+      "compile_within_budget": true,
+      "build_ok": true,
+      "binary_size": 204288,
+      "node_bar": 1.0,
+      "edge_bar": 1.0,
+      "passes": {
+        "indbr": {
+          "enable": false,
+          "level": 0
+        },
+        "icall": {
+          "enable": false,
+          "level": 0
+        },
+        "indgv": {
+          "enable": false,
+          "level": 0
+        },
+        "fla": {
+          "enable": true,
+          "level": 2
+        },
+        "cse": {
+          "enable": true,
+          "level": 0
+        },
+        "cie": {
+          "enable": true,
+          "level": 1
+        },
+        "cfe": {
+          "enable": false,
+          "level": 0
+        },
+        "bcf": {
+          "enable": false,
+          "level": 0
+        },
+        "mba": {
+          "enable": true,
+          "level": 0
+        },
+        "outline": {
+          "enable": false,
+          "level": 0
+        },
+        "dyn": {
+          "enable": false,
+          "level": 0
+        },
+        "meta": {
+          "enable": true,
+          "level": 2
+        },
+        "vmp": {
+          "enable": false,
+          "level": 0
+        }
+      },
+      "node_ratio": 48.88,
+      "edge_ratio": 64.5,
+      "meets_gnarliness_bar": true,
+      "transformed_functions": 5,
+      "vmp": {
+        "enabled": false,
+        "virtualized": 0,
+        "partially_virtualized": 0,
+        "skipped": 0,
+        "skipped_reasons": {},
+        "total_words": 0
+      }
+    }
+  ]
+}

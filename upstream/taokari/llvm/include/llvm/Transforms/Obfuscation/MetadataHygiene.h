@@ -12,6 +12,13 @@ class ObfuscationOptions;
 ModulePass *createMetadataHygienePass(ObfuscationOptions *argsOptions);
 void initializeMetadataHygienePass(PassRegistry &Registry);
 
+class MetadataHygieneNewPMPass
+    : public PassInfoMixin<MetadataHygieneNewPMPass> {
+public:
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+
 } // namespace llvm
 
 #endif

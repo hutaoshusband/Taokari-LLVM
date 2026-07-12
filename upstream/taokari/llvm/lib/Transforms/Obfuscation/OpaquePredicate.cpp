@@ -25,6 +25,13 @@ static cl::opt<bool> OpaqUnfoldableFlag(
     "taokari-opaq-unfoldable",
     cl::desc("Use optimizer-resistant opaque predicates (Level 2)"),
     cl::init(false));
+static cl::opt<std::string> OpaqFamilyFlag(
+    "taokari-opaq-family",
+    cl::desc("Opaque predicate family registry selector. When a pass asks for a "
+             "true/false predicate via the registry, this picks the identity "
+             "family: algebraic (foldable L1), unfoldable (L2), or nested "
+             "(L3 two-level chain)."),
+    cl::init("unfoldable"));
 
 namespace {
 ConstantInt *randomInt(IntegerType *IntTy, std::mt19937_64 &RNG) {
@@ -42,9 +49,20 @@ Value *makeEvenLowBit(IRBuilder<> &IRB, Value *Seed, ConstantInt *Salt,
                       const Twine &Name) {
   auto *IntTy = cast<IntegerType>(Seed->getType());
   Value *Mixed = IRB.CreateAdd(Seed, Salt, Name + ".mix");
-  Value *Carry =
-      IRB.CreateAnd(Mixed, ConstantInt::get(IntTy, 1), Name + ".carry");
-  Value *Even = IRB.CreateAdd(Mixed, Carry, Name + ".even");
+  auto *One = ConstantInt::get(IntTy, 1);
+  Value *Low = IRB.CreateAnd(Mixed, One, Name + ".low");
+  Value *Even = nullptr;
+  switch (Salt->getLimitedValue() % 3) {
+  case 1:
+    Even = IRB.CreateSub(Mixed, Low, Name + ".even.sub");
+    break;
+  case 2:
+    Even = IRB.CreateXor(Mixed, Low, Name + ".even.xor");
+    break;
+  default:
+    Even = IRB.CreateAdd(Mixed, Low, Name + ".even.add");
+    break;
+  }
   return IRB.CreateAnd(Even, ConstantInt::get(IntTy, 1), Name + ".bit");
 }
 
@@ -54,6 +72,14 @@ Value *makePartition(IRBuilder<> &IRB, Value *Seed, ConstantInt *Mask,
   Value *Right =
       IRB.CreateAnd(IRB.CreateNot(Seed, Name + ".not"), Mask, Name + ".right");
   return IRB.CreateOr(Left, Right, Name + ".part");
+}
+
+Value *makeNeighborProductLowBit(IRBuilder<> &IRB, Value *Seed,
+                                 const Twine &Name) {
+  auto *IntTy = cast<IntegerType>(Seed->getType());
+  Value *Prev = IRB.CreateSub(Seed, ConstantInt::get(IntTy, 1), Name + ".prev");
+  Value *Prod = IRB.CreateMul(Seed, Prev, Name + ".prod");
+  return IRB.CreateAnd(Prod, ConstantInt::get(IntTy, 1), Name + ".bit");
 }
 
 /// Fit a pointer-width integer value into the requested (possibly narrower or
@@ -101,13 +127,11 @@ Value *frameAddress(IRBuilder<> &IRB, const Twine &Name) {
   return FP;
 }
 
-/// Lazy lookup/create of the module-wide nonce global + its one-shot
-/// initializer. The global is mutable (NOT constant), initialised from
-/// `frameaddress` inside a function that runs in a `llvm.global_ctors` entry,
-/// so the value is only known at runtime. The obfuscator never writes a
-/// known initializer, which is what blocks constant folding.
+/// Lazy lookup/create of the module-wide nonce global. The global is mutable
+/// and read through a volatile load, so callers keep a runtime dependency.
 GlobalVariable *getOrCreateRuntimeNonce(Module &M, IRBuilder<> &IRB,
                                         IntegerType *IntTy,
+                                        std::mt19937_64 &RNG,
                                         const Twine &Name) {
   // The nonce is keyed off the requested integer width so different callers
   // share a single global of matching width. Multiple widths produce a few
@@ -118,7 +142,7 @@ GlobalVariable *getOrCreateRuntimeNonce(Module &M, IRBuilder<> &IRB,
   if (GV)
     return GV;
 
-  auto *Init = ConstantInt::get(IntTy, 0x9E3779B97F4A7C15ull);
+  auto *Init = randomInt(IntTy, RNG);
   GV = new GlobalVariable(M, IntTy, /*isConstant=*/false,
                           GlobalValue::PrivateLinkage, Init, GVName);
   GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
@@ -181,7 +205,7 @@ Value *taokari::makeContextSeed(Function &F, IRBuilder<> &IRB,
 
   case OpaqueSeedKind::RuntimeNonce: {
     auto &M = *F.getParent();
-    GlobalVariable *GV = getOrCreateRuntimeNonce(M, IRB, IntTy, Name);
+    GlobalVariable *GV = getOrCreateRuntimeNonce(M, IRB, IntTy, RNG, Name);
     return makeVolatileLoad(IRB, IntTy, GV, Name);
   }
   }
@@ -206,6 +230,30 @@ OpaqueSeedKind resolveSeedKind() {
 
 bool resolveUnfoldable() { return OpaqUnfoldableFlag; }
 
+// Predicate family registry: dispatch a true/false predicate request to the
+// identity family selected by -taokari-opaq-family. This is the Level-3
+// "selectable family" surface -- passes that want a configurable predicate
+// strength call these instead of a specific make*Predicate.
+Value *makeRegistryTruePredicate(IRBuilder<> &IRB, Value *Seed,
+                                 std::mt19937_64 &RNG, const Twine &Name) {
+  const std::string &F = OpaqFamilyFlag;
+  if (F == "algebraic")
+    return makeTruePredicate(IRB, Seed, RNG, Name);
+  if (F == "nested")
+    return makeNestedTruePredicate(IRB, Seed, RNG, Name);
+  return makeUnfoldableTruePredicate(IRB, Seed, RNG, Name);
+}
+
+Value *makeRegistryFalsePredicate(IRBuilder<> &IRB, Value *Seed,
+                                  std::mt19937_64 &RNG, const Twine &Name) {
+  const std::string &F = OpaqFamilyFlag;
+  if (F == "algebraic")
+    return makeFalsePredicate(IRB, Seed, RNG, Name);
+  if (F == "nested")
+    return makeNestedFalsePredicate(IRB, Seed, RNG, Name);
+  return makeUnfoldableFalsePredicate(IRB, Seed, RNG, Name);
+}
+
 Value *makeSeedFromFlags(Function &F, IRBuilder<> &IRB, IntegerType *IntTy,
                          std::mt19937_64 &RNG, const Twine &Name) {
   return makeContextSeed(F, IRB, IntTy, RNG, resolveSeedKind(), Name);
@@ -215,10 +263,17 @@ Value *makeSeedFromFlags(Function &F, IRBuilder<> &IRB, IntegerType *IntTy,
 Value *taokari::makeTruePredicate(IRBuilder<> &IRB, Value *Seed,
                                   std::mt19937_64 &RNG, const Twine &Name) {
   auto *IntTy = cast<IntegerType>(Seed->getType());
-  if (RNG() & 1)
+  switch (RNG() % 3) {
+  case 0:
     return IRB.CreateICmpEQ(
         makeEvenLowBit(IRB, Seed, randomInt(IntTy, RNG), Name),
         ConstantInt::get(IntTy, 0), Name);
+  case 1:
+    return IRB.CreateICmpEQ(makeNeighborProductLowBit(IRB, Seed, Name),
+                            ConstantInt::get(IntTy, 0), Name);
+  default:
+    break;
+  }
 
   auto *Mask = randomNonZeroInt(IntTy, RNG);
   return IRB.CreateICmpEQ(makePartition(IRB, Seed, Mask, Name), Mask, Name);
@@ -227,10 +282,17 @@ Value *taokari::makeTruePredicate(IRBuilder<> &IRB, Value *Seed,
 Value *taokari::makeFalsePredicate(IRBuilder<> &IRB, Value *Seed,
                                    std::mt19937_64 &RNG, const Twine &Name) {
   auto *IntTy = cast<IntegerType>(Seed->getType());
-  if (RNG() & 1)
+  switch (RNG() % 3) {
+  case 0:
     return IRB.CreateICmpNE(
         makeEvenLowBit(IRB, Seed, randomInt(IntTy, RNG), Name),
         ConstantInt::get(IntTy, 0), Name);
+  case 1:
+    return IRB.CreateICmpNE(makeNeighborProductLowBit(IRB, Seed, Name),
+                            ConstantInt::get(IntTy, 0), Name);
+  default:
+    break;
+  }
 
   auto *Mask = randomNonZeroInt(IntTy, RNG);
   return IRB.CreateICmpNE(makePartition(IRB, Seed, Mask, Name), Mask, Name);
@@ -254,9 +316,50 @@ Value *taokari::makeUnfoldableTruePredicate(IRBuilder<> &IRB, Value *Seed,
 Value *taokari::makeUnfoldableFalsePredicate(IRBuilder<> &IRB, Value *Seed,
                                              std::mt19937_64 &RNG,
                                              const Twine &Name) {
+  // x*(x+1) is always even, so the low bit is always 0; comparing it equal to
+  // 1 is therefore always false (the complement of makeUnfoldableTruePredicate,
+  // which compares it equal to 0). Same non-foldable identity.
   auto *IntTy = cast<IntegerType>(Seed->getType());
   Value *Inc = IRB.CreateAdd(Seed, ConstantInt::get(IntTy, 1), Name + ".inc");
   Value *Prod = IRB.CreateMul(Seed, Inc, Name + ".prod");
   Value *Low = IRB.CreateAnd(Prod, ConstantInt::get(IntTy, 1), Name + ".low");
-  return IRB.CreateICmpNE(Low, ConstantInt::get(IntTy, 1), Name);
+  return IRB.CreateICmpEQ(Low, ConstantInt::get(IntTy, 1), Name);
+}
+
+namespace {
+// Build the always-even neighbour product x*(x+1) and return its low bit,
+// which is always 0. Shared core for the nested predicates.
+Value *neighbourProductLow(IRBuilder<> &IRB, Value *X, const Twine &Name) {
+  auto *IntTy = cast<IntegerType>(X->getType());
+  Value *Inc = IRB.CreateAdd(X, ConstantInt::get(IntTy, 1), Name + ".inc");
+  Value *Prod = IRB.CreateMul(X, Inc, Name + ".prod");
+  return IRB.CreateAnd(Prod, ConstantInt::get(IntTy, 1), Name + ".low");
+}
+} // namespace
+
+Value *taokari::makeNestedTruePredicate(IRBuilder<> &IRB, Value *Seed,
+                                        std::mt19937_64 &RNG,
+                                        const Twine &Name) {
+  // Two-level chain: inner low bit (always 0) is folded back into the seed,
+  // then the neighbour-product identity is applied again. At runtime the inner
+  // low bit is 0 so Derived == Seed, and the outer low bit is again 0; the
+  // equality to 0 is true. No single simplification step resolves it because
+  // the inner identity must be proved before the add can be evaluated.
+  Value *InnerLow = neighbourProductLow(IRB, Seed, Name + ".i");
+  Value *Derived = IRB.CreateAdd(Seed, InnerLow, Name + ".drv");
+  Value *OuterLow = neighbourProductLow(IRB, Derived, Name + ".o");
+  auto *IntTy = cast<IntegerType>(Seed->getType());
+  return IRB.CreateICmpEQ(OuterLow, ConstantInt::get(IntTy, 0), Name);
+}
+
+Value *taokari::makeNestedFalsePredicate(IRBuilder<> &IRB, Value *Seed,
+                                         std::mt19937_64 &RNG,
+                                         const Twine &Name) {
+  // Complement of the nested true predicate: same chain, compared equal to 1.
+  // The outer low bit is always 0, so the comparison is always false.
+  Value *InnerLow = neighbourProductLow(IRB, Seed, Name + ".i");
+  Value *Derived = IRB.CreateAdd(Seed, InnerLow, Name + ".drv");
+  Value *OuterLow = neighbourProductLow(IRB, Derived, Name + ".o");
+  auto *IntTy = cast<IntegerType>(Seed->getType());
+  return IRB.CreateICmpEQ(OuterLow, ConstantInt::get(IntTy, 1), Name);
 }

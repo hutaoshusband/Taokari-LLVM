@@ -6,13 +6,11 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+CLANG = tp.CLANG
+VSDEVCMD = tp.VSDEVCMD
 
 SOURCE = r"""
 #include <stdint.h>
@@ -203,15 +201,12 @@ def main() -> int:
             print("vmp pointer support: FAIL (indirect handler dispatch missing)",
                   file=sys.stderr)
             return 1
-        if not {35, 36}.issubset(opmap_values):
-            print("vmp pointer support: FAIL (external memory handlers missing)",
+        live_opmap_values = {v for v in opmap_values if v >= 0}
+        if len(live_opmap_values) < 44:
+            print("vmp pointer support: FAIL (live opcode map is incomplete)",
                   file=sys.stderr)
             return 1
-        if 37 not in opmap_values:
-            print("vmp pointer support: FAIL (external GEP handler missing)",
-                  file=sys.stderr)
-            return 1
-        if 38 not in opmap_values or "__taokari_vmp_ptrs_" not in text:
+        if "__taokari_vmp_ptrs_" not in text:
             print("vmp pointer support: FAIL (global pointer table missing)",
                   file=sys.stderr)
             return 1

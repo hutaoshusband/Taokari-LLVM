@@ -6,9 +6,15 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import _taokari_portable as tp
 
 from verify_vmp_coverage import CLANG, run
 
+ROOT = Path(__file__).resolve().parents[2]
+INDIRECT_CALL_SOURCE = (
+    ROOT / "upstream" / "taokari" / "llvm" / "lib" / "Transforms" /
+    "Obfuscation" / "IndirectCall.cpp"
+)
 
 SOURCE = r"""
 __attribute__((noinline)) static int callee_a(int x) { return x * 3 + 1; }
@@ -59,10 +65,14 @@ def check_l3_ir(text: str) -> int:
     ]
     if sum(1 for formula in formulas if formula in text) < 4:
         return fail("not enough call reconstruction formula variants")
-    if not re.search(r"call(?:\s+\w+)*\s+i32\s+@callee_a", text):
-        return fail("real callout edge missing inside shard")
-    if not re.search(r"call(?:\s+\w+)*\s+i32\s+@__taokari_icall_fake_", text):
-        return fail("fake call edge missing inside shard")
+    if not re.search(r"__taokari_icall_shard_ptr_callee_a", text):
+        return fail("encrypted real callee pointer missing inside shard")
+    if not re.search(r"__taokari_icall_shard_fptr_callee_a", text):
+        return fail("encrypted fake callee pointer missing inside shard")
+    if not re.search(r"inttoptr\s+i64.*to\s+ptr", text):
+        return fail("indirect-call target reconstruction missing inside shard")
+    if re.search(r"call(?:\s+\w+)*\s+i32\s+@callee_a\(", text):
+        return fail("shard still exposes a direct call to the real callee")
     if len(set(re.findall(r"@[^ ]+_IndirectCallee_enhanced_page_table_\d+", text))) < 3:
         return fail("not enough decryptor/page-table variants")
     return 0
@@ -72,6 +82,26 @@ def main() -> int:
     if not CLANG.exists():
         print(f"missing clang: {CLANG}", file=sys.stderr)
         return 2
+    source_text = INDIRECT_CALL_SOURCE.read_text(encoding="utf-8",
+                                                 errors="ignore")
+    fixed_literals = [
+        "0xC3A5C85C97CB3127",
+        "0x9E3779B97F4A7C15",
+        "0xD1B54A32D192ED03",
+        "0xA0761D6478BD642F",
+    ]
+    present = [literal for literal in fixed_literals
+               if literal in source_text]
+    if present:
+        return fail("fixed PAC/key literals remain: " + ", ".join(present))
+    if ("ModulePacSalt = nextNonZeroKey()" not in source_text or
+            "CalleeKeys[TableCallee] = nextNonZeroKey()" not in source_text or
+            "uint64_t Seed = nextNonZeroKey()" not in source_text):
+        return fail("indirect-call PAC keys are not drawn as nonzero RNG keys")
+    if ("switch (RNG() % 3)" not in source_text or
+            "shard.pred.xor" not in source_text or
+            "shard.pred.add" not in source_text):
+        return fail("indirect-call shard guard shape variety missing")
 
     with tempfile.TemporaryDirectory(prefix="taokari-icall-l3-") as tmp_name:
         tmp = Path(tmp_name)

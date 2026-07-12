@@ -1,6 +1,8 @@
 #include "llvm/Transforms/Obfuscation/CodeVirtualization.h"
+#include "llvm/Transforms/Obfuscation/DynamicProtection.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -39,28 +41,54 @@ using namespace llvm;
 namespace {
 
 static cl::opt<uint32_t> VMPMaxBytecodeWords(
-    "taokari-vmp-max-bytecode-words", cl::init(4096), cl::NotHidden,
+    "taokari-vmp-max-bytecode-words", cl::init(2048), cl::NotHidden,
     cl::desc("Maximum bytecode words per VMP function before virtualization "
-             "is refused; 0 disables the limit."));
+             "is refused; 0 disables the limit. SAFETY BUDGET: caps how "
+             "large a single VM'd function can grow. Lower = faster compile "
+             "and smaller binary; too low refuses big functions. Default "
+             "2048 is the sane starting point; raise to 4096 or 8192 only "
+             "for a single hand-picked +vmp function that needs the room "
+             "(see Tier D in docs/TIERS.md)."));
 
 static cl::opt<uint32_t> VMPPaddingPercent(
     "taokari-vmp-padding", cl::init(0), cl::NotHidden,
     cl::desc("Percent of VMP instructions followed by a semantic no-op "
-             "padding opcode, 0..100."));
+             "padding opcode, 0..100. ANTI-FREQUENCY-ANALYSIS: flattens the "
+             "handler-hit histogram a tracer records. 0 = off (fastest); "
+             "5 = light noise (Max Protection default); 15 = heavy fortress "
+             "noise (very expensive)."));
 
 static cl::opt<uint32_t> VMPMaxBackEdges(
-    "taokari-vmp-max-back-edges", cl::init(UINT32_MAX), cl::NotHidden,
+    "taokari-vmp-max-back-edges", cl::init(64), cl::NotHidden,
     cl::desc("Maximum CFG back edges allowed before VMP refuses a function; "
-             "UINT32_MAX disables the limit."));
+             "UINT32_MAX disables the limit. HOT-LOOP GUARD: virtualizing a "
+             "tight loop makes it run under an interpreter and is "
+             "catastrophic for runtime. Default 64 refuses hot-loop "
+             "functions automatically; pass a larger value to override on a "
+             "single +vmp function only. A function refused here is recorded "
+             "as 'skipped' in the -taokari-vmp-compat-report."));
 
 static cl::opt<uint32_t> VMPMaxBytecodeExpansion(
-    "taokari-vmp-max-bytecode-expansion", cl::init(0), cl::NotHidden,
+    "taokari-vmp-max-bytecode-expansion", cl::init(32), cl::NotHidden,
     cl::desc("Maximum bytecode words per original IR instruction before VMP "
-             "refuses a function; 0 disables the limit."));
+             "refuses a function; 0 disables the limit. BLOW-UP BUDGET: "
+             "caps how much the VM bytecode can exceed native IR size. "
+             "Default 32 refuses pathological functions automatically under "
+             "-taokari-max; pass 0 to disable for a single explicitly "
+             "tuned +vmp function. A function refused here is recorded as "
+             "'skipped' in the -taokari-vmp-compat-report."));
 
 static cl::opt<std::string> VMPCompatReportPath(
     "taokari-vmp-compat-report", cl::init(""), cl::NotHidden,
-    cl::desc("Write a TSV VMP compatibility report to this path."));
+    cl::desc("Write a TSV VMP compatibility report to this path. "
+             "DIAGNOSTICS: one row per +vmp function with status "
+             "(virtualized / partially virtualized / skipped), reason, "
+             "bytecode word count, and split-region count. Use this to "
+             "verify your +vmp functions actually virtualize."));
+
+static cl::opt<bool> VMPTestIsolatedState(
+    "taokari-vmp-test-isolated-state", cl::init(false), cl::NotHidden,
+    cl::desc("Use per-function VM state for isolated VMP tests."));
 
 struct VMPCompatEntry {
   std::string FunctionName;
@@ -205,8 +233,10 @@ struct Fixup {
 struct BytecodeProgram {
   SmallVector<int64_t, 64> Words;
   SmallVector<Fixup, 8> Fixups;
+  SmallVector<size_t, 8> BlockStarts;
   SmallVector<Constant *, 8> PointerConsts;
   DenseMap<const Value *, unsigned> PointerConstIndex;
+  uint64_t CrossTagSeed = 0;
 };
 
 // Handler descriptor. The interpreter builder iterates the table
@@ -238,8 +268,45 @@ struct CodeVirtualization : public ModulePass {
   DenseMap<Function *, unsigned> CalleeIndex;
   SmallVector<Function *, 8> CalleeOrder;
   GlobalVariable *CalleeTable = nullptr;
+  GlobalVariable *VMState = nullptr;
   uint64_t CalleeTableKey = 0;
   unsigned IndirectCallStubCounter = 0;
+  struct ScheduleConstants {
+    uint64_t Step = 0;
+    uint64_t Mix1 = 0;
+    uint64_t Mix2 = 0;
+    uint64_t OpcodeDomain = 0;
+    uint64_t OperandDomain = 0;
+    uint64_t RotationDomain = 0;
+    uint64_t CalleeDomain = 0;
+    uint64_t RouteDomain = 0;
+    uint64_t HashOffset = 0;
+    uint64_t HashPrime = 0;
+    uint64_t KeyMul = 0;
+  } Schedule;
+
+  enum class InterpParam {
+    BC,
+    BCTail,
+    BCSplit,
+    BCLen,
+    PCMap,
+    PtrTable,
+    PtrCount,
+    Args,
+    ArgLen,
+    Tamper,
+    Tag,
+    OpcodeMap,
+    VMState,
+    Key,
+    Dummy
+  };
+
+  struct InterpreterInstance {
+    Function *Fn;
+    SmallVector<InterpParam, 16> Params;
+  };
 
   CodeVirtualization(ObfuscationOptions *ArgsOptions) : ModulePass(ID) {
     this->ArgsOptions = ArgsOptions;
@@ -251,6 +318,34 @@ struct CodeVirtualization : public ModulePass {
 
   StringRef getPassName() const override {
     return "Taokari Code Virtualization";
+  }
+
+  uint64_t nextNonZeroKey() {
+    uint64_t Key = 0;
+    while (!Key)
+      Key = RNG();
+    return Key;
+  }
+
+  uint64_t nextOddKey() {
+    uint64_t Key = 1;
+    while (Key == 1)
+      Key = nextNonZeroKey() | 1ULL;
+    return Key;
+  }
+
+  void initScheduleConstants() {
+    Schedule.Step = nextOddKey();
+    Schedule.Mix1 = nextOddKey();
+    Schedule.Mix2 = nextOddKey();
+    Schedule.OpcodeDomain = nextNonZeroKey();
+    Schedule.OperandDomain = nextNonZeroKey();
+    Schedule.RotationDomain = nextOddKey();
+    Schedule.CalleeDomain = nextNonZeroKey();
+    Schedule.RouteDomain = nextNonZeroKey();
+    Schedule.HashOffset = nextNonZeroKey();
+    Schedule.HashPrime = nextOddKey();
+    Schedule.KeyMul = nextOddKey();
   }
 
   bool isSupportedInt(Type *Ty) const {
@@ -826,6 +921,7 @@ struct CodeVirtualization : public ModulePass {
 
     for (BasicBlock &BB : F) {
       BlockStart[&BB] = P.Words.size();
+      P.BlockStarts.push_back(P.Words.size());
       // pre-register PHI slots so any use of a PHI (including by
       // another PHI in the same block, or by an instruction before the PHI
       // list ends -- they're all at block top) resolves to the right slot.
@@ -1484,6 +1580,45 @@ struct CodeVirtualization : public ModulePass {
     return true;
   }
 
+  bool buildOpcodeRuntimeTokens(SmallVectorImpl<int64_t> &Tokens) {
+    Tokens.assign(kOpcodeTableSize, -1);
+    SmallVector<unsigned, kOpcodeTableSize> Ops;
+    for (unsigned Op = 1; Op < kOpcodeTableSize; ++Op) {
+      unsigned Immediates = 0;
+      if (!opcodeImmediateCount(static_cast<int64_t>(Op), Immediates) &&
+          Op != OpFakeArith && Op != OpFakeMem && Op != OpFakeCall)
+        continue;
+      Ops.push_back(Op);
+    }
+    SmallVector<int64_t, kOpcodeTableSize> Pool;
+    for (unsigned I = OpMemMove + 1; I < kOpcodeTableSize; ++I)
+      Pool.push_back(I);
+    unsigned HighEnd = Pool.size();
+    for (unsigned I = 1; I <= OpMemMove; ++I)
+      Pool.push_back(I);
+    std::shuffle(Ops.begin(), Ops.end(), RNG);
+    std::shuffle(Pool.begin(), Pool.begin() + HighEnd, RNG);
+    std::shuffle(Pool.begin() + HighEnd, Pool.end(), RNG);
+    if (Ops.size() > Pool.size())
+      return false;
+    for (unsigned I = 0; I < Ops.size(); ++I)
+      Tokens[Ops[I]] = Pool[I];
+    return true;
+  }
+
+  void addOpcodeMapDecoys(SmallVectorImpl<int64_t> &Decode) {
+    SmallVector<unsigned, kOpcodeTableSize> Empty;
+    for (unsigned I = 0; I < Decode.size(); ++I)
+      if (Decode[I] < 0)
+        Empty.push_back(I);
+    std::shuffle(Empty.begin(), Empty.end(), RNG);
+
+    static constexpr Opcode Pads[] = {OpPad, OpPad2, OpPad3};
+    unsigned Count = std::min<unsigned>(Empty.size(), 1 + (RNG() % 8));
+    for (unsigned I = 0; I < Count; ++I)
+      Decode[Empty[I]] = Pads[RNG() % 3];
+  }
+
   bool mapOpcodeWords(SmallVectorImpl<int64_t> &Words,
                       ArrayRef<int64_t> OpcodeEncode) const {
     size_t I = 0;
@@ -1502,6 +1637,7 @@ struct CodeVirtualization : public ModulePass {
   }
 
   bool computePCMapFlags(const SmallVectorImpl<int64_t> &Words,
+                         ArrayRef<size_t> BlockStarts,
                          SmallVectorImpl<uint8_t> &Flags,
                          uint8_t RotationStep) const {
     SmallVector<uint8_t, 64> Starts(Words.size(), 0);
@@ -1520,6 +1656,10 @@ struct CodeVirtualization : public ModulePass {
     }
     if (I != Words.size())
       return false;
+
+    for (size_t Start : BlockStarts)
+      if (Start < Words.size() && Starts[Start])
+        Leaders[Start] = 1;
 
     I = 0;
     while (I < Words.size()) {
@@ -1598,6 +1738,17 @@ struct CodeVirtualization : public ModulePass {
     if (I != Old.size())
       return false;
 
+    SmallVector<size_t, 8> PaddedBlockStarts;
+    for (size_t Start : P.BlockStarts) {
+      auto It = Remap.find(Start);
+      if (It != Remap.end())
+        PaddedBlockStarts.push_back(It->second);
+    }
+    std::sort(PaddedBlockStarts.begin(), PaddedBlockStarts.end());
+    PaddedBlockStarts.erase(
+        std::unique(PaddedBlockStarts.begin(), PaddedBlockStarts.end()),
+        PaddedBlockStarts.end());
+
     I = 0;
     while (I < Padded.size()) {
       unsigned Immediates = 0;
@@ -1614,6 +1765,7 @@ struct CodeVirtualization : public ModulePass {
     }
 
     P.Words = std::move(Padded);
+    P.BlockStarts = std::move(PaddedBlockStarts);
     return checkStackDepth(P);
   }
 
@@ -1645,12 +1797,32 @@ struct CodeVirtualization : public ModulePass {
     return Count;
   }
 
+  uint64_t integrityHashStep(uint64_t Tag, uint64_t Value,
+                             uint64_t Index) const {
+    uint64_t Mix = Value + Index * Schedule.Step;
+    return (Tag ^ Mix) * Schedule.HashPrime;
+  }
+
+  uint64_t crossFunctionBytecodeSeed(
+      ArrayRef<std::pair<Function *, BytecodeProgram>> Encoded) const {
+    uint64_t Tag = integrityHashStep(Schedule.HashOffset, Encoded.size(), 0);
+    uint64_t Index = 1;
+    for (const auto &Entry : Encoded) {
+      for (char Ch : Entry.first->getName())
+        Tag = integrityHashStep(Tag, static_cast<unsigned char>(Ch), Index++);
+      Tag = integrityHashStep(Tag, Entry.second.Words.size(), Index++);
+      for (int64_t Word : Entry.second.Words)
+        Tag = integrityHashStep(Tag, static_cast<uint64_t>(Word), Index++);
+    }
+    return Tag ? Tag : Schedule.HashPrime;
+  }
+
   uint64_t bytecodeDomain(bool IsOpcodeWord) const {
-    return IsOpcodeWord ? 0xA5A5A5A5D3C3B2A1ULL : 0x3C6EF372FE94F82AULL;
+    return IsOpcodeWord ? Schedule.OpcodeDomain : Schedule.OperandDomain;
   }
 
   uint64_t bytecodeRotationDomain(uint8_t PCFlags) const {
-    return static_cast<uint64_t>(PCFlags >> 1) * 0xD1342543DE82EF95ULL;
+    return static_cast<uint64_t>(PCFlags >> 1) * Schedule.RotationDomain;
   }
 
   int64_t encryptBytecodeWord(int64_t Word, size_t Index,
@@ -1665,11 +1837,11 @@ struct CodeVirtualization : public ModulePass {
 
   uint64_t bytecodeScheduleWord(uint64_t Key, uint64_t Index,
                                 uint64_t Domain) const {
-    uint64_t X = Key ^ (Index * 0x9E3779B97F4A7C15ULL) ^ Domain;
+    uint64_t X = Key ^ (Index * Schedule.Step) ^ Domain;
     X ^= X >> 30;
-    X *= 0xBF58476D1CE4E5B9ULL;
+    X *= Schedule.Mix1;
     X ^= X >> 27;
-    X *= 0x94D049BB133111EBULL;
+    X *= Schedule.Mix2;
     X ^= X >> 31;
     return X;
   }
@@ -1688,11 +1860,11 @@ struct CodeVirtualization : public ModulePass {
   };
 
   KeyDerivation makeKeyDerivation(uint64_t Key) {
-    constexpr uint64_t Mul = 0xD6E8FEB86659FD93ULL;
     for (;;) {
       KeyDerivation D{RNG(), RNG(), RNG(), 0,
                       static_cast<unsigned>((RNG() % 63) + 1)};
-      uint64_t Mixed = rotl64(((D.Seed ^ D.XorIn) * Mul) + D.AddIn, D.Rot);
+      uint64_t Mixed =
+          rotl64(((D.Seed ^ D.XorIn) * Schedule.KeyMul) + D.AddIn, D.Rot);
       D.XorOut = Mixed ^ Key;
       if (D.Seed != Key && D.XorIn != Key && D.AddIn != Key &&
           D.XorOut != Key)
@@ -1702,7 +1874,6 @@ struct CodeVirtualization : public ModulePass {
 
   Value *buildRuntimeBytecodeKey(IRBuilder<> &B, Module &M, Function &F,
                                  Type *I64, uint64_t Key) {
-    constexpr uint64_t Mul = 0xD6E8FEB86659FD93ULL;
     KeyDerivation D = makeKeyDerivation(Key);
     auto *SeedGlobal = new GlobalVariable(
         M, I64, false, GlobalValue::PrivateLinkage,
@@ -1713,7 +1884,7 @@ struct CodeVirtualization : public ModulePass {
     auto *Seed = B.CreateLoad(I64, SeedGlobal, "vmp.key.seed");
     Seed->setVolatile(true);
     Value *Mixed = B.CreateXor(Seed, ConstantInt::get(I64, D.XorIn));
-    Mixed = B.CreateMul(Mixed, ConstantInt::get(I64, Mul));
+    Mixed = B.CreateMul(Mixed, ConstantInt::get(I64, Schedule.KeyMul));
     Mixed = B.CreateAdd(Mixed, ConstantInt::get(I64, D.AddIn));
     Value *RotL = B.CreateShl(Mixed, ConstantInt::get(I64, D.Rot));
     Value *RotR = B.CreateLShr(Mixed, ConstantInt::get(I64, 64 - D.Rot));
@@ -1725,12 +1896,10 @@ struct CodeVirtualization : public ModulePass {
                            const Twine &Name) {
     V = B.CreateXor(V, B.CreateLShr(V, ConstantInt::get(I64, 33)),
                     Name + ".x1");
-    V = B.CreateMul(V, ConstantInt::get(I64, 0xFF51AFD7ED558CCDULL),
-                    Name + ".m1");
+    V = B.CreateMul(V, ConstantInt::get(I64, Schedule.Mix1), Name + ".m1");
     V = B.CreateXor(V, B.CreateLShr(V, ConstantInt::get(I64, 33)),
                     Name + ".x2");
-    V = B.CreateMul(V, ConstantInt::get(I64, 0xC4CEB9FE1A85EC53ULL),
-                    Name + ".m2");
+    V = B.CreateMul(V, ConstantInt::get(I64, Schedule.Mix2), Name + ".m2");
     return B.CreateXor(V, B.CreateLShr(V, ConstantInt::get(I64, 33)),
                        Name + ".x3");
   }
@@ -1751,6 +1920,35 @@ struct CodeVirtualization : public ModulePass {
     FoldPtr(ArgsPtr, "vmp.salt.args");
     FoldPtr(TamperFlag, "vmp.salt.stack");
     return Salt;
+  }
+
+  GlobalVariable *createVMState(Module &M, const Twine &Name) {
+    Type *I64 = Type::getInt64Ty(M.getContext());
+    SmallVector<Constant *, 4> Init;
+    for (unsigned I = 0; I < 4; ++I)
+      Init.push_back(ConstantInt::get(I64, nextNonZeroKey()));
+    auto *ArrayTy = ArrayType::get(I64, Init.size());
+    auto *State =
+        new GlobalVariable(M, ArrayTy, false, GlobalValue::PrivateLinkage,
+                           ConstantArray::get(ArrayTy, Init), Name);
+    State->setAlignment(Align(8));
+    return State;
+  }
+
+  GlobalVariable *getOrCreateVMState(Module &M) {
+    if (VMState)
+      return VMState;
+    VMState = createVMState(M, "__taokari_vmp_xstate");
+    return VMState;
+  }
+
+  GlobalVariable *getVMStateForFunction(Module &M, Function &F) {
+    if (!VMPTestIsolatedState)
+      return getOrCreateVMState(M);
+    std::string Name = ("__taokari_vmp_xstate_" + F.getName()).str();
+    if (auto *Existing = M.getGlobalVariable(Name))
+      return Existing;
+    return createVMState(M, Name);
   }
 
   Value *loadWord(IRBuilder<> &B, Type *I64, Value *BC, Value *PC,
@@ -1785,6 +1983,8 @@ struct CodeVirtualization : public ModulePass {
     Function *F;
     LLVMContext *Ctx;
     Value *BC;
+    Value *BCTail;
+    Value *BCSplit;
     Value *BCLen;
     Value *PCMap;
     Value *PtrTable;
@@ -1792,8 +1992,14 @@ struct CodeVirtualization : public ModulePass {
     Value *PC;
     Value *SP;
     Value *Stack;
+    Value *StackTail;
+    Value *StackSplit;
     Value *Locals;
+    Value *LocalsTail;
+    Value *LocalsSplit;
     Value *Frame;
+    Value *FrameTail;
+    Value *FrameSplit;
     Value *CallArgs;
     GlobalVariable *CalleeTable;
     unsigned CalleeCount;
@@ -1802,16 +2008,96 @@ struct CodeVirtualization : public ModulePass {
     Value *TamperFlag;
     Value *ExpectedTag;
     Value *OpcodeMap;
+    Value *VMState;
     Value *BytecodeKey;
+    Value *PcKey;
+    Value *StackKey;
     BasicBlock *Dispatch;
     BasicBlock *Bad;
     bool LittleEndian;
   };
 
+  void updateVMState(IRBuilder<> &B, InterpCtx &C, uint64_t Slot,
+                     uint64_t Salt) {
+    Value *Ptr =
+        B.CreateGEP(C.I64, C.VMState, ConstantInt::get(C.I64, Slot),
+                    "vmp.xstate.ptr");
+    auto *Old = B.CreateLoad(C.I64, Ptr, "vmp.xstate.old");
+    Old->setVolatile(true);
+    Value *Mixed =
+        mixRuntimeEntropy(B, C.I64, B.CreateXor(Old, C.BytecodeKey),
+                          "vmp.xstate.mix");
+    auto *Store = B.CreateStore(
+        B.CreateXor(Mixed, ConstantInt::get(C.I64, Salt),
+                    "vmp.xstate.next"),
+        Ptr);
+    Store->setVolatile(true);
+  }
+
+  Value *stackSlot(IRBuilder<> &B, InterpCtx &C, Value *Idx) {
+    Value *UseHead = B.CreateICmpULT(Idx, C.StackSplit);
+    Value *TailIdx = B.CreateSub(Idx, C.StackSplit);
+    Value *HeadPtr = B.CreateGEP(C.I64, C.Stack, Idx, "stk.a.ptr");
+    Value *TailPtr = B.CreateGEP(C.I64, C.StackTail, TailIdx, "stk.b.ptr");
+    return B.CreateSelect(UseHead, HeadPtr, TailPtr, "stk.ptr");
+  }
+
+  Value *localSlot(IRBuilder<> &B, InterpCtx &C, Value *Idx) {
+    Value *UseHead = B.CreateICmpULT(Idx, C.LocalsSplit);
+    Value *TailIdx = B.CreateSub(Idx, C.LocalsSplit);
+    Value *HeadPtr = B.CreateGEP(C.I64, C.Locals, Idx, "loc.a.ptr");
+    Value *TailPtr = B.CreateGEP(C.I64, C.LocalsTail, TailIdx, "loc.b.ptr");
+    return B.CreateSelect(UseHead, HeadPtr, TailPtr, "loc.ptr");
+  }
+
+  Value *frameSlot(IRBuilder<> &B, InterpCtx &C, Value *Idx) {
+    Value *UseHead = B.CreateICmpULT(Idx, C.FrameSplit);
+    Value *TailIdx = B.CreateSub(Idx, C.FrameSplit);
+    Value *HeadPtr = B.CreateGEP(C.I64, C.Frame, Idx, "frm.a.ptr");
+    Value *TailPtr = B.CreateGEP(C.I64, C.FrameTail, TailIdx, "frm.b.ptr");
+    return B.CreateSelect(UseHead, HeadPtr, TailPtr, "frm.ptr");
+  }
+
   void branchIfFalse(IRBuilder<> &B, InterpCtx &C, Value *Ok) {
     BasicBlock *Cont = BasicBlock::Create(*C.Ctx, "guard.ok", C.F);
     B.CreateCondBr(Ok, Cont, C.Bad);
     B.SetInsertPoint(Cont);
+  }
+
+  // Encrypted push/pop for the VM operand stack. Values are XOR'd with
+  // StackKey before they land in the stack alloca and de-XOR'd on pop.
+  void pushEnc(IRBuilder<> &B, InterpCtx &C, Value *V) {
+    Value *Idx = B.CreateLoad(C.I64, C.SP);
+    Value *Slot = stackSlot(B, C, Idx);
+    Value *Key = B.CreateAlignedLoad(C.I64, C.StackKey, Align(8),
+                                     "stk.key.ld");
+    Value *Enc = B.CreateXor(V, Key, "stk.enc");
+    B.CreateStore(Enc, Slot);
+    B.CreateStore(B.CreateAdd(Idx, ConstantInt::get(C.I64, 1)), C.SP);
+  }
+
+  Value *popEnc(IRBuilder<> &B, InterpCtx &C) {
+    Value *Idx = B.CreateSub(B.CreateLoad(C.I64, C.SP),
+                             ConstantInt::get(C.I64, 1));
+    B.CreateStore(Idx, C.SP);
+    Value *Enc = B.CreateLoad(C.I64, stackSlot(B, C, Idx), "stk.enc.ld");
+    Value *Key = B.CreateAlignedLoad(C.I64, C.StackKey, Align(8),
+                                     "stk.key.ld");
+    return B.CreateXor(Enc, Key, "stk.plain");
+  }
+
+  // The PC alloca holds PC XOR PcKey; these helpers are the only legal
+  // way to touch it. fetchWord, dispatch and init all go through them.
+  Value *pcLoad(IRBuilder<> &B, InterpCtx &C) {
+    Value *Enc = B.CreateLoad(C.I64, C.PC, "pc.enc");
+    Value *Key = B.CreateAlignedLoad(C.I64, C.PcKey, Align(8), "pc.key.ld");
+    return B.CreateXor(Enc, Key, "pc.plain");
+  }
+
+  void pcStore(IRBuilder<> &B, InterpCtx &C, Value *Plain) {
+    Value *Key = B.CreateAlignedLoad(C.I64, C.PcKey, Align(8), "pc.key.ld");
+    Value *Enc = B.CreateXor(Plain, Key, "pc.enc.new");
+    B.CreateStore(Enc, C.PC);
   }
 
   Value *checkedWidth(IRBuilder<> &B, InterpCtx &C, Value *PackedTyImm) {
@@ -1832,21 +2118,22 @@ struct CodeVirtualization : public ModulePass {
         B.CreateAnd(PCFlags, ConstantInt::get(I8, 1)),
         ConstantInt::get(I8, 0));
     Value *Domain = B.CreateSelect(
-        IsOpcodeWord, ConstantInt::get(I64, 0xA5A5A5A5D3C3B2A1ULL),
-        ConstantInt::get(I64, 0x3C6EF372FE94F82AULL));
+        IsOpcodeWord, ConstantInt::get(I64, Schedule.OpcodeDomain),
+        ConstantInt::get(I64, Schedule.OperandDomain));
     Value *Rotation = B.CreateZExt(
         B.CreateLShr(PCFlags, ConstantInt::get(I8, 1)), I64);
     Domain = B.CreateXor(
         Domain,
-        B.CreateMul(Rotation, ConstantInt::get(I64, 0xD1342543DE82EF95ULL)));
+        B.CreateMul(Rotation,
+                    ConstantInt::get(I64, Schedule.RotationDomain)));
     Value *X = B.CreateXor(
         BytecodeKey,
-        B.CreateMul(Index, ConstantInt::get(I64, 0x9E3779B97F4A7C15ULL)));
+        B.CreateMul(Index, ConstantInt::get(I64, Schedule.Step)));
     X = B.CreateXor(X, Domain);
     X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(I64, 30)));
-    X = B.CreateMul(X, ConstantInt::get(I64, 0xBF58476D1CE4E5B9ULL));
+    X = B.CreateMul(X, ConstantInt::get(I64, Schedule.Mix1));
     X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(I64, 27)));
-    X = B.CreateMul(X, ConstantInt::get(I64, 0x94D049BB133111EBULL));
+    X = B.CreateMul(X, ConstantInt::get(I64, Schedule.Mix2));
     return B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(I64, 31)));
   }
 
@@ -1854,41 +2141,49 @@ struct CodeVirtualization : public ModulePass {
     return bytecodeScheduleWord(B, C.I64, C.PCMap, C.BytecodeKey, Index);
   }
 
+  Value *loadBytecodeWord(IRBuilder<> &B, InterpCtx &C, Value *Index) {
+    Value *UseHead = B.CreateICmpULT(Index, C.BCSplit);
+    Value *TailIndex = B.CreateSub(Index, C.BCSplit);
+    Value *HeadPtr = B.CreateGEP(C.I64, C.BC, Index, "bc.a.ptr");
+    Value *TailPtr = B.CreateGEP(C.I64, C.BCTail, TailIndex, "bc.b.ptr");
+    Value *Ptr = B.CreateSelect(UseHead, HeadPtr, TailPtr, "bc.ptr");
+    return B.CreateLoad(C.I64, Ptr, "bc.word");
+  }
+
   uint64_t calleeTableMaskWord(uint64_t Index) const {
-    return bytecodeScheduleWord(CalleeTableKey, Index,
-                                0x6A09E667F3BCC909ULL);
+    return bytecodeScheduleWord(CalleeTableKey, Index, Schedule.CalleeDomain);
   }
 
   Value *calleeTableMaskWord(IRBuilder<> &B, InterpCtx &C, Value *Index) {
     Value *X = B.CreateXor(
         ConstantInt::get(C.I64, CalleeTableKey),
-        B.CreateMul(Index, ConstantInt::get(C.I64, 0x9E3779B97F4A7C15ULL)));
-    X = B.CreateXor(X, ConstantInt::get(C.I64, 0x6A09E667F3BCC909ULL));
+        B.CreateMul(Index, ConstantInt::get(C.I64, Schedule.Step)));
+    X = B.CreateXor(X, ConstantInt::get(C.I64, Schedule.CalleeDomain));
     X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 30)));
-    X = B.CreateMul(X, ConstantInt::get(C.I64, 0xBF58476D1CE4E5B9ULL));
+    X = B.CreateMul(X, ConstantInt::get(C.I64, Schedule.Mix1));
     X = B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 27)));
-    X = B.CreateMul(X, ConstantInt::get(C.I64, 0x94D049BB133111EBULL));
+    X = B.CreateMul(X, ConstantInt::get(C.I64, Schedule.Mix2));
     return B.CreateXor(X, B.CreateLShr(X, ConstantInt::get(C.I64, 31)));
   }
 
   Value *fetchWord(IRBuilder<> &B, InterpCtx &C) {
-    Value *Cur = B.CreateLoad(C.I64, C.PC);
+    Value *Cur = pcLoad(B, C);
     branchIfFalse(B, C, B.CreateICmpULT(Cur, C.BCLen));
-    Value *Enc = B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.BC, Cur));
-    B.CreateStore(B.CreateAdd(Cur, ConstantInt::get(C.I64, 1)), C.PC);
+    Value *Enc = loadBytecodeWord(B, C, Cur);
+    pcStore(B, C, B.CreateAdd(Cur, ConstantInt::get(C.I64, 1)));
     return B.CreateXor(Enc, bytecodeScheduleWord(B, C, Cur));
   }
 
   void pushStk(IRBuilder<> &B, InterpCtx &C, Value *V) {
     Value *Idx = B.CreateLoad(C.I64, C.SP);
     branchIfFalse(B, C, B.CreateICmpULT(Idx, ConstantInt::get(C.I64, 64)));
-    push(B, C.I64, C.Stack, C.SP, V);
+    pushEnc(B, C, V);
   }
 
   Value *popStk(IRBuilder<> &B, InterpCtx &C) {
     Value *Idx = B.CreateLoad(C.I64, C.SP);
     branchIfFalse(B, C, B.CreateICmpUGT(Idx, ConstantInt::get(C.I64, 0)));
-    return pop(B, C.I64, C.Stack, C.SP);
+    return popEnc(B, C);
   }
 
   // Narrow a full i64 value to its native width, returned as the
@@ -2028,7 +2323,7 @@ struct CodeVirtualization : public ModulePass {
                    branchIfFalse(B, C, B.CreateICmpULT(ArgNo, C.ArgLen));
                    Value *ArgVal =
                        B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.Args, ArgNo));
-                   B.CreateStore(ArgVal, B.CreateGEP(C.I64, C.Locals, Slot));
+                   B.CreateStore(ArgVal, localSlot(B, C, Slot));
                    B.CreateBr(C.Dispatch);
                  }});
     H.push_back({OpPushConst, "pushconst", shapeOf(OpPushConst),
@@ -2045,7 +2340,8 @@ struct CodeVirtualization : public ModulePass {
                    branchIfFalse(B, C,
                                  B.CreateICmpULT(Slot,
                                                  ConstantInt::get(C.I64, 64)));
-                   Value *V = B.CreateLoad(C.I64, B.CreateGEP(C.I64, C.Locals, Slot));
+                   Value *V =
+                       B.CreateLoad(C.I64, localSlot(B, C, Slot));
                    pushStk(B, C, narrowTo(B, C, V, Ty));
                    B.CreateBr(C.Dispatch);
                  }});
@@ -2056,7 +2352,7 @@ struct CodeVirtualization : public ModulePass {
                    branchIfFalse(B, C,
                                  B.CreateICmpULT(Slot,
                                                  ConstantInt::get(C.I64, 64)));
-                   B.CreateStore(V, B.CreateGEP(C.I64, C.Locals, Slot));
+                   B.CreateStore(V, localSlot(B, C, Slot));
                    B.CreateBr(C.Dispatch);
                  }});
 
@@ -2073,8 +2369,8 @@ struct CodeVirtualization : public ModulePass {
                    branchIfFalse(B, C,
                                  B.CreateICmpULT(FrameIdx,
                                                  ConstantInt::get(C.I64, 64)));
-                   Value *V = B.CreateLoad(C.I64,
-                                           B.CreateGEP(C.I64, C.Frame, FrameIdx));
+                   Value *V =
+                       B.CreateLoad(C.I64, frameSlot(B, C, FrameIdx));
                    pushStk(B, C, narrowTo(B, C, V, Ty));
                    B.CreateBr(C.Dispatch);
                  }});
@@ -2087,8 +2383,7 @@ struct CodeVirtualization : public ModulePass {
                                  B.CreateICmpULT(FrameIdx,
                                                  ConstantInt::get(C.I64, 64)));
                    Value *Narrowed = narrowTo(B, C, V, Ty);
-                   B.CreateStore(Narrowed,
-                                 B.CreateGEP(C.I64, C.Frame, FrameIdx));
+                   B.CreateStore(Narrowed, frameSlot(B, C, FrameIdx));
                    B.CreateBr(C.Dispatch);
                  }});
     H.push_back({OpLoadMem, "loadmem", shapeOf(OpLoadMem),
@@ -2406,7 +2701,7 @@ struct CodeVirtualization : public ModulePass {
                  [this, &C](IRBuilder<> &B) {
                    Value *Target = fetchWord(B, C);
                    branchIfFalse(B, C, B.CreateICmpULT(Target, C.BCLen));
-                   B.CreateStore(Target, C.PC);
+                   pcStore(B, C, Target);
                    B.CreateBr(C.Dispatch);
                  }});
     H.push_back({OpBrTrue, "brtrue", shapeOf(OpBrTrue),
@@ -2420,7 +2715,7 @@ struct CodeVirtualization : public ModulePass {
                        B.CreateICmpNE(Cond, ConstantInt::get(C.I64, 0)),
                        SetTarget, C.Dispatch);
                    B.SetInsertPoint(SetTarget);
-                   B.CreateStore(Target, C.PC);
+                   pcStore(B, C, Target);
                    B.CreateBr(C.Dispatch);
                  }});
     H.push_back({OpRet, "ret", shapeOf(OpRet),
@@ -2441,9 +2736,28 @@ struct CodeVirtualization : public ModulePass {
                      B.CreateBr(C.Bad);
                    }});
     };
-    addFakeHandler(OpFakeArith, "fakearith", 0x9E3779B97F4A7C15ULL);
-    addFakeHandler(OpFakeMem, "fakemem", 0xD1342543DE82EF95ULL);
-    addFakeHandler(OpFakeCall, "fakecall", 0xA0761D6478BD642FULL);
+    bool EmitFakeArith = RNG() & 1;
+    bool EmitFakeMem = RNG() & 1;
+    bool EmitFakeCall = RNG() & 1;
+    if (!EmitFakeArith && !EmitFakeMem && !EmitFakeCall) {
+      switch (RNG() % 3) {
+      case 0:
+        EmitFakeArith = true;
+        break;
+      case 1:
+        EmitFakeMem = true;
+        break;
+      default:
+        EmitFakeCall = true;
+        break;
+      }
+    }
+    if (EmitFakeArith)
+      addFakeHandler(OpFakeArith, "fakearith", Schedule.Step);
+    if (EmitFakeMem)
+      addFakeHandler(OpFakeMem, "fakemem", Schedule.RotationDomain);
+    if (EmitFakeCall)
+      addFakeHandler(OpFakeCall, "fakecall", Schedule.RouteDomain);
 
     H.push_back({OpMemCpy, "memcpy", shapeOf(OpMemCpy),
                  [this, &C](IRBuilder<> &B) {
@@ -2485,21 +2799,75 @@ struct CodeVirtualization : public ModulePass {
     return H;
   }
 
-  Function *createInterpreter(Module &M, Function &Source) {
+  InterpreterInstance createInterpreter(Module &M, Function &Source,
+                                        uint64_t ExpectedOpMapHash,
+                                        uint64_t BytecodeTagSeed,
+                                        ArrayRef<int64_t> OpcodeRuntimeTokens) {
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
     Type *I8 = Type::getInt8Ty(Ctx);
     Type *Ptr = PointerType::getUnqual(Ctx);
-    // signature is i64(i64* bc, i64 bcLen, i8* pcMap, ptr* ptrs,
-    // i64 ptrCount, i64* args, i64 argLen, i64* tamper, i64 tag,
-    // i64* opcodeMap, i64 key). bcLen is the
+    // ParamLayout drives both the interpreter signature and the wrapper call.
+    // Shuffling it keeps semantics intact while changing the visible
+    // interpreter ABI. bcLen is the
     // bytecode word count; the dispatch loop checks PC < bcLen before each
     // fetch so a corrupted PC (relevant once L2 encrypts the bytecode) faults
     // to the Bad block instead of reading out of bounds.
-    auto *FTy =
-        FunctionType::get(
-            I64, {Ptr, I64, Ptr, Ptr, I64, Ptr, I64, Ptr, I64, Ptr, I64},
-            false);
+    SmallVector<InterpParam, 16> ParamLayout = {
+        InterpParam::BC,       InterpParam::BCTail,   InterpParam::BCSplit,
+        InterpParam::BCLen,    InterpParam::PCMap,    InterpParam::PtrTable,
+        InterpParam::PtrCount, InterpParam::Args,     InterpParam::ArgLen,
+        InterpParam::Tamper,   InterpParam::Tag,      InterpParam::OpcodeMap,
+        InterpParam::VMState,  InterpParam::Key};
+    for (unsigned I = ParamLayout.size() - 1; I > 0; --I)
+      std::swap(ParamLayout[I], ParamLayout[RNG() % (I + 1)]);
+    unsigned DummyCount = 1 + static_cast<unsigned>(RNG() % 4);
+    for (unsigned I = 0; I < DummyCount; ++I) {
+      unsigned Pos = static_cast<unsigned>(RNG() % (ParamLayout.size() + 1));
+      ParamLayout.insert(ParamLayout.begin() + Pos, InterpParam::Dummy);
+    }
+    SmallVector<Type *, 16> ParamTypes;
+    for (InterpParam P : ParamLayout) {
+      switch (P) {
+      case InterpParam::BC:
+      case InterpParam::BCTail:
+      case InterpParam::PCMap:
+      case InterpParam::PtrTable:
+      case InterpParam::Args:
+      case InterpParam::Tamper:
+      case InterpParam::OpcodeMap:
+      case InterpParam::VMState:
+        ParamTypes.push_back(Ptr);
+        break;
+      case InterpParam::BCLen:
+      case InterpParam::BCSplit:
+      case InterpParam::PtrCount:
+      case InterpParam::ArgLen:
+      case InterpParam::Tag:
+      case InterpParam::Key:
+      case InterpParam::Dummy:
+        ParamTypes.push_back(I64);
+        break;
+      }
+    }
+    auto *FTy = FunctionType::get(I64, ParamTypes, false);
+    auto DynOpt = ArgsOptions->toObfuscate(ArgsOptions->dynOpt(), &Source);
+    switch (ArgsOptions->vmpAntiTraceMode()) {
+    case 1:
+      DynOpt.setEnable(false);
+      DynOpt.setLevel(0);
+      break;
+    case 2:
+      DynOpt.setEnable(true);
+      DynOpt.setLevel(3);
+      break;
+    case 3:
+      DynOpt.setEnable(true);
+      DynOpt.setLevel(4);
+      break;
+    default:
+      break;
+    }
     std::string InterpName =
         ("__taokari_vmp_interp_i64_" + Source.getName()).str();
     InterpName += "_";
@@ -2508,52 +2876,182 @@ struct CodeVirtualization : public ModulePass {
     F->addFnAttr(Attribute::NoUnwind);
     F->addFnAttr(Attribute::NoInline);
 
-    auto ArgIt = F->arg_begin();
-    Value *BC = &*ArgIt++;
-    BC->setName("bc");
-    Value *BCLen = &*ArgIt++;
-    BCLen->setName("bclen");
-    Value *PCMap = &*ArgIt++;
-    PCMap->setName("pc.map");
-    Value *PtrTable = &*ArgIt++;
-    PtrTable->setName("ptr.table");
-    Value *PtrCount = &*ArgIt++;
-    PtrCount->setName("ptr.count");
-    Value *Args = &*ArgIt++;
-    Args->setName("args");
-    Value *ArgLen = &*ArgIt++;
-    ArgLen->setName("arg.len");
-    Value *TamperFlag = &*ArgIt++;
-    TamperFlag->setName("tamper");
-    Value *ExpectedTag = &*ArgIt++;
-    ExpectedTag->setName("bytecode.tag");
-    Value *OpcodeMap = &*ArgIt++;
-    OpcodeMap->setName("opcode.map");
-    Value *BytecodeKey = &*ArgIt++;
-    BytecodeKey->setName("bytecode.key");
+    Value *BC = nullptr;
+    Value *BCTail = nullptr;
+    Value *BCSplit = nullptr;
+    Value *BCLen = nullptr;
+    Value *PCMap = nullptr;
+    Value *PtrTable = nullptr;
+    Value *PtrCount = nullptr;
+    Value *Args = nullptr;
+    Value *ArgLen = nullptr;
+    Value *TamperFlag = nullptr;
+    Value *ExpectedTag = nullptr;
+    Value *OpcodeMap = nullptr;
+    Value *VMStateArg = nullptr;
+    Value *BytecodeKey = nullptr;
+    for (unsigned I = 0; I < ParamLayout.size(); ++I) {
+      Argument *Arg = F->getArg(I);
+      switch (ParamLayout[I]) {
+      case InterpParam::BC:
+        BC = Arg;
+        BC->setName("bc.a");
+        break;
+      case InterpParam::BCTail:
+        BCTail = Arg;
+        BCTail->setName("bc.b");
+        break;
+      case InterpParam::BCSplit:
+        BCSplit = Arg;
+        BCSplit->setName("bc.split");
+        break;
+      case InterpParam::BCLen:
+        BCLen = Arg;
+        BCLen->setName("bclen");
+        break;
+      case InterpParam::PCMap:
+        PCMap = Arg;
+        PCMap->setName("pc.map");
+        break;
+      case InterpParam::PtrTable:
+        PtrTable = Arg;
+        PtrTable->setName("ptr.table");
+        break;
+      case InterpParam::PtrCount:
+        PtrCount = Arg;
+        PtrCount->setName("ptr.count");
+        break;
+      case InterpParam::Args:
+        Args = Arg;
+        Args->setName("args");
+        break;
+      case InterpParam::ArgLen:
+        ArgLen = Arg;
+        ArgLen->setName("arg.len");
+        break;
+      case InterpParam::Tamper:
+        TamperFlag = Arg;
+        TamperFlag->setName("tamper");
+        break;
+      case InterpParam::Tag:
+        ExpectedTag = Arg;
+        ExpectedTag->setName("bytecode.tag");
+        break;
+      case InterpParam::OpcodeMap:
+        OpcodeMap = Arg;
+        OpcodeMap->setName("opcode.map");
+        break;
+      case InterpParam::VMState:
+        VMStateArg = Arg;
+        VMStateArg->setName("vmp.xstate");
+        break;
+      case InterpParam::Key:
+        BytecodeKey = Arg;
+        BytecodeKey->setName("bytecode.key");
+        break;
+      case InterpParam::Dummy:
+        Arg->setName("vmp.dummy");
+        break;
+      }
+    }
 
     BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", F);
     BasicBlock *Dispatch = BasicBlock::Create(Ctx, "dispatch", F);
     BasicBlock *Bad = BasicBlock::Create(Ctx, "bad", F);
     IRBuilder<> B(Entry);
-    auto *Stack = B.CreateAlloca(I64, ConstantInt::get(I64, 64), "stack");
-    auto *Locals = B.CreateAlloca(I64, ConstantInt::get(I64, 64), "locals");
-    // VM-local frame (L1.5.1 middle way). AllocaInst reserves runs
-    // of consecutive slots here; LoadPtr/StorePtr index into it via the
-    // frame-pointer values pushed by emitValue.
-    auto *Frame = B.CreateAlloca(I64, ConstantInt::get(I64, 64), "frame");
-    // OpCall argument marshaling buffer (L1.5.1). Up to 8 integer
-    // args per call (isVMCompatibleCall gates on arg_size() <= 8).
-    auto *CallArgs = B.CreateAlloca(I64, ConstantInt::get(I64, 8), "callargs");
+    auto RandomSlots = [&](uint64_t Base, uint64_t Spread) {
+      return ConstantInt::get(I64, Base + (RNG() % (Spread + 1)));
+    };
+    uint64_t StackTotal = 64 + (RNG() % 65);
+    uint64_t StackSplit = 16 + (RNG() % 33);
+    if (StackSplit >= StackTotal)
+      StackSplit = StackTotal / 2;
+    auto *StackHeadSlots = ConstantInt::get(I64, StackSplit);
+    auto *StackTailSlots = ConstantInt::get(I64, StackTotal - StackSplit);
+    auto *StackSplitValue = ConstantInt::get(I64, StackSplit);
+    uint64_t LocalsTotal = 64 + (RNG() % 65);
+    uint64_t LocalsSplit = 16 + (RNG() % 33);
+    if (LocalsSplit >= LocalsTotal)
+      LocalsSplit = LocalsTotal / 2;
+    auto *LocalsHeadSlots = ConstantInt::get(I64, LocalsSplit);
+    auto *LocalsTailSlots = ConstantInt::get(I64, LocalsTotal - LocalsSplit);
+    auto *LocalsSplitValue = ConstantInt::get(I64, LocalsSplit);
+    uint64_t FrameTotal = 64 + (RNG() % 65);
+    uint64_t FrameSplit = 16 + (RNG() % 33);
+    if (FrameSplit >= FrameTotal)
+      FrameSplit = FrameTotal / 2;
+    auto *FrameHeadSlots = ConstantInt::get(I64, FrameSplit);
+    auto *FrameTailSlots = ConstantInt::get(I64, FrameTotal - FrameSplit);
+    auto *FrameSplitValue = ConstantInt::get(I64, FrameSplit);
+    auto *CallArgSlots = RandomSlots(8, 8);
+    AllocaInst *Stack = nullptr;
+    AllocaInst *StackTail = nullptr;
+    AllocaInst *Locals = nullptr;
+    AllocaInst *LocalsTail = nullptr;
+    AllocaInst *Frame = nullptr;
+    AllocaInst *FrameTail = nullptr;
+    AllocaInst *CallArgs = nullptr;
+    SmallVector<unsigned, 7> FrameOrder = {0, 1, 2, 3, 4, 5, 6};
+    for (unsigned I = FrameOrder.size() - 1; I > 0; --I)
+      std::swap(FrameOrder[I], FrameOrder[RNG() % (I + 1)]);
+    for (unsigned Region : FrameOrder) {
+      switch (Region) {
+      case 0:
+        Stack = B.CreateAlloca(I64, StackHeadSlots, "stack.a");
+        break;
+      case 1:
+        Locals = B.CreateAlloca(I64, LocalsHeadSlots, "locals.a");
+        break;
+      case 2:
+        Frame = B.CreateAlloca(I64, FrameHeadSlots, "frame.a");
+        break;
+      case 3:
+        CallArgs = B.CreateAlloca(I64, CallArgSlots, "callargs");
+        break;
+      case 4:
+        StackTail = B.CreateAlloca(I64, StackTailSlots, "stack.b");
+        break;
+      case 5:
+        LocalsTail = B.CreateAlloca(I64, LocalsTailSlots, "locals.b");
+        break;
+      case 6:
+        FrameTail = B.CreateAlloca(I64, FrameTailSlots, "frame.b");
+        break;
+      }
+    }
     auto *PC = B.CreateAlloca(I64, nullptr, "pc");
     auto *SP = B.CreateAlloca(I64, nullptr, "sp");
     auto *HandlerState = B.CreateAlloca(I64, nullptr, "handler.state");
-    B.CreateStore(ConstantInt::get(I64, 0), PC);
+    // The PC alloca holds the program counter XOR'd
+    // with a per-interp key derived from the runtime bytecode key (an
+    // interpreter argument) mixed with a per-build random constant. The
+    // runtime mixing defeats constant-folding: a debugger reading the PC
+    // alloca sees only the encrypted form and must reproduce the key
+    // schedule to recover the real PC. fetchWord / dispatch / init all go
+    // through pcLoad/pcStore helpers defined below.
+    uint64_t PcKeyConst = nextNonZeroKey();
+    auto *PcKey = B.CreateAlloca(I64, nullptr, "pc.key");
+    B.CreateStore(
+        B.CreateXor(BytecodeKey, ConstantInt::get(I64, PcKeyConst)), PcKey);
+    // The stack alloca holds every pushed
+    // value XOR StackKey, so a memory snapshot between handler dispatches
+    // reveals no plaintext operand values. StackKey is derived from the
+    // runtime bytecode key mixed with a distinct per-build constant so
+    // the optimizer cannot fold it.
+    uint64_t StackKeyConst = nextNonZeroKey();
+    auto *StackKey = B.CreateAlloca(I64, nullptr, "stk.key");
+    B.CreateStore(
+        B.CreateXor(BytecodeKey, ConstantInt::get(I64, StackKeyConst)),
+        StackKey);
+    B.CreateStore(
+        B.CreateXor(ConstantInt::get(I64, 0),
+                    B.CreateAlignedLoad(I64, PcKey, Align(8))),
+        PC);
     B.CreateStore(ConstantInt::get(I64, 0), SP);
     B.CreateStore(ConstantInt::get(I64, 0), HandlerState);
     auto *Tag = B.CreateAlloca(I64, nullptr, "tag");
     auto *TagI = B.CreateAlloca(I64, nullptr, "tag.i");
-    B.CreateStore(ConstantInt::get(I64, 0xCBF29CE484222325ULL), Tag);
+    B.CreateStore(ConstantInt::get(I64, BytecodeTagSeed), Tag);
     B.CreateStore(ConstantInt::get(I64, 0), TagI);
     BasicBlock *TagHdr = BasicBlock::Create(Ctx, "tag.hdr", F);
     BasicBlock *TagBody = BasicBlock::Create(Ctx, "tag.body", F);
@@ -2563,22 +3061,96 @@ struct CodeVirtualization : public ModulePass {
     Value *CurTagI = B.CreateLoad(I64, TagI);
     B.CreateCondBr(B.CreateICmpULT(CurTagI, BCLen), TagBody, TagDone);
     B.SetInsertPoint(TagBody);
-    Value *CurWord = B.CreateLoad(I64, B.CreateGEP(I64, BC, CurTagI));
+    InterpCtx TagCtx{I64,   F,       &Ctx, BC,      BCTail, BCSplit, BCLen,
+                     PCMap, PtrTable, PtrCount, PC, SP,     Stack,
+                     StackTail, StackSplitValue, Locals, LocalsTail,
+                     LocalsSplitValue, Frame, FrameTail, FrameSplitValue,
+                     CallArgs, CalleeTable,
+                     static_cast<unsigned>(CalleeOrder.size()), Args, ArgLen,
+                     TamperFlag, ExpectedTag, OpcodeMap, VMStateArg,
+                     BytecodeKey, PcKey, StackKey, Dispatch, Bad,
+                     M.getDataLayout().isLittleEndian()};
+    Value *CurWord = loadBytecodeWord(B, TagCtx, CurTagI);
     Value *CurTag = B.CreateLoad(I64, Tag);
     Value *TagMix =
-        B.CreateAdd(CurWord, B.CreateMul(CurTagI, ConstantInt::get(I64, 0x9E3779B97F4A7C15ULL)));
+        B.CreateAdd(CurWord,
+                    B.CreateMul(CurTagI,
+                                ConstantInt::get(I64, Schedule.Step)));
     Value *NextTag =
         B.CreateMul(B.CreateXor(CurTag, TagMix),
-                    ConstantInt::get(I64, 0x100000001B3ULL));
+                    ConstantInt::get(I64, Schedule.HashPrime));
     B.CreateStore(NextTag, Tag);
     B.CreateStore(B.CreateAdd(CurTagI, ConstantInt::get(I64, 1)), TagI);
     B.CreateBr(TagHdr);
     B.SetInsertPoint(TagDone);
+    BasicBlock *OpMapCheck = BasicBlock::Create(Ctx, "opmap.check", F);
     B.CreateCondBr(B.CreateICmpEQ(B.CreateLoad(I64, Tag), ExpectedTag),
-                   Dispatch, Bad);
+                   OpMapCheck, Bad);
+
+    // Self-verification of the handler-dispatch opcode map.
+    // The interpreter folds every entry of OpcodeMap[0..63] into a
+    // running hash with a per-build prime and compares the result
+    // against a per-interp expected value baked in as a constant. A
+    // patched map entry (e.g. swapping two opcodes to remap the
+    // dispatch) trips the check and routes through the Bad block. The
+    // expected value is computed at build time by hashing the runtime map
+    // in replaceWithVM (passed in via a private global), so the check
+    // survives the optimizer because the runtime hash depends on the
+    // actual loaded bytes.
+    B.SetInsertPoint(OpMapCheck);
+    updateVMState(B, TagCtx, RNG() % 4, nextNonZeroKey());
+    auto *OpMapHash = B.CreateAlloca(I64, nullptr, "opmap.hash");
+    auto *OpMapHashI = B.CreateAlloca(I64, nullptr, "opmap.hash.i");
+    Value *ExpectedOpMapHashV =
+        ConstantInt::get(I64, ExpectedOpMapHash);
+    B.CreateStore(ConstantInt::get(I64, Schedule.HashOffset), OpMapHash);
+    B.CreateStore(ConstantInt::get(I64, 0), OpMapHashI);
+    BasicBlock *OpMapHdr = BasicBlock::Create(Ctx, "opmap.hdr", F);
+    BasicBlock *OpMapBody = BasicBlock::Create(Ctx, "opmap.body", F);
+    BasicBlock *OpMapDone = BasicBlock::Create(Ctx, "opmap.done", F);
+    B.CreateBr(OpMapHdr);
+    B.SetInsertPoint(OpMapHdr);
+    Value *OpMapHashIVal = B.CreateLoad(I64, OpMapHashI);
+    B.CreateCondBr(
+        B.CreateICmpULT(OpMapHashIVal,
+                        ConstantInt::get(I64, kOpcodeTableSize)),
+        OpMapBody, OpMapDone);
+    B.SetInsertPoint(OpMapBody);
+    Value *OpMapEntry = B.CreateLoad(
+        I64, B.CreateGEP(I64, OpcodeMap, OpMapHashIVal));
+    Value *CurOpMapHash = B.CreateLoad(I64, OpMapHash);
+    Value *OpMapMix = B.CreateAdd(
+        OpMapEntry, B.CreateMul(OpMapHashIVal,
+                                ConstantInt::get(I64, Schedule.Step)));
+    Value *NextOpMapHash = B.CreateMul(
+        B.CreateXor(CurOpMapHash, OpMapMix),
+        ConstantInt::get(I64, Schedule.HashPrime));
+    B.CreateStore(NextOpMapHash, OpMapHash);
+    B.CreateStore(B.CreateAdd(OpMapHashIVal, ConstantInt::get(I64, 1)),
+                  OpMapHashI);
+    B.CreateBr(OpMapHdr);
+    B.SetInsertPoint(OpMapDone);
+    B.CreateCondBr(
+        B.CreateICmpEQ(B.CreateLoad(I64, OpMapHash), ExpectedOpMapHashV),
+        Dispatch, Bad);
 
     B.SetInsertPoint(Dispatch);
-    Value *OpPC = B.CreateLoad(I64, PC);
+    if (DynOpt.isEnabled()) {
+      BasicBlock *DynTrap = BasicBlock::Create(Ctx, "dyn.loop.trap", F);
+      BasicBlock *DynOk = BasicBlock::Create(Ctx, "dyn.loop.ok", F);
+      Value *DynHit = taokari::emitDynamicRuntimeCheck(M, B, DynOpt.level());
+      B.CreateCondBr(DynHit, DynTrap, DynOk);
+      B.SetInsertPoint(DynTrap);
+      taokari::markDynamicTamper(M, B);
+      B.CreateBr(Bad);
+      B.SetInsertPoint(DynOk);
+    }
+    // Inline PC decrypt (PcKey is the alloca created above). IC is not
+    // constructed yet at this point in the IR, so we touch PcKey/PC
+    // directly rather than via pcLoad.
+    Value *OpPCEnc = B.CreateLoad(I64, PC, "pc.enc.ld");
+    Value *OpPCKey = B.CreateAlignedLoad(I64, PcKey, Align(8), "pc.key.ld");
+    Value *OpPC = B.CreateXor(OpPCEnc, OpPCKey, "pc.plain");
     // PC bounds check (L1.5.4). If PC has run past the bytecode,
     // fault to Bad rather than reading out of bounds. Matters once L2
     // encrypts the bytecode and a corrupted PC could otherwise escape.
@@ -2595,11 +3167,15 @@ struct CodeVirtualization : public ModulePass {
     B.SetInsertPoint(Fetch);
     // Build handler table, then emit one switch case per entry.
     // The table is the source of truth; the switch is generated from it.
-    InterpCtx IC{I64,   F,       &Ctx, BC,       BCLen, PCMap, PtrTable, PtrCount, PC,
-                 SP,    Stack,   Locals, Frame,  CallArgs,
-                 CalleeTable, static_cast<unsigned>(CalleeOrder.size()),
-                 Args,  ArgLen,  TamperFlag, ExpectedTag, OpcodeMap, BytecodeKey,
-                 Dispatch, Bad, M.getDataLayout().isLittleEndian()};
+    InterpCtx IC{I64,   F,       &Ctx, BC,      BCTail, BCSplit, BCLen,
+                 PCMap, PtrTable, PtrCount, PC, SP,     Stack,
+                 StackTail, StackSplitValue, Locals, LocalsTail,
+                 LocalsSplitValue, Frame, FrameTail, FrameSplitValue,
+                 CallArgs, CalleeTable,
+                 static_cast<unsigned>(CalleeOrder.size()), Args, ArgLen,
+                 TamperFlag, ExpectedTag, OpcodeMap, VMStateArg, BytecodeKey,
+                 PcKey, StackKey, Dispatch, Bad,
+                 M.getDataLayout().isLittleEndian()};
     Value *MappedOp = fetchWord(B, IC);
     branchIfFalse(B, IC,
                   B.CreateICmpULT(MappedOp,
@@ -2608,9 +3184,7 @@ struct CodeVirtualization : public ModulePass {
     branchIfFalse(B, IC,
                   B.CreateICmpNE(Op, ConstantInt::getSigned(I64, -1)));
     SmallVector<Handler, 24> Handlers = buildHandlerTable(IC);
-    uint64_t DispatchKey = RNG();
-    if (!DispatchKey)
-      DispatchKey = 0xA0761D6478BD642FULL;
+    uint64_t DispatchKey = nextNonZeroKey();
     Value *DispatchToken =
         B.CreateXor(Op, ConstantInt::get(I64, DispatchKey));
     Value *Target = BlockAddress::get(F, Bad);
@@ -2622,14 +3196,17 @@ struct CodeVirtualization : public ModulePass {
     for (Handler &H : Handlers) {
       BasicBlock *CaseBB = BasicBlock::Create(Ctx, H.Name + ".entry", F);
       BasicBlock *BodyBB = BasicBlock::Create(Ctx, H.Name + ".body", F);
-      uint64_t EncOp = static_cast<uint64_t>(H.Op) ^ DispatchKey;
+      int64_t RuntimeOp = OpcodeRuntimeTokens[static_cast<unsigned>(H.Op)];
+      if (RuntimeOp < 0)
+        report_fatal_error("missing VMP runtime opcode token");
+      uint64_t RuntimeOpU = static_cast<uint64_t>(RuntimeOp);
+      uint64_t EncOp = RuntimeOpU ^ DispatchKey;
       Value *Hit = B.CreateICmpEQ(DispatchToken, ConstantInt::get(I64, EncOp));
       Target = B.CreateSelect(Hit, BlockAddress::get(F, CaseBB), Target,
                               "handler.target");
       Dests.push_back(CaseBB);
       uint64_t RouteToken =
-          (static_cast<uint64_t>(H.Op) * 0x9E3779B97F4A7C15ULL) ^
-          DispatchKey ^ 0xD1B54A32D192ED03ULL;
+          (RuntimeOpU * Schedule.Step) ^ DispatchKey ^ Schedule.RouteDomain;
       HandlerBlocks.push_back({&H, CaseBB, BodyBB, RouteToken});
     }
     auto *IBI = B.CreateIndirectBr(Target, Dests.size());
@@ -2658,15 +3235,73 @@ struct CodeVirtualization : public ModulePass {
     for (BasicBlock *Dest : BodyDests)
       HandlerIBI->addDestination(Dest);
 
+    // Per-interpreter junk sink. Every handler body writes a MBA-shaped
+    // value derived from its own stack pointer into this global, so each
+    // handler body carries visible non-trivial arithmetic that a static
+    // lifter cannot trivially prune. The store is semantically dead from
+    // the program's perspective (the global is private and never read by
+    // the VM), but it cannot be DCE'd because it has a memory side effect.
+    // This applies safe MBA noise to handler bodies without changing
+    // VM semantics.
+    GlobalVariable *HandlerNoiseGV = new GlobalVariable(
+        M, I64, false, GlobalValue::PrivateLinkage,
+        ConstantInt::get(I64, RNG()),
+        ("__taokari_vmp_handler_noise_" + Source.getName() + "_" +
+         Twine::utohexstr(RNG())).str());
+    HandlerNoiseGV->setAlignment(Align(8));
+
     for (auto [H, CaseBB, BodyBB, RouteToken] : HandlerBlocks) {
       B.SetInsertPoint(BodyBB);
+      BasicBlock *RealBody =
+          BasicBlock::Create(Ctx, H->Name + ".bcf.real", F);
+      BasicBlock *FakeBody =
+          BasicBlock::Create(Ctx, H->Name + ".bcf.fake", F);
+      Value *BcfSp = B.CreateLoad(I64, SP, "h.bcf.sp");
+      Value *BcfN = B.CreateXor(BcfSp, ConstantInt::get(I64, nextNonZeroKey()),
+                                "h.bcf.n");
+      Value *BcfNext = B.CreateAdd(BcfN, ConstantInt::get(I64, 1),
+                                   "h.bcf.next");
+      Value *BcfProd = B.CreateMul(BcfN, BcfNext, "h.bcf.prod");
+      Value *BcfBit = B.CreateAnd(BcfProd, ConstantInt::get(I64, 1),
+                                  "h.bcf.bit");
+      Value *BcfTakeReal =
+          B.CreateICmpEQ(BcfBit, ConstantInt::get(I64, 0), "h.bcf.cond");
+      B.CreateCondBr(BcfTakeReal, RealBody, FakeBody);
+
+      B.SetInsertPoint(FakeBody);
+      Value *FakeMix =
+          B.CreateXor(BcfProd, ConstantInt::get(I64, nextNonZeroKey()),
+                      "h.bcf.fake.mix");
+      B.CreateStore(FakeMix, HandlerNoiseGV);
+      B.CreateBr(RealBody);
+
+      B.SetInsertPoint(RealBody);
+      // MBA noise on the live SP runs at the start of the body, before
+      // the handler's real work. (sp ^ k1) + 2 * ((sp ^ k1) & (sp ^ k2))
+      // is the MBA identity for a+b applied to two keyed copies of sp.
+      // Resulting value is junk (k1, k2 are per-handler random) but the
+      // arithmetic shape looks real to a decompiler. Written to the
+      // private noise global so the store is not removable; the handler
+      // semantics are untouched because nothing reads the global.
+      uint64_t K1 = nextNonZeroKey();
+      uint64_t K2 = nextNonZeroKey();
+      uint64_t K3 = nextNonZeroKey();
+      Value *Sp = B.CreateLoad(I64, SP, "h.sp");
+      Value *A = B.CreateXor(Sp, ConstantInt::get(I64, K1), "h.a");
+      Value *BSeed = B.CreateAdd(Sp, ConstantInt::get(I64, K2), "h.b.seed");
+      Value *Bv = B.CreateXor(BSeed, ConstantInt::get(I64, K3), "h.b");
+      Value *And = B.CreateAnd(A, Bv, "h.and");
+      Value *Shl = B.CreateShl(And, ConstantInt::get(I64, 1), "h.shl");
+      Value *Xor = B.CreateXor(A, Bv, "h.xor");
+      Value *Sum = B.CreateAdd(Xor, Shl, "h.sum");
+      B.CreateStore(Sum, HandlerNoiseGV);
       H->Emit(B);
     }
 
     B.SetInsertPoint(Bad);
     B.CreateStore(ConstantInt::get(I64, 1), TamperFlag);
     B.CreateRet(ConstantInt::get(I64, 0));
-    return F;
+    return {F, ParamLayout};
   }
 
   bool replaceWithVM(Function &F, BytecodeProgram &P) {
@@ -2674,20 +3309,22 @@ struct CodeVirtualization : public ModulePass {
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
 
-    uint64_t BytecodeKey = RNG();
-    if (!BytecodeKey)
-      BytecodeKey = 0xD1B54A32D192ED03ULL;
+    uint64_t BytecodeKey = nextNonZeroKey();
     SmallVector<int64_t, kOpcodeTableSize> OpcodeEncode;
     SmallVector<int64_t, kOpcodeTableSize> OpcodeDecode;
+    SmallVector<int64_t, kOpcodeTableSize> OpcodeRuntimeTokens;
     if (!buildOpcodeMaps(OpcodeEncode, OpcodeDecode))
+      return false;
+    if (!buildOpcodeRuntimeTokens(OpcodeRuntimeTokens))
       return false;
     SmallVector<int64_t, 64> EncodedWords(P.Words.begin(), P.Words.end());
     SmallVector<uint8_t, 64> PCFlags;
     uint8_t RotationStep = static_cast<uint8_t>((RNG() % 63) + 1);
-    if (!computePCMapFlags(P.Words, PCFlags, RotationStep))
+    if (!computePCMapFlags(P.Words, P.BlockStarts, PCFlags, RotationStep))
       return false;
     if (!mapOpcodeWords(EncodedWords, OpcodeEncode))
       return false;
+    addOpcodeMapDecoys(OpcodeDecode);
 
     SmallVector<Constant *, 64> Words;
     for (size_t I = 0; I < EncodedWords.size(); ++I) {
@@ -2716,8 +3353,14 @@ struct CodeVirtualization : public ModulePass {
     PCMap->setAlignment(Align(1));
 
     SmallVector<Constant *, kOpcodeTableSize> OpcodeMapEntries;
-    for (int64_t V : OpcodeDecode)
-      OpcodeMapEntries.push_back(ConstantInt::getSigned(I64, V));
+    SmallVector<int64_t, kOpcodeTableSize> OpcodeMapRuntime;
+    for (int64_t V : OpcodeDecode) {
+      int64_t RuntimeV = -1;
+      if (V >= 0)
+        RuntimeV = OpcodeRuntimeTokens[static_cast<unsigned>(V)];
+      OpcodeMapRuntime.push_back(RuntimeV);
+      OpcodeMapEntries.push_back(ConstantInt::getSigned(I64, RuntimeV));
+    }
     auto *OpcodeMapArrayTy = ArrayType::get(I64, OpcodeMapEntries.size());
     auto *OpcodeMap = new GlobalVariable(
         M, OpcodeMapArrayTy, true, GlobalValue::PrivateLinkage,
@@ -2726,7 +3369,27 @@ struct CodeVirtualization : public ModulePass {
     OpcodeMap->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
     OpcodeMap->setAlignment(Align(8));
 
-    Function *Interp = createInterpreter(M, F);
+    // Compute the expected opcode-map hash that the interpreter will
+    // re-derive at entry. The hash mirrors the runtime fold: start from
+    // a per-build offset and for each entry compute
+    //   next = (cur ^ (entry + index * step)) * per-build prime
+    // using 64-bit wrapping arithmetic. The runtime check then catches
+    // any patch to a single OpcodeMap entry.
+    uint64_t ExpectedOpMapHash = Schedule.HashOffset;
+    for (unsigned I = 0; I < OpcodeMapRuntime.size(); ++I) {
+      uint64_t Entry =
+          static_cast<uint64_t>(static_cast<int64_t>(OpcodeMapRuntime[I]));
+      uint64_t Mix = Entry +
+                     static_cast<uint64_t>(I) * Schedule.Step;
+      ExpectedOpMapHash =
+          (ExpectedOpMapHash ^ Mix) * Schedule.HashPrime;
+    }
+
+    uint64_t BytecodeTagSeed =
+        P.CrossTagSeed ? P.CrossTagSeed : Schedule.HashOffset;
+    InterpreterInstance Interp =
+        createInterpreter(M, F, ExpectedOpMapHash, BytecodeTagSeed,
+                          OpcodeRuntimeTokens);
     F.removeFnAttr(Attribute::AlwaysInline);
     F.removeFnAttr(Attribute::InlineHint);
     F.addFnAttr(Attribute::NoInline);
@@ -2739,6 +3402,10 @@ struct CodeVirtualization : public ModulePass {
     Value *BCPtr = B.CreateGEP(ArrayTy, Bytecode, {Zero, Zero});
     Value *PCMapPtr = B.CreateGEP(PCMapArrayTy, PCMap, {Zero, Zero});
     Value *OpcodeMapPtr = B.CreateGEP(OpcodeMapArrayTy, OpcodeMap, {Zero, Zero});
+    auto *VMStateGV = getVMStateForFunction(M, F);
+    auto *VMStateArrayTy = cast<ArrayType>(VMStateGV->getValueType());
+    Value *VMStatePtr =
+        B.CreateGEP(VMStateArrayTy, VMStateGV, {Zero, Zero}, "vmp.xstate.ptr");
     Type *Ptr = PointerType::getUnqual(Ctx);
     Value *PtrTablePtr = ConstantPointerNull::get(PointerType::getUnqual(Ctx));
     Value *PtrCount = ConstantInt::get(I64, 0);
@@ -2779,10 +3446,16 @@ struct CodeVirtualization : public ModulePass {
     auto *RuntimeBC = B.CreateAlloca(ArrayTy, nullptr, "vmp.bc.runtime");
     Value *RuntimeBCPtr =
         B.CreateGEP(ArrayTy, RuntimeBC, {Zero, Zero}, "vmp.bc.runtime.ptr");
+    uint64_t BytecodeSplit =
+        Words.size() > 1 ? 1 + (RNG() % (Words.size() - 1)) : 1;
+    Value *RuntimeBCTail =
+        B.CreateGEP(I64, RuntimeBCPtr, ConstantInt::get(I64, BytecodeSplit),
+                    "vmp.bc.runtime.tail");
+    Value *RuntimeBCSplit = ConstantInt::get(I64, BytecodeSplit);
     auto *RekeyI = B.CreateAlloca(I64, nullptr, "vmp.rekey.i");
     auto *RuntimeTag = B.CreateAlloca(I64, nullptr, "vmp.rekey.tag");
     B.CreateStore(Zero, RekeyI);
-    B.CreateStore(ConstantInt::get(I64, 0xCBF29CE484222325ULL), RuntimeTag);
+    B.CreateStore(ConstantInt::get(I64, BytecodeTagSeed), RuntimeTag);
     BasicBlock *RekeyHdr = BasicBlock::Create(Ctx, "vmp.rekey.hdr", &F);
     BasicBlock *RekeyBody = BasicBlock::Create(Ctx, "vmp.rekey.body", &F);
     BasicBlock *RekeyDone = BasicBlock::Create(Ctx, "vmp.rekey.done", &F);
@@ -2805,28 +3478,123 @@ struct CodeVirtualization : public ModulePass {
     Value *CurTag = B.CreateLoad(I64, RuntimeTag);
     Value *TagMix =
         B.CreateAdd(RuntimeWord,
-                    B.CreateMul(CurRekeyI, ConstantInt::get(I64, 0x9E3779B97F4A7C15ULL)));
+                    B.CreateMul(CurRekeyI,
+                                ConstantInt::get(I64, Schedule.Step)));
     Value *NextTag =
         B.CreateMul(B.CreateXor(CurTag, TagMix),
-                    ConstantInt::get(I64, 0x100000001B3ULL));
+                    ConstantInt::get(I64, Schedule.HashPrime));
     B.CreateStore(NextTag, RuntimeTag);
     B.CreateStore(B.CreateAdd(CurRekeyI, ConstantInt::get(I64, 1)), RekeyI);
     B.CreateBr(RekeyHdr);
     B.SetInsertPoint(RekeyDone);
-    Value *Result = B.CreateCall(
-        Interp, {RuntimeBCPtr, BCLen, PCMapPtr, PtrTablePtr, PtrCount, ArgsPtr,
-                 ConstantInt::get(I64, F.arg_size()), TamperFlag,
-                 B.CreateLoad(I64, RuntimeTag), OpcodeMapPtr, RuntimeKey});
+    Value *RuntimeTagValue = B.CreateLoad(I64, RuntimeTag);
+    SmallVector<Value *, 16> InterpArgs;
+    for (InterpParam P : Interp.Params) {
+      switch (P) {
+      case InterpParam::BC:
+        InterpArgs.push_back(RuntimeBCPtr);
+        break;
+      case InterpParam::BCTail:
+        InterpArgs.push_back(RuntimeBCTail);
+        break;
+      case InterpParam::BCSplit:
+        InterpArgs.push_back(RuntimeBCSplit);
+        break;
+      case InterpParam::BCLen:
+        InterpArgs.push_back(BCLen);
+        break;
+      case InterpParam::PCMap:
+        InterpArgs.push_back(PCMapPtr);
+        break;
+      case InterpParam::PtrTable:
+        InterpArgs.push_back(PtrTablePtr);
+        break;
+      case InterpParam::PtrCount:
+        InterpArgs.push_back(PtrCount);
+        break;
+      case InterpParam::Args:
+        InterpArgs.push_back(ArgsPtr);
+        break;
+      case InterpParam::ArgLen:
+        InterpArgs.push_back(ConstantInt::get(I64, F.arg_size()));
+        break;
+      case InterpParam::Tamper:
+        InterpArgs.push_back(TamperFlag);
+        break;
+      case InterpParam::Tag:
+        InterpArgs.push_back(RuntimeTagValue);
+        break;
+      case InterpParam::OpcodeMap:
+        InterpArgs.push_back(OpcodeMapPtr);
+        break;
+      case InterpParam::VMState:
+        InterpArgs.push_back(VMStatePtr);
+        break;
+      case InterpParam::Key:
+        InterpArgs.push_back(RuntimeKey);
+        break;
+      case InterpParam::Dummy:
+        InterpArgs.push_back(ConstantInt::get(I64, RNG()));
+        break;
+      }
+    }
+    Value *Result = B.CreateCall(Interp.Fn, InterpArgs);
     Value *Tampered = B.CreateLoad(I64, TamperFlag);
     B.CreateCondBr(B.CreateICmpNE(Tampered, Zero), Trap, Ok);
     B.SetInsertPoint(Trap);
+    // Per-build tamper-response policy. The pass picks one of four
+    // response shapes per function
+    // from the per-module RNG, so two builds of the same source produce
+    // different tamper responses and an analyst cannot fingerprint the
+    // trap by exit code or by control flow. None of the modes produce an
+    // obvious "you hit a check" crash: all route through ordinary libc
+    // (exit) or an opaque spin.
+    enum TamperResponse : uint8_t {
+      TRExitLoud = 0,    // exit(86) — current loud mode
+      TRExitSilent = 1,  // exit(0) — silent wrong results
+      TRSpin = 2,        // tight spin — slow-decay hang
+      TRExitRandom = 3,  // exit(<random>) — non-fingerprintable code
+    };
+    TamperResponse Mode = static_cast<TamperResponse>(RNG() % 4);
     auto *ExitTy =
         FunctionType::get(Type::getVoidTy(Ctx), {Type::getInt32Ty(Ctx)}, false);
     FunctionCallee Exit = M.getOrInsertFunction("exit", ExitTy);
     if (auto *ExitFn = dyn_cast<Function>(Exit.getCallee()))
       ExitFn->addFnAttr(Attribute::NoReturn);
-    B.CreateCall(Exit, {ConstantInt::get(Type::getInt32Ty(Ctx), 86)});
-    B.CreateUnreachable();
+    switch (Mode) {
+    case TRExitSilent:
+      B.CreateCall(Exit, {ConstantInt::get(Type::getInt32Ty(Ctx), 0)});
+      B.CreateUnreachable();
+      break;
+    case TRSpin: {
+      // A back-edge that re-checks the (already-set) tamper flag. The
+      // branch is always taken so the loop never escapes, but it is not
+      // a trap instruction and reads as ordinary control flow.
+      BasicBlock *SpinHdr = BasicBlock::Create(Ctx, "tamper.spin.hdr", &F);
+      BasicBlock *SpinBody = BasicBlock::Create(Ctx, "tamper.spin.body", &F);
+      B.CreateBr(SpinHdr);
+      B.SetInsertPoint(SpinHdr);
+      B.CreateCondBr(
+          B.CreateICmpNE(B.CreateLoad(I64, TamperFlag), Zero), SpinBody,
+          SpinBody);
+      B.SetInsertPoint(SpinBody);
+      B.CreateBr(SpinHdr);
+      break;
+    }
+    case TRExitRandom: {
+      uint32_t RandomCode =
+          static_cast<uint32_t>(RNG() & 0x7fffffffu) | 1u;
+      B.CreateCall(Exit,
+                   {ConstantInt::get(Type::getInt32Ty(Ctx), RandomCode)});
+      B.CreateUnreachable();
+      break;
+    }
+    case TRExitLoud:
+    default:
+      B.CreateCall(Exit, {ConstantInt::get(Type::getInt32Ty(Ctx), 86)});
+      B.CreateUnreachable();
+      break;
+    }
     B.SetInsertPoint(Ok);
     if (F.getReturnType()->isVoidTy())
       B.CreateRetVoid();
@@ -2839,9 +3607,7 @@ struct CodeVirtualization : public ModulePass {
     if (auto *Existing = M.getGlobalVariable("__taokari_vmp_thunk_seed"))
       return Existing;
     Type *I64 = Type::getInt64Ty(M.getContext());
-    uint64_t Seed = RNG();
-    if (!Seed)
-      Seed = 0x9E3779B97F4A7C15ULL;
+    uint64_t Seed = nextNonZeroKey();
     auto *GV = new GlobalVariable(M, I64, false, GlobalValue::PrivateLinkage,
                                   ConstantInt::get(I64, Seed),
                                   "__taokari_vmp_thunk_seed");
@@ -2958,9 +3724,7 @@ struct CodeVirtualization : public ModulePass {
     }
     // Store masked per-index callee tokens; OpCall validates them before
     // dispatching to the generated call-thunk case.
-    CalleeTableKey = RNG();
-    if (!CalleeTableKey)
-      CalleeTableKey = 0xD6E8FEB86659FD93ULL;
+    CalleeTableKey = nextNonZeroKey();
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
     SmallVector<Constant *, 8> Entries;
@@ -2983,14 +3747,55 @@ struct CodeVirtualization : public ModulePass {
     CalleeIndex.clear();
     CalleeOrder.clear();
     CalleeTable = nullptr;
+    VMState = nullptr;
+    CalleeTableKey = 0;
     IndirectCallStubCounter = 0;
+    initScheduleConstants();
 
     SmallVector<Function *, 8> Targets;
+    DenseSet<Function *> InvokedCallees;
+    for (Function &F : M) {
+      for (BasicBlock &BB : F) {
+        for (Instruction &I : BB) {
+          auto *II = dyn_cast<InvokeInst>(&I);
+          if (!II)
+            continue;
+          if (Function *Callee = II->getCalledFunction())
+            InvokedCallees.insert(Callee);
+        }
+      }
+    }
+    auto isThrowCallee = [](Function *Callee) {
+      if (!Callee || !Callee->hasName())
+        return false;
+      StringRef N = Callee->getName();
+      return N == "_CxxThrowException" || N == "__CxxThrowException" ||
+             N == "__cxa_throw" || N == "RaiseException" ||
+             N == "RtlRaiseException" || N == "throw";
+    };
     for (Function &F : M) {
       if (shouldSkip(F))
         continue;
       auto Opt = ArgsOptions->toObfuscate(ArgsOptions->vmpOpt(), &F);
       if (!Opt.isEnabled())
+        continue;
+      if (InvokedCallees.count(&F))
+        continue;
+      bool CallsThrow = false;
+      for (BasicBlock &BB : F) {
+        for (Instruction &I : BB) {
+          auto *CB = dyn_cast<CallBase>(&I);
+          if (!CB)
+            continue;
+          if (isThrowCallee(CB->getCalledFunction())) {
+            CallsThrow = true;
+            break;
+          }
+        }
+        if (CallsThrow)
+          break;
+      }
+      if (CallsThrow)
         continue;
       Targets.push_back(&F);
     }
@@ -3007,6 +3812,10 @@ struct CodeVirtualization : public ModulePass {
     for (size_t TargetIdx = 0; TargetIdx < Targets.size(); ++TargetIdx) {
       Function *F = Targets[TargetIdx];
       OptimizationRemarkEmitter ORE(F);
+      auto Opt = ArgsOptions->toObfuscate(ArgsOptions->vmpOpt(), F);
+      uint32_t BytecodeWordsLimit = VMPMaxBytecodeWords;
+      if (Opt.vmpBudget() != UINT32_MAX)
+        BytecodeWordsLimit = Opt.vmpBudget();
       unsigned BackEdges = countBackEdges(*F);
       if (BackEdges > VMPMaxBackEdges) {
         OptimizationRemarkMissed R(DEBUG_TYPE, "HotLoopBudgetExceeded", F);
@@ -3087,12 +3896,12 @@ struct CodeVirtualization : public ModulePass {
         ++Skipped;
         continue;
       }
-      if (VMPMaxBytecodeWords &&
-          P.Words.size() > static_cast<size_t>(VMPMaxBytecodeWords)) {
+      if (BytecodeWordsLimit &&
+          P.Words.size() > static_cast<size_t>(BytecodeWordsLimit)) {
         OptimizationRemarkMissed R(DEBUG_TYPE, "BytecodeBudgetExceeded", F);
         R << "skipped: bytecode size budget exceeded ("
           << ore::NV("Words", (unsigned)P.Words.size()) << " > "
-          << ore::NV("Limit", VMPMaxBytecodeWords.getValue()) << ")";
+          << ore::NV("Limit", BytecodeWordsLimit) << ")";
         ORE.emit(R);
         addCompatEntry(CompatReport, *F, "skipped",
                        "bytecode size budget exceeded",
@@ -3105,6 +3914,9 @@ struct CodeVirtualization : public ModulePass {
 
     // Phase 2: finalize the callee table now that all callees are known.
     finalizeCalleeTable(M);
+    uint64_t CrossTagSeed = crossFunctionBytecodeSeed(Encoded);
+    for (auto &Entry : Encoded)
+      Entry.second.CrossTagSeed = CrossTagSeed;
 
     // Phase 3: build the interpreter (uses CalleeTable) and replace bodies.
     bool Changed = false;

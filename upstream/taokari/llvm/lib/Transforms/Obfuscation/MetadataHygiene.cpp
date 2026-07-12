@@ -1,11 +1,13 @@
 #include "llvm/Transforms/Obfuscation/MetadataHygiene.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
+#include "llvm/Transforms/Obfuscation/ObfuscationPassManager.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/GlobalObject.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/BLAKE3.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/TargetParser/Triple.h"
@@ -211,3 +213,18 @@ ModulePass *llvm::createMetadataHygienePass(ObfuscationOptions *ArgsOptions) {
 
 INITIALIZE_PASS(MetadataHygiene, "metadata-hygiene",
                 "Enable metadata and symbol hygiene", false, false)
+
+namespace llvm {
+
+PreservedAnalyses
+MetadataHygieneNewPMPass::run(Module &M, ModuleAnalysisManager &) {
+  auto Options = getTaokariObfuscationOptions();
+  if (!Options->metaOpt()->isEnabled())
+    return PreservedAnalyses::all();
+  std::unique_ptr<ModulePass> Legacy(createMetadataHygienePass(Options.get()));
+  bool Changed = Legacy->runOnModule(M);
+  Legacy->doFinalization(M);
+  return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+}
+
+} // namespace llvm

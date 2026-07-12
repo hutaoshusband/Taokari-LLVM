@@ -4,10 +4,17 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Obfuscation/BogusControlFlow.h"
 #include "llvm/Transforms/Obfuscation/CodeVirtualization.h"
+#include "llvm/Transforms/Obfuscation/DynamicProtection.h"
+#include "llvm/Transforms/Obfuscation/FunctionOutlining.h"
 #include "llvm/Transforms/Obfuscation/MBA.h"
+#include "llvm/Transforms/Obfuscation/NativeIntegrity.h"
+#include "llvm/Transforms/Obfuscation/OpaqueConstant.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
+#include "llvm/Transforms/Obfuscation/ItaniumRTTIEraser.h"
+#include "llvm/TargetParser/Triple.h"
 
 #define DEBUG_TYPE "ir-obfuscation"
 
@@ -19,7 +26,12 @@ extern cl::opt<bool> TaokariMaxProtection;
 
 static cl::opt<bool>
     EnableIRObfuscation("irobf", cl::init(false), cl::NotHidden,
-                        cl::desc("Enable IR Code Obfuscation."));
+                        cl::desc("Enable IR Code Obfuscation. Master switch "
+                                 "for the Taokari obfuscator. Set to enable "
+                                 "any combination of the per-pass -irobf-* / "
+                                 "-taokari-* flags below. Use -taokari-cfg "
+                                 "to drive configuration from a JSON file, "
+                                 "or -taokari-max for the all-on preset."));
 
 // Taokari alias of the master -irobf flag.
 static cl::alias TaokariIRObfuscation("taokari", cl::desc("Alias for -irobf"),
@@ -30,7 +42,11 @@ static cl::opt<bool>
                      cl::desc("Enable IR Indirect Branch Obfuscation."));
 static cl::opt<uint32_t>
     LevelIndirectBr("level-indbr", cl::init(0), cl::NotHidden,
-                    cl::desc("Set IR Indirect Branch Obfuscation Level."));
+                    cl::desc("Set IR Indirect Branch Obfuscation Level "
+                             "(0=off, 1=basic, 2=strong, 3=fortress, "
+                             "4=fortress+). Each level compounds the others: "
+                             "compile time and binary size grow roughly "
+                             "linearly with level."));
 
 static cl::alias TaokariIndirectBr("taokari-indbr",
                                    cl::desc("Alias for -irobf-indbr"),
@@ -38,6 +54,11 @@ static cl::alias TaokariIndirectBr("taokari-indbr",
 static cl::alias TaokariLevelIndirectBr("taokari-level-indbr",
                                         cl::desc("Alias for -level-indbr"),
                                         cl::aliasopt(LevelIndirectBr));
+static cl::opt<uint32_t> TaokariIndirectBrProbability(
+    "taokari-indbr-prob", cl::init(101), cl::NotHidden,
+    cl::desc("Indirect branch conversion probability, 0..100. Caps how many "
+             "conditional branches per function get rewritten as page-table "
+             "indirect branches, bounding compile time and binary size."));
 
 static cl::opt<bool>
     EnableIndirectCall("irobf-icall", cl::init(false), cl::NotHidden,
@@ -75,7 +96,11 @@ static cl::alias TaokariLevelIndirectGV("taokari-level-indgv",
 
 static cl::opt<bool> EnableIRFlattening(
     "irobf-fla", cl::init(false), cl::NotHidden,
-    cl::desc("Enable IR Control Flow Flattening Obfuscation."));
+    cl::desc("Enable IR Control Flow Flattening Obfuscation. Replaces the "
+             "real CFG with a switch-dispatch state machine so a decompiler "
+             "cannot follow the original block order. CHEAP on compile time; "
+             "the cost is binary size and (with level>=3) decompiler visual "
+             "noise. Use -taokari-level-fla to set the strength (0..4)."));
 static cl::opt<uint32_t> LevelIRFlattening(
     "level-fla", cl::init(0), cl::NotHidden,
     cl::desc("Set IR Control Flow Flattening Obfuscation Level."));
@@ -109,6 +134,19 @@ static cl::alias
 static cl::alias TaokariLevelIRConstantIntEncryption(
     "taokari-level-cie", cl::desc("Alias for -level-cie"),
     cl::aliasopt(LevelIRConstantIntEncryption));
+
+static cl::opt<bool> EnableOpaqueConstant(
+    "irobf-ocnst", cl::init(false), cl::NotHidden,
+    cl::desc("Enable IR Opaque Constant substitution. Rewrites plain "
+             "integer constants as opaque XOR-of-runtime-values "
+             "expressions that survive InstCombine but evaluate to the "
+             "exact original value. Distinct from -taokari-cie (which "
+             "encrypts via a global pool); ocnst is lighter-weight and "
+             "composable with cie."));
+static cl::alias
+    TaokariOpaqueConstant("taokari-ocnst",
+                          cl::desc("Alias for -irobf-ocnst"),
+                          cl::aliasopt(EnableOpaqueConstant));
 
 static cl::opt<bool>
     EnableIRConstantFPEncryption("irobf-cfe", cl::init(false), cl::NotHidden,
@@ -158,7 +196,17 @@ static cl::alias
 
 static cl::opt<bool>
     EnableBogusControlFlow("irobf-bcf", cl::init(false), cl::NotHidden,
-                           cl::desc("Enable IR Bogus Control Flow."));
+                           cl::desc("Enable IR Bogus Control Flow. Inserts "
+                                    "fake basic blocks guarded by opaque "
+                                    "predicates so a decompiler sees "
+                                    "plausible-but-dead control flow. CHEAP "
+                                    "on compile time; cost is binary size "
+                                    "(scales with -taokari-bcf-loops and "
+                                    "selection probability). Use "
+                                    "-taokari-bcf-before-fla and "
+                                    "-taokari-bcf-after-fla to wrap the "
+                                    "flattened dispatcher on both sides "
+                                    "(biggest single IDA visual win)."));
 static cl::opt<uint32_t>
     LevelBogusControlFlow("level-bcf", cl::init(0), cl::NotHidden,
                           cl::desc("Set IR Bogus Control Flow Level."));
@@ -196,10 +244,22 @@ static cl::opt<bool> TaokariMaxNoConst(
 static cl::opt<bool> TaokariMaxNoIndirects(
     "taokari-max-no-indirects", cl::init(false), cl::NotHidden,
     cl::desc("Benchmark helper: disable max indirect passes."));
+static cl::opt<bool> TaokariMaxNoVMP(
+    "taokari-max-no-vmp", cl::init(false), cl::NotHidden,
+    cl::desc("Escape hatch for -taokari-max + -taokari-vmp: keep every other "
+             "max-strength pass on but force vmp off so the build cannot hang "
+             "on per-function VM work. Without this, -taokari-max sets vmp "
+             "globally enabled, so every non-trivial function becomes a VMP "
+             "candidate with no budget cap and the compile hangs."));
 
 static cl::opt<bool>
     EnableMBA("irobf-mba", cl::init(false), cl::NotHidden,
-              cl::desc("Enable IR Mixed Boolean Arithmetic substitution."));
+              cl::desc("Enable IR Mixed Boolean Arithmetic substitution. "
+                       "Rewrites simple arithmetic (a+b, a^b, a&b, ...) as "
+                       "equivalent MBA expressions that survive InstCombine "
+                       "and GVN. CHEAP on compile time; cost is binary size "
+                       "and instruction count (scales with -taokari-mba-prob "
+                       "0..100)."));
 static cl::opt<uint32_t>
     LevelMBA("level-mba", cl::init(0), cl::NotHidden,
              cl::desc("Set IR Mixed Boolean Arithmetic Level."));
@@ -211,8 +271,54 @@ static cl::alias TaokariLevelMBA("taokari-level-mba",
                                  cl::aliasopt(LevelMBA));
 
 static cl::opt<bool>
+    EnableOutline("irobf-outline", cl::init(false), cl::NotHidden,
+                  cl::desc("Enable IR Function Outlining. Splits selected "
+                           "single-successor basic blocks out into internal "
+                           "helper functions so a sensitive function no "
+                           "longer reads as one static body in a decompiler. "
+                           "CHEAP on compile time; cost is call overhead and "
+                           "binary size (scales with -taokari-outline-prob "
+                           "0..100 and -taokari-outline-max-shards)."));
+static cl::opt<uint32_t>
+    LevelOutline("level-outline", cl::init(0), cl::NotHidden,
+                 cl::desc("Set IR Function Outlining Level."));
+
+static cl::alias
+    TaokariOutline("taokari-outline", cl::desc("Alias for -irobf-outline"),
+                   cl::aliasopt(EnableOutline));
+static cl::alias TaokariLevelOutline("taokari-level-outline",
+                                     cl::desc("Alias for -level-outline"),
+                                     cl::aliasopt(LevelOutline));
+
+namespace llvm {
+cl::opt<bool>
+    EnableDyn("irobf-dyn", cl::init(false), cl::NotHidden,
+              cl::desc("Enable dynamic anti-reversing checks (debugger / "
+                       "timing / PEB). OFF BY DEFAULT and intentionally not "
+                       "part of -taokari-max: these checks read process state "
+                       "and could misfire under unusual tooling. Opt-in per "
+                       "function via the `dyn` annotation or this flag. SAFE: "
+                       "never trips on a process that is not actually being "
+                       "debugged, so a normal test run is unaffected."));
+} // namespace llvm
+static cl::alias TaokariDyn("taokari-dyn", cl::desc("Alias for -irobf-dyn"),
+                            cl::aliasopt(EnableDyn));
+
+static cl::opt<bool>
     EnableVMP("irobf-vmp", cl::init(false), cl::NotHidden,
-              cl::desc("Enable IR code virtualization prototype."));
+              cl::desc("Enable IR code virtualization prototype. Compiles "
+                       "annotated functions to a per-function VM bytecode "
+                       "interpreter so the original logic is no longer "
+                       "readable as native code. VERY EXPENSIVE on compile "
+                       "AND runtime: do not virtualize hot loops (use "
+                       "-taokari-vmp-max-back-edges to refuse them), and do "
+                       "not enable globally under -taokari-max without "
+                       "budget caps (-taokari-vmp-max-bytecode-words, "
+                       "-taokari-vmp-max-bytecode-expansion). Recommended "
+                       "production path: annotation-only via "
+                       "__attribute__((annotate(\"+vmp\"))) on a few "
+                       "hand-picked sensitive functions, with -vmp on "
+                       "CRT/main."));
 static cl::opt<uint32_t>
     LevelVMP("level-vmp", cl::init(0), cl::NotHidden,
              cl::desc("Set IR code virtualization level."));
@@ -226,13 +332,45 @@ static cl::alias TaokariLevelVMP("taokari-level-vmp",
 static cl::opt<std::string> TaokariConfigPath("taokari-cfg",
                                               cl::init(std::string{}),
                                               cl::NotHidden,
-                                              cl::desc("Taokari config path."));
+                                              cl::desc("Taokari config path. "
+                                                       "JSON file that drives "
+                                                       "every per-pass toggle "
+                                                       "and level. Overrides "
+                                                       "implied defaults; "
+                                                       "command-line -taokari-* "
+                                                       "flags override the "
+                                                       "config in turn. See "
+                                                       "docs/CONFIGURATION.md "
+                                                       "for the schema."));
+
+static cl::opt<bool> TaokariReport(
+    "taokari-report", cl::init(false), cl::NotHidden,
+    cl::desc("Print the resolved obfuscation configuration to stderr "
+             "at the start of the pass pipeline. DIAGNOSTICS: use this to "
+             "verify which passes are actually enabled and at what level "
+             "after -taokari-max / -taokari-cfg / command-line flags are "
+             "all merged. No effect on output."));
 
 static cl::opt<std::string>
     ArkariConfigPath("arkari-cfg", cl::init(std::string{}), cl::NotHidden,
                      cl::desc("Arkari config path compatibility alias."));
 
 namespace llvm {
+
+static bool isTaokariHelper(const Function &F) {
+  StringRef N = F.getName();
+  return N.starts_with("__taokari_icall_fake_") ||
+         N.starts_with("__taokari_icall_shard_") ||
+         N.starts_with("__taokari_sh_") ||
+         N.starts_with("__taokari_bcf_") ||
+         N.starts_with("__taokari_dyn_") ||
+         N.starts_with("__taokari_vmp_interp_") ||
+         N.starts_with("__taokari_nativeint_") ||
+         N.starts_with("__mhf_") ||
+         N.starts_with("goron_scrub_string_") ||
+         N.starts_with("__global_variable_initializer_") ||
+         N.contains(".cie.shard.") || N.contains(".shard");
+}
 
 struct ObfuscationPassManager : public ModulePass {
   static char ID; // Pass identification
@@ -277,8 +415,14 @@ struct ObfuscationPassManager : public ModulePass {
   bool runFunctionPass(Module &M, FunctionPass *P) {
     bool Changed = false;
     Changed |= P->doInitialization(M);
-    for (Function &F : M) {
-      Changed |= P->runOnFunction(F);
+    SmallVector<Function *, 0> Snapshot;
+    Snapshot.reserve(M.size());
+    for (Function &F : M)
+      Snapshot.push_back(&F);
+    for (Function *F : Snapshot) {
+      if (F->isDeclaration() || isTaokariHelper(*F))
+        continue;
+      Changed |= P->runOnFunction(*F);
     }
     return Changed;
   }
@@ -292,6 +436,8 @@ struct ObfuscationPassManager : public ModulePass {
         TaokariConfigPath.empty() ? ArkariConfigPath : TaokariConfigPath);
 
     Opt->indBrOpt()->readOpt(EnableIndirectBr, LevelIndirectBr);
+    if (TaokariIndirectBrProbability.getNumOccurrences())
+      Opt->indBrOpt()->setProbability(TaokariIndirectBrProbability);
     Opt->iCallOpt()->readOpt(EnableIndirectCall, LevelIndirectCall);
     if (TaokariIndirectCallProbability.getNumOccurrences())
       Opt->iCallOpt()->setProbability(TaokariIndirectCallProbability);
@@ -303,6 +449,7 @@ struct ObfuscationPassManager : public ModulePass {
     Opt->cseOpt()->readOpt(EnableIRStringEncryption);
     Opt->cieOpt()->readOpt(EnableIRConstantIntEncryption,
                            LevelIRConstantIntEncryption);
+    Opt->ocnstOpt()->readOpt(EnableOpaqueConstant);
     Opt->cfeOpt()->readOpt(EnableIRConstantFPEncryption,
                            LevelIRConstantFPEncryption);
     if (TaokariConstVolatileSeed.getNumOccurrences()) {
@@ -315,9 +462,12 @@ struct ObfuscationPassManager : public ModulePass {
     }
     Opt->bcfOpt()->readOpt(EnableBogusControlFlow, LevelBogusControlFlow);
     Opt->mbaOpt()->readOpt(EnableMBA, LevelMBA);
+    Opt->outlineOpt()->readOpt(EnableOutline, LevelOutline);
+    Opt->dynOpt()->readOpt(EnableDyn);
     Opt->rttiOpt()->readOpt(EnableRttiEraser);
     Opt->metaOpt()->readOpt(EnableMetadataHygiene, LevelMetadataHygiene);
     Opt->vmpOpt()->readOpt(EnableVMP, LevelVMP);
+    const bool DynSelected = Opt->dynOpt()->isEnabled();
 
     if (TaokariMaxProtection) {
       for (const auto &O : Opt->getAllOpt()) {
@@ -343,6 +493,8 @@ struct ObfuscationPassManager : public ModulePass {
       Opt->cieOpt()->setConstDecryptorMBA(true);
       Opt->cfeOpt()->setVolatileSeed(true);
       Opt->cfeOpt()->setConstDecryptorMBA(true);
+      if (!DynSelected)
+        Opt->dynOpt()->setEnable(false);
       Opt->metaOpt()->setReleaseStrip(true);
       Opt->metaOpt()->setRandomizeSections(true);
       if (Opt->randomSeed().empty())
@@ -362,6 +514,14 @@ struct ObfuscationPassManager : public ModulePass {
         Opt->iCallOpt()->setEnable(false);
         Opt->indGvOpt()->setEnable(false);
       }
+      // -taokari-max-no-vmp: leave every other max pass at L4/prob 100 but
+      // force VMP off so the compile cannot hang on per-function VM work.
+      // The existing -taokari-max-no-* helpers (bcf/fla/mba/const/indirects)
+      // cover the cheap passes; VMP is the one pass expensive enough to need
+      // its own opt-out under -taokari-max. See docs/CONFIGURATION.md
+      // "Max Protection + VMP budget".
+      if (TaokariMaxNoVMP)
+        Opt->vmpOpt()->setEnable(false);
     }
     return Opt;
   }
@@ -371,8 +531,10 @@ struct ObfuscationPassManager : public ModulePass {
     if (EnableIndirectBr || EnableIndirectCall || EnableIndirectGV ||
         EnableIRFlattening || EnableIRStringEncryption ||
         EnableIRConstantIntEncryption || EnableIRConstantFPEncryption ||
-        EnableBogusControlFlow || EnableMBA || EnableRttiEraser ||
+        EnableBogusControlFlow || EnableMBA || EnableOutline || EnableDyn ||
+        EnableRttiEraser ||
         EnableMetadataHygiene || EnableVMP || TaokariMaxProtection ||
+        EnableOpaqueConstant ||
         !TaokariConfigPath.empty() || !ArkariConfigPath.empty()) {
       EnableIRObfuscation = true;
     }
@@ -386,12 +548,37 @@ struct ObfuscationPassManager : public ModulePass {
     unsigned pointerSize = M.getDataLayout().getTypeAllocSize(
         PointerType::getUnqual(M.getContext()));
 
+    if (TaokariReport) {
+      auto PrintOpt = [](const char *Name, const std::shared_ptr<ObfOpt> &O) {
+        errs() << "taokari-report: " << Name
+               << " enable=" << (O->isEnabled() ? "true" : "false")
+               << " level=" << O->level() << "\n";
+      };
+      PrintOpt("indbr", Options->indBrOpt());
+      PrintOpt("icall", Options->iCallOpt());
+      PrintOpt("indgv", Options->indGvOpt());
+      PrintOpt("fla", Options->flaOpt());
+      PrintOpt("cse", Options->cseOpt());
+      PrintOpt("cie", Options->cieOpt());
+      PrintOpt("cfe", Options->cfeOpt());
+      PrintOpt("bcf", Options->bcfOpt());
+      PrintOpt("mba", Options->mbaOpt());
+      PrintOpt("outline", Options->outlineOpt());
+      PrintOpt("dyn", Options->dynOpt());
+      PrintOpt("meta", Options->metaOpt());
+      PrintOpt("vmp", Options->vmpOpt());
+    }
+
     // VMP runs before hardening passes so the interpreter IR can be flattened,
     // dirtied and encrypted by the normal Taokari stack.
     add(llvm::createCodeVirtualizationPass(Options.get()));
     add(llvm::createMbaPass(Options.get()));
+    // Outline before flattening/indirect-branch: the candidate block shape
+    // (single successor, no PHI) is only stable this early in the pipeline.
+    add(llvm::createFunctionOutliningPass(Options.get()));
 
     add(llvm::createConstantIntEncryptionPass(Options.get()));
+    add(llvm::createOpaqueConstantPass(Options.get()));
 
     add(llvm::createIndirectGlobalVariablePass(Options.get()));
 
@@ -410,11 +597,22 @@ struct ObfuscationPassManager : public ModulePass {
     add(llvm::createIndirectBranchPass(Options.get()));
 
     if (EnableRttiEraser || Options->rttiOpt()->isEnabled()) {
-      add(llvm::createMsRttiEraserPass(Options.get()));
+      Triple T(M.getTargetTriple());
+      if (T.isOSBinFormatCOFF())
+        add(llvm::createMsRttiEraserPass(Options.get()));
+      else
+        add(llvm::createItaniumRttiEraserPass(Options.get()));
     }
     if (EnableMetadataHygiene || Options->metaOpt()->isEnabled()) {
       add(llvm::createMetadataHygienePass(Options.get()));
     }
+    // Native per-function integrity prototype. Opt-in via the
+    // `+nativeint` annotation; the pass is cheap on non-annotated
+    // functions (one annotation lookup and return).
+    add(llvm::createNativeIntegrityPass(Options.get()));
+    // Dynamic anti-reversing checks (debugger / timing / PEB). Off by default;
+    // opt-in per function via the `dyn` annotation or -taokari-dyn.
+    add(llvm::createDynamicProtectionPass(Options.get()));
     bool Changed = run(M);
 
     return Changed;
@@ -426,6 +624,11 @@ char ObfuscationPassManager::ID = 0;
 
 ModulePass *llvm::createObfuscationPassManager() {
   return new ObfuscationPassManager();
+}
+
+std::shared_ptr<ObfuscationOptions>
+llvm::getTaokariObfuscationOptions() {
+  return ObfuscationPassManager::getOptions();
 }
 
 INITIALIZE_PASS_BEGIN(ObfuscationPassManager, "irobf", "Enable IR Obfuscation",

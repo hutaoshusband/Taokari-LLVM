@@ -29,6 +29,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -41,6 +42,9 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <iterator>
@@ -53,7 +57,18 @@ using namespace llvm;
 namespace llvm {
 cl::opt<bool> TaokariMaxProtection(
     "taokari-max", cl::init(false), cl::NotHidden,
-    cl::desc("Enable every current Taokari protection at maximum strength."));
+    cl::desc(
+        "Enable every current Taokari protection at maximum strength. "
+        "PRESET: forces enable=true, level=4, probability=100 on every "
+        "obfuscation option (fla/bcf/mba/cie/cfe/cse/icall/indbr/indgv/meta/"
+        "vmp), BCF loop count 3, full string hardening, and native integrity. "
+        "EXPENSIVE: this is the heaviest possible recipe and can hang the "
+        "compile if combined with global -taokari-vmp (every non-trivial "
+        "function becomes a VM candidate with no budget). The recommended "
+        "production path is the explicit per-pass recipe in "
+        "build_max_protection.bat (annotation-only VMP), NOT -taokari-max. "
+        "Use the -taokari-max-no-* helpers to selectively disable parts of "
+        "the preset when tuning."));
 } // namespace llvm
 
 namespace {
@@ -65,28 +80,85 @@ namespace {
 // was given a non-empty value at all: any non-empty value means "MIR
 // obfuscation layer is on". Parsing the comma-list is a Level 2 concern.
 static cl::opt<std::string> TaokariMirFlag(
-    "taokari-mir", cl::init(""), cl::Hidden,
+    "taokari-mir", cl::init(""), cl::NotHidden,
     cl::desc("Enable Taokari Machine IR (backend) obfuscation. "
-             "Value is a comma-separated list of MIR passes "
-             "(e.g. dirtybytes,junk,sub). Level 1 treats any non-empty "
-             "value as on."));
+             "CODEGEN-LAYER OBFUSCATION: runs after register allocation and "
+             "scheduling, so output reaches the binary below the point "
+             "Hex-Rays/D810 lift from (IR-level tools cannot repair it). "
+             "Value is a comma-separated list of MIR sub-passes: "
+             "dirtybytes (anti-disassembly junk bytes), junk (anti-dataflow "
+             "instructions), sub (instruction substitution e.g. add->lea), "
+             "split (function splitting), fakeprologue (fake prologue/epilogue "
+             "patterns), unmodelled (anti-microcode-lift, fortress-only). "
+             "Example: -taokari-mir=dirtybytes,junk,sub. Cheap on compile "
+             "time (~0.2s typical); the biggest cost is binary size growth."));
 
 static cl::opt<unsigned> TaokariMirDirtyProb(
-    "taokari-mir-dirtybytes-prob", cl::init(100), cl::Hidden,
-    cl::desc("Percent of MIR-enabled functions receiving dirty bytes."));
+    "taokari-mir-dirtybytes-prob", cl::init(100), cl::NotHidden,
+    cl::desc("Percent of MIR-enabled functions receiving dirty bytes "
+             "(0..100). 100 = every MIR-enabled function. CHEAP."));
 
 static cl::opt<unsigned> TaokariMirJunkProb(
-    "taokari-mir-junk-prob", cl::init(100), cl::Hidden,
-    cl::desc("Percent of MIR-enabled functions receiving MIR junk."));
+    "taokari-mir-junk-prob", cl::init(100), cl::NotHidden,
+    cl::desc("Percent of MIR-enabled functions receiving MIR junk "
+             "instructions with real side effects (0..100). 100 = every "
+             "MIR-enabled function. CHEAP."));
 
 static cl::opt<unsigned> TaokariMirSubProb(
-    "taokari-mir-sub-prob", cl::init(100), cl::Hidden,
-    cl::desc("Percent of MIR-enabled functions receiving MIR substitution."));
+    "taokari-mir-sub-prob", cl::init(100), cl::NotHidden,
+    cl::desc("Percent of MIR-enabled functions receiving MIR instruction "
+             "substitution, e.g. add -> lea (0..100). 100 = every "
+             "MIR-enabled function. CHEAP."));
 
 static cl::opt<unsigned> TaokariMirSseProb(
-    "taokari-mir-sse-prob", cl::init(100), cl::Hidden,
+    "taokari-mir-sse-prob", cl::init(100), cl::NotHidden,
     cl::desc("Percent of MIR-SSE-enabled functions receiving body-walking "
-             "anti-microcode-lift guards."));
+             "anti-microcode-lift guards (0..100). FORTRESS-ONLY: emits "
+             "unmodelled SSE instructions that defeat Hex-Rays microcode "
+             "lifting. Can perturb the generated SSE schedule; verify your "
+             "SSE-heavy code still produces correct results."));
+
+static cl::opt<unsigned> TaokariMirSplitProb(
+    "taokari-mir-split-prob", cl::init(100), cl::NotHidden,
+    cl::desc("Percent of MIR-split-enabled functions receiving entry-block "
+             "splitting / boundary trampolines (0..100). 100 = every "
+             "MIR-split-enabled function. CHEAP; cost is one extra jump per "
+             "split function."));
+
+static cl::opt<unsigned> TaokariMirFakePrologueProb(
+    "taokari-mir-fakeprologue-prob", cl::init(100), cl::NotHidden,
+    cl::desc("Percent of MIR-fakeprologue-enabled functions receiving fake "
+             "frame byte patterns (0..100). 100 = every enabled function. "
+             "FORTRESS-ONLY and target-gated; the pass refuses unsafe "
+             "functions (EH/funclet, real prologue conflicts) before "
+             "emission."));
+
+static cl::opt<bool> TaokariMirVerbose(
+    "taokari-mir-verbose", cl::init(false), cl::NotHidden,
+    cl::desc("Emit human-readable diagnostics for MIR skip/fallback decisions "
+             "and inserted transforms (default: off). Opt-in: release builds "
+             "stay silent unless this or -debug-only=taokari-mir is set."));
+
+static cl::opt<bool> TaokariMirReleaseVerify(
+    "taokari-mir-release-verify", cl::init(true), cl::NotHidden,
+    cl::desc("Run the MachineVerifier after MIR transformation in release "
+             "builds and report any failure (default: on). On failure the pass "
+             "cannot retroactively undo the transform, so the pre-emit safety "
+             "gate (assessMirSafety) is what guarantees no corrupted output; "
+             "this flag is the belt-and-suspenders post-condition."));
+
+static cl::opt<bool> TaokariMirStrict(
+    "taokari-mir-strict", cl::init(false), cl::NotHidden,
+    cl::desc("Convert a post-transform verifier failure into a hard abort "
+             "(default: off). CI/lab use only: catches regressions that would "
+             "otherwise be reported but not fatal."));
+
+static cl::opt<std::string> TaokariMirReproducerDir(
+    "taokari-mir-reproducer-dir", cl::init(""), cl::NotHidden,
+    cl::desc("Directory to write a MIR crash reproducer (reduced .mir + JSON "
+             "metadata sidecar) on transform/verifier failure. Empty (default) "
+             "disables reproducer generation. Local absolute paths are stripped "
+             "from the artifact."));
 
 struct MirSubpasses {
   bool Marker = false;
@@ -209,6 +281,33 @@ static bool stablePercentHit(const Function &F, StringRef PassName,
          Probability;
 }
 
+struct MirProbOpt {
+  StringRef Name;
+  const cl::opt<unsigned> &Opt;
+};
+
+static SmallVector<MirProbOpt> mirProbOpts() {
+  return {
+      {"dirtybytes", TaokariMirDirtyProb},
+      {"junk", TaokariMirJunkProb},
+      {"sub", TaokariMirSubProb},
+      {"sse", TaokariMirSseProb},
+      {"split", TaokariMirSplitProb},
+      {"fakeprologue", TaokariMirFakePrologueProb},
+  };
+}
+
+static void validateMirProbabilities() {
+  for (const MirProbOpt &P : mirProbOpts()) {
+    if (P.Opt.getNumOccurrences() == 0)
+      continue;
+    if (P.Opt > 100)
+      report_fatal_error("Taokari config error: -taokari-mir-" +
+                         P.Name + "-prob=" + Twine(P.Opt.getValue()) +
+                         " out of range; probability must be 0..100");
+  }
+}
+
 // Reads the `llvm.global.annotations` global (populated by clang from
 // __attribute__((annotate("...")))) and returns the annotation strings that
 // apply to Function F. Mirrors the IR-layer reader in
@@ -255,6 +354,60 @@ static bool annotationHas(StringRef Annotation, StringRef Needle) {
   return Annotation.contains(Needle);
 }
 
+struct MirSubpassName {
+  StringRef Canonical;
+  bool *Flag;
+  SmallVector<StringRef, 4> Aliases;
+};
+
+static SmallVector<MirSubpassName> mirSubpassNames(MirSubpasses &P) {
+  return {
+      {"dirtybytes", &P.DirtyBytes, {"dirtybytes", "dirty"}},
+      {"junk", &P.Junk, {"junk"}},
+      {"sub", &P.Substitution, {"sub", "subst", "substitution"}},
+      {"unmodelled", &P.Unmodelled,
+       {"unmodelled", "unmodeled", "privileged", "simd"}},
+      {"sse", &P.Sse, {"sse", "simdbody", "anti-lift", "antilift"}},
+      {"fakeprologue", &P.FakeBounds,
+       {"fakebounds", "fakeboundaries", "fakeprologue", "fakeprologues"}},
+      {"split", &P.FunctionSplit,
+       {"split", "functionsplit", "functionsplitting", "boundary"}},
+  };
+}
+
+static StringSet<> mirKnownSubpassAliases() {
+  StringSet<> Known;
+  MirSubpasses Unused;
+  for (const MirSubpassName &N : mirSubpassNames(Unused))
+    for (StringRef A : N.Aliases)
+      Known.insert(A);
+  Known.insert("marker");
+  return Known;
+}
+
+static void applySubpassToken(StringRef Sign, StringRef Name, bool Enable,
+                              MirSubpasses &P) {
+  bool Matched = false;
+  for (const MirSubpassName &N : mirSubpassNames(P)) {
+    for (StringRef A : N.Aliases) {
+      if (A != Name)
+        continue;
+      *N.Flag = Enable;
+      Matched = true;
+      break;
+    }
+    if (Matched)
+      break;
+  }
+  if (Matched)
+    return;
+  static const StringSet<> Known = mirKnownSubpassAliases();
+  if (Known.contains(Name))
+    return;
+  errs() << "warning: taokari-mir: unknown " << Sign << "mir:" << Name
+         << " annotation\n";
+}
+
 static MirSubpasses resolveSubpasses(const Function &F) {
   MirSubpasses Passes = parseMirFlag();
   if (F.isDeclaration() || F.hasAvailableExternallyLinkage())
@@ -268,48 +421,21 @@ static MirSubpasses resolveSubpasses(const Function &F) {
       EnableAll = true;
     if (annotationHas(A, "-mir") && !annotationHas(A, "-mir:"))
       DisableAll = true;
-    if (annotationHas(A, "+mir:dirtybytes"))
-      Passes.DirtyBytes = true;
-    if (annotationHas(A, "+mir:junk"))
-      Passes.Junk = true;
-    if (annotationHas(A, "+mir:sub"))
-      Passes.Substitution = true;
-    if (annotationHas(A, "+mir:unmodelled") ||
-        annotationHas(A, "+mir:unmodeled"))
-      Passes.Unmodelled = true;
-    if (annotationHas(A, "+mir:sse"))
-      Passes.Sse = true;
-    if (annotationHas(A, "+mir:fakebounds") ||
-        annotationHas(A, "+mir:fakeboundaries") ||
-        annotationHas(A, "+mir:fakeprologue") ||
-        annotationHas(A, "+mir:fakeprologues"))
-      Passes.FakeBounds = true;
-    if (annotationHas(A, "+mir:split") ||
-        annotationHas(A, "+mir:functionsplit") ||
-        annotationHas(A, "+mir:functionsplitting") ||
-        annotationHas(A, "+mir:boundary"))
-      Passes.FunctionSplit = true;
-    if (annotationHas(A, "-mir:dirtybytes"))
-      Passes.DirtyBytes = false;
-    if (annotationHas(A, "-mir:junk"))
-      Passes.Junk = false;
-    if (annotationHas(A, "-mir:sub"))
-      Passes.Substitution = false;
-    if (annotationHas(A, "-mir:unmodelled") ||
-        annotationHas(A, "-mir:unmodeled"))
-      Passes.Unmodelled = false;
-    if (annotationHas(A, "-mir:sse"))
-      Passes.Sse = false;
-    if (annotationHas(A, "-mir:fakebounds") ||
-        annotationHas(A, "-mir:fakeboundaries") ||
-        annotationHas(A, "-mir:fakeprologue") ||
-        annotationHas(A, "-mir:fakeprologues"))
-      Passes.FakeBounds = false;
-    if (annotationHas(A, "-mir:split") ||
-        annotationHas(A, "-mir:functionsplit") ||
-        annotationHas(A, "-mir:functionsplitting") ||
-        annotationHas(A, "-mir:boundary"))
-      Passes.FunctionSplit = false;
+
+    const size_t PlusPos = A.find("+mir:");
+    if (PlusPos != StringRef::npos) {
+      StringRef Rest = A.substr(PlusPos + 5);
+      StringRef Name = Rest.take_while(
+          [](char C) { return C != ' ' && C != ',' && C != '"' && C != '\0'; });
+      applySubpassToken("+", Name, true, Passes);
+    }
+    const size_t MinusPos = A.find("-mir:");
+    if (MinusPos != StringRef::npos) {
+      StringRef Rest = A.substr(MinusPos + 5);
+      StringRef Name = Rest.take_while(
+          [](char C) { return C != ' ' && C != ',' && C != '"' && C != '\0'; });
+      applySubpassToken("-", Name, false, Passes);
+    }
   }
 
   if (EnableAll && DisableAll) {
@@ -326,7 +452,111 @@ static MirSubpasses resolveSubpasses(const Function &F) {
   Passes.Junk &= stablePercentHit(F, "junk", TaokariMirJunkProb);
   Passes.Substitution &= stablePercentHit(F, "sub", TaokariMirSubProb);
   Passes.Sse &= stablePercentHit(F, "sse", TaokariMirSseProb);
+  Passes.FunctionSplit &= stablePercentHit(F, "split", TaokariMirSplitProb);
+  Passes.FakeBounds &= stablePercentHit(F, "fakeprologue",
+                                        TaokariMirFakePrologueProb);
   return Passes;
+}
+
+struct MirSafetyReport {
+  StringRef Reason;
+  StringRef Pass;
+  bool Unsafe = false;
+};
+
+static bool functionHasEhShape(const MachineFunction &MF) {
+  if (MF.getFunction().hasPersonalityFn())
+    return true;
+  for (const MachineBasicBlock &MBB : MF) {
+    if (MBB.isEHPad() || MBB.isEHFuncletEntry() || MBB.isEHScopeEntry() ||
+        MBB.isEHScopeReturnBlock() || MBB.isCleanupFuncletEntry())
+      return true;
+  }
+  return false;
+}
+
+static MirSafetyReport assessMirSafety(const MachineFunction &MF,
+                                       const MirSubpasses &P) {
+  MirSafetyReport Report;
+  if (!MF.getTarget().getTargetTriple().isX86_64())
+    return {"unsupported target", "all", true};
+  const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
+  if (!TII)
+    return {"missing target instr info", "all", true};
+
+  const bool StructureSensitive =
+      P.FunctionSplit || P.FakeBounds || P.Sse || P.Unmodelled;
+  if (StructureSensitive && functionHasEhShape(MF))
+    return {"EH/funclet function", "split/fakeprologue/sse/unmodelled", true};
+
+  if (P.FunctionSplit && MF.front().isEHPad())
+    return {"entry is an EH pad", "split", true};
+
+  return Report;
+}
+
+static void logSkip(const MachineFunction &MF, const MirSafetyReport &R) {
+  errs() << "taokari-mir: skip " << MF.getName() << " (" << R.Pass << "): "
+         << R.Reason << "\n";
+}
+
+static std::string sanitizedPath(StringRef P) {
+  if (P.empty())
+    return "<unknown>";
+  size_t Slash = P.find_last_of("/\\");
+  StringRef Base = (Slash == StringRef::npos) ? P : P.substr(Slash + 1);
+  return Base.str();
+}
+
+static std::string reproFileName(StringRef Dir, StringRef Func, StringRef Ext) {
+  SmallString<128> P;
+  sys::path::append(P, Twine(Dir), Twine(Func) + Twine(Ext));
+  return std::string(P);
+}
+
+static void writeMirReproducer(const MachineFunction &MF,
+                               StringRef FailReason) {
+  if (TaokariMirReproducerDir.empty())
+    return;
+  if (std::error_code EC = sys::fs::create_directories(TaokariMirReproducerDir)) {
+    errs() << "taokari-mir: could not create reproducer dir "
+           << TaokariMirReproducerDir << ": " << EC.message() << "\n";
+    return;
+  }
+  const Function &F = MF.getFunction();
+  std::string MirPath = reproFileName(TaokariMirReproducerDir, F.getName(), ".mir");
+  std::error_code EC;
+  raw_fd_ostream MirOS(MirPath, EC);
+  if (EC) {
+    errs() << "taokari-mir: could not write reproducer " << MirPath << ": "
+           << EC.message() << "\n";
+    return;
+  }
+  MF.print(MirOS);
+  MirOS.close();
+
+  std::string MetaPath = reproFileName(TaokariMirReproducerDir, F.getName(), ".repro.json");
+  raw_fd_ostream MetaOS(MetaPath, EC);
+  if (EC) {
+    errs() << "taokari-mir: could not write reproducer meta " << MetaPath
+           << ": " << EC.message() << "\n";
+    return;
+  }
+  const Module *M = F.getParent();
+  MetaOS << "{\n"
+         << "  \"taokari_mir_reproducer\": true,\n"
+         << "  \"function\": \"" << F.getName() << "\",\n"
+         << "  \"fail_reason\": \"" << FailReason << "\",\n"
+         << "  \"target_triple\": \""
+         << (M ? M->getTargetTriple().str() : StringRef()) << "\",\n"
+         << "  \"source_module\": \""
+         << sanitizedPath(M ? M->getModuleIdentifier() : StringRef()) << "\",\n"
+         << "  \"flag\": \"" << TaokariMirFlag << "\",\n"
+         << "  \"strict\": " << (TaokariMirStrict ? "true" : "false") << ",\n"
+         << "  \"mir_file\": \"" << sanitizedPath(MirPath) << "\"\n"
+         << "}\n";
+  errs() << "taokari-mir: wrote reproducer " << MirPath << " + " << MetaPath
+         << "\n";
 }
 
 // Stateful core shared by the legacy and new-PM wrappers.
@@ -413,10 +643,38 @@ static const char *const MirDirtyStackDecGuardBytes =
     "0xaf,0xc1,0xa8,0x01,0x74,0x08,0x0f,0x0b,0xeb,0xfe,0xcc,0xf1,0x0f,"
     "0x0b,0x59,0x58,0x9d";
 
+static const char *const MirDirtyShiftGuardBytes =
+    ".byte 0x9c,0x50,0x51,0x48,0x89,0xe0,0x48,0xd1,0xe0,0xa8,0x01,0x74,0x08,"
+    "0x0f,0x0b,0xeb,0xfe,0xcc,0xf1,0x0f,0x0b,0x59,0x58,0x9d";
+
 static const char *selectDirtyGuardBytes(StringRef FunctionName) {
-  return (static_cast<size_t>(hash_value(FunctionName)) & 1)
-             ? MirDirtyStackDecGuardBytes
-             : MirDirtyStackGuardBytes;
+  switch (static_cast<size_t>(hash_value(FunctionName)) % 3) {
+  default:
+    return MirDirtyStackGuardBytes;
+  case 1:
+    return MirDirtyStackDecGuardBytes;
+  case 2:
+    return MirDirtyShiftGuardBytes;
+  }
+}
+
+static const char *const MirSubAddLeaBytes =
+    ".byte 0x9c,0x50,0x48,0x89,0xe0,0x48,0x8d,0x40,0x13,0x48,0x83,0xe8,0x13,"
+    "0x58,0x9d";
+static const char *const MirSubDoubleNegBytes =
+    ".byte 0x9c,0x50,0x48,0xf7,0xd8,0x48,0xf7,0xd8,0x58,0x9d";
+static const char *const MirSubDoubleNotBytes =
+    ".byte 0x9c,0x50,0x48,0xf7,0xd0,0x48,0xf7,0xd0,0x58,0x9d";
+
+static const char *selectSubstitutionBytes(StringRef FunctionName) {
+  switch (static_cast<size_t>(hash_value(FunctionName)) % 3) {
+  default:
+    return MirSubAddLeaBytes;
+  case 1:
+    return MirSubDoubleNegBytes;
+  case 2:
+    return MirSubDoubleNotBytes;
+  }
 }
 
 // Scatter the +mir:sse nonce guard across the function BODY (not just entry).
@@ -485,15 +743,20 @@ static void scatterSseGuards(MachineFunction &MF, const TargetInstrInfo &TII) {
 // sequence at a function's entry is a reliable, non-vacuous proof that the
 // pass fired.
 bool TaokariMachineObf::run(MachineFunction &MF) {
+  validateMirProbabilities();
   MirSubpasses Passes = resolveSubpasses(MF.getFunction());
   if (!Passes.any())
     return false;
 
+  MirSafetyReport Safety = assessMirSafety(MF, Passes);
+  if (Safety.Unsafe) {
+    LLVM_DEBUG(logSkip(MF, Safety));
+    if (TaokariMirVerbose)
+      logSkip(MF, Safety);
+    return false;
+  }
+
   const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
-  if (!TII)
-    return false;
-  if (!MF.getTarget().getTargetTriple().isX86_64())
-    return false;
 
   MachineBasicBlock *InsertMBB = &MF.front();
   if (Passes.FunctionSplit)
@@ -505,8 +768,7 @@ bool TaokariMachineObf::run(MachineFunction &MF) {
   // side-effecting machine code below the IR layer.
   if (Passes.Substitution)
     insertSideEffectAsm(*InsertMBB, InsertMBB->begin(), *TII,
-                        ".byte 0x9c,0x50,0x48,0x89,0xe0,0x48,0x8d,0x40,"
-                        "0x13,0x48,0x83,0xe8,0x13,0x58,0x9d");
+                        selectSubstitutionBytes(MF.getName()));
   if (Passes.Junk)
     insertSideEffectAsm(*InsertMBB, InsertMBB->begin(), *TII,
                         ".byte 0x9c,0x50,0x80,0x34,0x24,0x5a,0x80,0x34,"
@@ -535,6 +797,21 @@ bool TaokariMachineObf::run(MachineFunction &MF) {
   // microcode lifter actually operates.
   if (Passes.Sse)
     scatterSseGuards(MF, *TII);
+
+  if (TaokariMirReleaseVerify) {
+    SmallString<64> Banner;
+    raw_svector_ostream(Banner)
+        << "taokari-mir post-transform verify: " << MF.getName();
+    if (!MF.verify(nullptr, Banner.c_str(), &errs(), false)) {
+      errs() << "taokari-mir: verifier failure after transforming "
+             << MF.getName() << " (re-run with -mllvm -taokari-mir-strict "
+             << "to make this fatal)\n";
+      writeMirReproducer(MF, "post-transform verifier failure");
+      if (TaokariMirStrict)
+        report_fatal_error("Taokari MIR verifier failure in " +
+                           MF.getName());
+    }
+  }
 
   LLVM_DEBUG(dbgs() << "taokari-mir: inserted MIR obfuscation in "
                     << MF.getName() << "\n");

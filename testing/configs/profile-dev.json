@@ -1,0 +1,23 @@
+{
+  "randomSeed": "dev-dev-dev-dev-dev-dev-dev-dev",
+  "meta": {
+    "enable": true,
+    "level": 1,
+    "releaseStrip": true
+  },
+  "cse": {
+    "enable": true,
+    "level": 1,
+    "minStringLength": 8
+  },
+  "cie": {
+    "enable": true,
+    "level": 1,
+    "minConstSize": 32
+  },
+  "cfe": {
+    "enable": true,
+    "level": 1,
+    "minConstSize": 32
+  }
+}

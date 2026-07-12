@@ -102,6 +102,29 @@ Per-pass probabilities are controlled by:
 - `-mllvm -taokari-mir-dirtybytes-prob=<0-100>`
 - `-mllvm -taokari-mir-junk-prob=<0-100>`
 - `-mllvm -taokari-mir-sub-prob=<0-100>`
+- `-mllvm -taokari-mir-sse-prob=<0-100>` (Fortress-only body-walking anti-lift)
+- `-mllvm -taokari-mir-split-prob=<0-100>`
+- `-mllvm -taokari-mir-fakeprologue-prob=<0-100>`
+
+Every probability is an integer in `0..100`; out-of-range values fail
+compilation with an actionable diagnostic. `0` means the sub-pass never fires,
+`100` means every MIR-enabled function is considered. Decisions are
+deterministic: `stablePercentHit` hashes `<function>:<subpass>` so a fixed
+seed/module/triple reproduces the same set of transformed functions.
+
+Safety and diagnostics flags:
+
+- `-mllvm -taokari-mir-verbose` — emit human-readable skip/fallback diagnostics
+  (default off; release builds stay silent).
+- `-mllvm -taokari-mir-release-verify` — run the MachineVerifier after every
+  MIR transform and report failures (default on; belt-and-suspenders
+  post-condition). The pre-emit safety gate is what guarantees no corrupted
+  output.
+- `-mllvm -taokari-mir-strict` — make a post-transform verifier failure fatal
+  (CI/lab use; default off).
+- `-mllvm -taokari-mir-reproducer-dir=<dir>` — on a verifier failure, write a
+  reduced `.mir` dump plus a JSON metadata sidecar (function, target triple,
+  source module basename, MIR flag, strict mode) with absolute paths stripped.
 
 ### Annotation
 
@@ -349,3 +372,133 @@ contains no `switch`, the obfuscated `.obj` no longer exposes the clean
 7x+ with zero `switch_sites` remaining. Complaint 2 (SSE intrinsics still
 modeled cleanly inside each flattened block) is the remaining gap that
 the `+mir:sse` Phase B pass above closes.
+
+## Level 4: config, safety, and decompiler-resistance hardening
+
+Level 4 completes the per-sub-pass config surface, adds the release-mode
+safety framework, extends the decompiler-resistance families, and adds the
+snapshot / metric tooling. It is conservative by default: every new behaviour
+either preserves the previous output or is gated behind an explicit flag.
+
+### Per-sub-pass probability config
+
+Every transform-bearing sub-pass now has a `-taokari-mir-<pass>-prob` knob
+(`dirtybytes`, `junk`, `sub`, `sse`, `split`, `fakeprologue`). Probabilities
+are validated at `0..100`; out-of-range values fail compilation with an
+actionable `out of range` diagnostic before any transformation runs
+(`validateMirProbabilities`).
+
+### Per-function annotation selection
+
+`+mir:<pass>` / `-mir:<pass>` are parsed by a table-driven reader
+(`mirSubpassNames` / `applySubpassToken`). Multiple sub-passes can be selected
+on one function. Unknown sub-pass names emit a `warning: taokari-mir: unknown
++mir:<name> annotation` diagnostic per the repo unknown-key policy
+(matching `ObfuscationOptions`).
+
+Precedence:
+
+1. Hard safety gate (`assessMirSafety`) always wins — an unsafe function is
+   never transformed.
+2. `-mir` (bare) or any `-mir:<pass>` disables that transform.
+3. `+mir:<pass>` enables that transform for the function.
+4. The global `-taokari-mir=<passes>` flag applies when no annotation
+   overrides.
+5. Documented defaults apply last.
+
+### Safety gate and unsafe-function fallback
+
+`assessMirSafety(MF, Passes)` runs before any transform and refuses functions
+that are unsafe to transform. An unsafe skip is a successful outcome: the
+function is left untouched, compilation continues, and the skip is observable
+with `-taokari-mir-verbose`.
+
+Refused function shapes:
+
+- non-x86-64 targets (the byte blobs are x86-64 specific);
+- missing target instr info;
+- EH/funclet/personality functions for structure-sensitive sub-passes
+  (`split`, `fakeprologue`, `sse`, `unmodelled`) — their unwind tables and
+  funclet ABI constrain instruction placement;
+- an EH-pad entry block for `split`.
+
+### Post-RA verifier gate (release mode)
+
+When `-taokari-mir-release-verify` is on (default), the pass runs
+`MF.verify(..., AbortOnError=false)` after every transform. A failure is
+reported with an actionable diagnostic naming the function; with
+`-taokari-mir-strict` it becomes a hard abort for CI/lab use. The pre-emit
+safety gate is what guarantees no corrupted output reaches the assembler; the
+verifier gate is the belt-and-suspenders post-condition.
+
+Debug builds already get the verifier via `-verify-machineinstrs`; the explicit
+flag makes it a release-mode contract.
+
+### Crash reproducer minimizer
+
+With `-taokari-mir-reproducer-dir=<dir>`, a post-transform verifier failure
+writes `<dir>/<function>.mir` (a `MachineFunction::print` dump) plus
+`<dir>/<function>.repro.json` (function name, fail reason, target triple,
+source module basename, MIR flag, strict mode). Absolute paths are stripped to
+the basename so the artifact does not leak local layout. The `.mir` reproducer
+feeds straight back into `llc` / `llvm-mca` for reduction.
+
+### Substitution and dirty-byte families
+
+The `sub` and `dirtybytes` sub-passes now rotate across a family of
+semantically-neutral, verifier-clean variants per function (hash-selected, so
+deterministic under a fixed module name):
+
+- `sub`: `lea +0x13 / sub 0x13` (add-via-lea identity), double-`neg`
+  identity, double-`not` identity (the `not` form is flag-free).
+- `dirtybytes`: `rsp*(rsp+1)` even-parity guard, `rsp*(rsp-1)` variant,
+  `rsp<<1` low-bit-clear guard — all runtime-dependent (rsp unknown to static
+  analysis), each preserving the GPRs/RFLAGS they touch via push/pop framing.
+
+Function-boundary confusion (`split`) and fake prologue/epilogue patterns
+(`fakebounds`) are the existing Fortress sub-passes; they are target-gated,
+refuse EH/funclet functions via the safety gate, and pass the verifier gate.
+
+### Snapshot comparison and the boundary fragmentation metric
+
+- `verify_machine_obf_l3_ida_structural.py` runs IDA headlessly on plain vs
+  MIR-obfuscated builds and captures module-wide structural metrics (function
+  count, total function bytes, mean size, decompiler success/fail) as JSON,
+  asserting the MIR build grows total function bytes without breaking
+  decompilation. Honours `TAOKARI_IDA`; skips with exit 2 when absent.
+- `verify_machine_obf_l3_ghidra_structural.py` mirrors the above on Ghidra
+  `analyzeHeadless`. Honours `TAOKARI_GHIDRA` or `analyzeHeadless` on PATH;
+  skips gracefully when Ghidra is absent (optional / tool-dependent).
+- `verify_machine_obf_l3_boundary_metric.py` is the binary-level function
+  boundary fragmentation metric: it counts entry-point unconditional-jump
+  trampolines (the `split` signature) and guarded fake-prologue byte sequences
+  (the `fakebounds` signature) from symbol-bearing `.obj` artifacts. The
+  metric distinguishes intended fragmentation (plain = 0, MIR > 0) from noise
+  and from correctness failure (identical stdout).
+
+### Test inventory (Level 4)
+
+| Test | Covers |
+| --- | --- |
+| `verify_machine_obf_l3_subpass_config.py` | C1.5/C1.6 split + fakeprologue probability |
+| `verify_machine_obf_l3_annotation.py` | C1.7 per-function annotation selection |
+| `verify_machine_obf_l3_config_validation.py` | C1.8 probability bounds validation |
+| `verify_machine_obf_l3_unsafe_fallback.py` | C2.3 safety gate + fallback |
+| `verify_machine_obf_l3_release_verifier.py` | C2.2 release verifier gate |
+| `verify_machine_obf_l3_reproducer.py` | C2.4 reproducer minimizer |
+| `verify_machine_obf_l3_liveness.py` | C2.1 liveness across every sub-pass |
+| `verify_machine_obf_l3_large_smoke.py` | C2.5 large C++ binary smoke (extended) |
+| `verify_machine_obf_l3_substitution_family.py` | C3.1 substitution family |
+| `verify_machine_obf_l3_dirty_family.py` | C3.2 dirty-byte family |
+| `verify_machine_obf_l3_boundary_metric.py` | C3.3/C3.4/C3.7 boundary metric |
+| `verify_machine_obf_l3_ida_structural.py` | C3.5 IDA structural snapshot |
+| `verify_machine_obf_l3_ghidra_structural.py` | C3.6 Ghidra structural snapshot |
+
+### Known unsupported targets / function shapes
+
+- Non-x86-64 targets: every byte blob is x86-64 specific; the pass is a no-op
+  elsewhere (AArch64 parity is tracked in `MACHINE_IR_AARCH64_PARITY.md`).
+- EH / funclet / personality functions: refused for `split`, `fakeprologue`,
+  `sse`, `unmodelled` (unwind-table / funclet-ABI constraints).
+- EH-pad entry blocks: refused for `split`.
+

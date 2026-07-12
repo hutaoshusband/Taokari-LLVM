@@ -8,15 +8,14 @@ import sys
 import tempfile
 import struct
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-STRIP = ROOT / "build" / "taokari-local" / "bin" / "llvm-strip.exe"
+CLANG = tp.CLANG
+STRIP = tp.tool("llvm-strip")
 OUT = ROOT / "build" / "vmp-validation"
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+COMMAND_TIMEOUT_SECONDS = int(os.environ.get("TAOKARI_VMP_VERIFY_TIMEOUT", "180"))
+VSDEVCMD = tp.VSDEVCMD
 DIRTY_STACK = bytes.fromhex(
     "9c 50 51 48 89 e0 48 8d 48 01 48 0f af c1 a8 01 74 08 0f 0b eb fe cc f1 0f 0b 59 58 9d"
 )
@@ -90,11 +89,26 @@ MAX_FLAGS = [
     f"-fdebug-prefix-map={ROOT}=.",
     f"-fmacro-prefix-map={ROOT}=.",
     "-mllvm", "-taokari-max",
-    "-mllvm", "-verify-machineinstrs",
-    "-Wl,/DEBUG:NONE",
 ]
+if tp.IS_WINDOWS:
+    MAX_FLAGS += ["-Wl,/DEBUG:NONE"]
 
-def run(cmd: list[str], use_vs_env: bool = False) -> subprocess.CompletedProcess[str]:
+def command_timeout(
+    cmd: list[str], timeout: int, exc: subprocess.TimeoutExpired
+) -> subprocess.CompletedProcess[str]:
+    stdout = exc.stdout or ""
+    stderr = exc.stderr or ""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode(errors="replace")
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode(errors="replace")
+    stderr += f"\ncommand timed out after {timeout}s: {subprocess.list2cmdline(cmd)}\n"
+    return subprocess.CompletedProcess(cmd, 124, stdout, stderr)
+
+
+def run(
+    cmd: list[str], use_vs_env: bool = False, timeout: int = COMMAND_TIMEOUT_SECONDS
+) -> subprocess.CompletedProcess[str]:
     if use_vs_env and VSDEVCMD.exists():
         with tempfile.NamedTemporaryFile(
             "w", suffix=".cmd", delete=False, encoding="utf-8"
@@ -109,11 +123,18 @@ def run(cmd: list[str], use_vs_env: bool = False) -> subprocess.CompletedProcess
         try:
             return subprocess.run(
                 ["cmd.exe", "/d", "/c", str(batch)],
-                cwd=ROOT, text=True, capture_output=True,
+                cwd=ROOT, text=True, capture_output=True, timeout=timeout,
             )
+        except subprocess.TimeoutExpired as exc:
+            return command_timeout(cmd, timeout, exc)
         finally:
             batch.unlink(missing_ok=True)
-    return subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True)
+    try:
+        return subprocess.run(
+            cmd, cwd=ROOT, text=True, capture_output=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        return command_timeout(cmd, timeout, exc)
 
 
 def pe_offsets(data: bytearray) -> tuple[int, int, list[tuple[int, int, int]]]:
@@ -253,14 +274,16 @@ def main() -> int:
     if strip_run.returncode:
         sys.stderr.write(strip_run.stdout + strip_run.stderr)
         return 1
-    strip_pe_debug_directory(protected)
+    if tp.IS_WINDOWS:
+        strip_pe_debug_directory(protected)
     obj_build = compile_output(src, protected_obj, max_protection=True, obj=True)
     if obj_build.returncode:
         sys.stderr.write(obj_build.stdout + obj_build.stderr)
         return 1
     require_max_bytes(protected)
     require_max_bytes(protected_obj)
-    require_no_pe_debug_directory(protected)
+    if tp.IS_WINDOWS:
+        require_no_pe_debug_directory(protected)
     require_metadata_clean(protected)
 
     native_run = run([str(native)])

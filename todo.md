@@ -1,1429 +1,466 @@
-# Taokari LLVM — Tiered TODO Roadmap
+# Taokari LLVM — Compressed Checkbox Roadmap
 
-Living working list for Taokari LLVM Obfuscator.
-Goal: make Taokari clearly stronger than base Arkari while keeping speed, stability and configurability under control.
+Living development roadmap for Taokari LLVM Obfuscator.
+
+Goal: keep the roadmap small enough to actually use while still preserving the current finished work and making future expansion easy.
 
 ## Legend
 
-| Mark  | Meaning                    |
-| ----- | -------------------------- |
-| `[x]` | Done / inherited baseline  |
-| `[~]` | Partial / needs hardening  |
-| `[ ]` | Not started                |
-| `L1`  | Fast practical protection  |
-| `L2`  | Strong balanced protection |
-| `L3`  | Fortress mode              |
+| Mark | Meaning |
+|---|---|
+| `[x]` | Done / inherited / verified |
+| `[ ]` | Open task |
+| `🚧` | Partial / needs hardening |
+| `🧪` | Test / verifier task |
+| `📚` | Documentation task |
+| `⚙️` | Build / tooling task |
 
-**Important:**
-`L3` does not mean mathematically impossible to reverse.
-`L3` means the pass is hardened enough that reversing becomes expensive, annoying and slow for a serious analyst.
+## Working Rule
 
----
-
-# 0. Baseline — Arkari Features Already Inherited
-
-## 0.1 Pass Manager / Config
-
-* [x] Legacy pass manager integration
-* [x] `ObfuscationPassManager`
-* [x] `-mllvm -irobf*` flags
-* [x] JSON config support
-* [x] `noobf` metadata
-* [x] `appendToCompilerUsed`
-* [x] VS plug-in duplicate flag workaround
-
-## 0.2 Existing Obfuscation Passes
-
-* [x] Control-flow flattening
-* [x] Rolling XOR dispatch state
-* [x] Indirect branch page table
-* [x] Indirect call page table
-* [x] Indirect global variable page table
-* [x] Constant integer encryption
-* [x] Constant floating-point encryption
-* [x] String encryption
-* [x] MSVC RTTI name erasing
-* [x] Windows SEH / funclet handling
-* [x] DLL-import skip logic
-* [x] Thread-local global skip logic
-* [x] AArch64 pointer-auth path exists
-
-## 0.3 Baseline Things To Preserve
-
-* [x] Dedup caches for constants
-* [x] Dedup caches for indirect calls
-* [x] Dedup caches for indirect globals
-* [x] Per-function CSPRNG seed
-* [x] `maskCipher` and inverse IR pairing
-* [x] Two-tier page table system
-* [x] Test harness exists
+- [x] Keep this roadmap checkbox-based.
+- [x] Keep finished work ticked.
+- [x] Prefer one seam per commit.
+- [x] Every implementation task needs a focused verifier.
+- [x] Every new pass must prove correctness, overhead and optimizer/decompiler survival.
+- [ ] When a task grows beyond one commit, split it into a child checklist before coding.
 
 ---
 
-# 1. Control-Flow Flattening
+# 0. Current Completion Snapshot
 
-Current status: strong baseline, but too honest.
-Main weakness: every dispatch case corresponds to real logic.
+This section is intentionally compressed. It marks the big systems that are already done so the roadmap does not keep re-listing hundreds of finished subtasks.
 
-## Level 1 — Safer Flattening
+## 0.1 Baseline / Arkari Inheritance
 
-* [x] Add function size threshold
-* [x] Add instruction-count threshold
-* [x] Skip stack-heavy functions
-* [x] Skip fragile EH-heavy functions
-* [x] Add `tao-noobf-fla` annotation
-* [x] Add config key for flattening size limit
-* [x] Add default trap block
-* [x] Add regression tests for SEH / funclets
+- [x] Legacy pass manager integration.
+- [x] `ObfuscationPassManager` and `-mllvm -irobf*` compatibility.
+- [x] JSON config support.
+- [x] `noobf` metadata support.
+- [x] Existing Arkari passes preserved: flattening, indirect branches, indirect calls, indirect globals, constant encryption, string encryption, RTTI erasing.
+- [x] Dedup caches preserved for constants, calls and globals.
+- [x] Per-function CSPRNG seed preserved.
+- [x] Existing test harness preserved.
 
-## Level 2 — Harder Dispatcher
+## 0.2 IR Obfuscation Core
 
-* [x] Add encoded state variable
-* [x] Add per-function state encoding
-* [x] Add per-basic-block random case IDs
-* [x] Add junk default block
-* [x] Add fake switch cases
-* [x] Add opaque predicates around fake cases
-* [x] Make dispatch variable updates less pattern-like
-* [x] Make rolling XOR formula configurable
+- [x] Control-flow flattening L3/L4: encoded state, fake cases, nested variants, anti-switch-recovery.
+- [x] Opaque predicate engine L3: algebraic, context-based, registry, optimizer survival tests.
+- [x] Bogus Control Flow L1/L2: fake paths, fake arithmetic, fake memory, BCF before/after flattening.
+- [x] MBA L1/L2: randomized identities, multiple rounds, runtime nonce mixing, optimizer survival tests.
+- [x] String encryption L3: polymorphic decryptors, string shards, fake pools, delayed decrypt, memory lifetime tests.
+- [x] Function outlining L3: shards, fake shard graph, shard dispatcher, integrity checks, cross-shard pools.
+- [x] Metadata hygiene L3: source path stripping, symbol randomization, section/helper randomization, leak tests.
 
-## Level 3 — Fortress Flattening
+## 0.3 Indirection Layer
 
-* [x] Add polymorphic dispatcher variants
-* [x] Add multiple dispatcher layouts
-* [x] Add nested dispatcher option
-* [x] Add bogus state transitions
-* [x] Add fake but valid-looking successor chains
-* [x] Add opaque predicate integration
-* [x] Add optional block cloning before flattening
-* [x] Add decompiler-break mode for selected functions
-* [x] Add “flattening stress test” sample
-* [x] Benchmark compile time and runtime overhead
+- [x] Indirect calls L3: pointer reconstruction, fake edges, shard calls, AArch64 and Windows x64 tests.
+- [x] Indirect branches L2/L3 mostly done: fake targets, shuffled tables, nonce mixing, integrity checks.
+- [x] Indirect globals L2/L3 mostly done: fake pools, encrypted pools, per-use decrypt option, integrity checks.
 
-**Definition of done for L3:**
-A flattened function should no longer look like a clean OLLVM-style switch dispatcher.
-Static analysis should see fake paths, fake states and misleading edges.
+## 0.4 Runtime / Integrity / Dynamic Protections
 
-## Level 4 - Switch-Table Anti-Recovery
+- [x] Dynamic protections L1/L2: anti-debug, timing, fake checks, delayed checks, tamper flag propagation.
+- [x] Dynamic protections L3 mostly done: function integrity, encrypted hash table, randomized placement, tamper policy.
+- [x] Native integrity prototype and verifier: patched protected native byte trips tamper path without memory unsafety.
 
-* [x] Add no-jump-table dispatcher lowering mode
-* [x] Add split two-stage dispatcher buckets
-* [x] Add sparse/colliding fake case layout
-* [x] Add optional `indirectbr`-backed dispatcher
-* [x] Add IDA switch-recovery regression check
+## 0.5 Code Virtualization
 
----
+- [x] VM L1 prototype: bytecode format, annotation, minimal interpreter, toy function.
+- [x] VM L1.5: widened IR coverage, handler table refactor, differential harness, baseline benchmark.
+- [x] VM L2 Phase A: runtime memory safety checks.
+- [x] VM L2 Phase B: pointer support, globals, GEP, alignment, aliasing tests.
+- [x] VM L2 Phase C: runtime key derivation, stronger stream/key schedule, immediates encryption, opcode permutation, integrity tag.
+- [x] VM L2 Phase D: per-function interpreter clone, indirect handler dispatch, handler flattening.
+- [x] VM L2 Phase E: callee table hardening and thunk obfuscation.
+- [x] VM L2 Phase F: anti-frequency padding, fake opcodes, fake handlers.
+- [x] VM L2 Phase G mostly done: mutation fuzzing, property-based differential tests, optimizer survival tests.
+- [x] VM L2 extra hardening: PC encryption, stack/locals encryption, opmap self-verification, varied tamper responses.
 
-# 2. Opaque Predicates
+## 0.6 Machine IR / Backend Layer
 
-Current status: missing as standalone reusable system.
-This should become the foundation for bogus control flow, stronger flattening and anti-analysis gates.
+- [x] Machine IR infrastructure added under `llvm/lib/CodeGen/`.
+- [x] X86 pre-emit hook and `-mllvm -taokari-mir=<passes>` flag.
+- [x] MIR dirty bytes, junk instructions, instruction substitution.
+- [x] MIR opaque predicate guard.
+- [x] MIR fortress: function splitting, fake prologue/epilogue bytes, unmodelled instruction emission, decompiler snapshot tests.
 
-## Level 1 — Basic Predicate Families
+## 0.7 Tier / Build Strategy
 
-* [x] Add `OpaquePredicate.cpp`
-* [x] Add always-true algebraic family
-* [x] Add always-false algebraic family
-* [x] Add integer-width support
-* [x] Add random seed per function
-* [x] Add simple API: `makeTruePredicate`
-* [x] Add simple API: `makeFalsePredicate`
-* [x] Add unit tests for correctness
-
-Example families:
-
-* `x * x - x` is always even
-* `(x ^ x) == 0`
-* `(x | 1) != 0` for controlled nonzero values
-
-## Level 2 — Context-Based Predicates
-
-* [x] Add pointer-based predicates
-* [x] Add stack-address predicates
-* [x] Add global-seed predicates
-* [x] Add environment-mixed predicates
-* [x] Add volatile-load support
-* [x] Add runtime-global nonce support
-* [x] Prevent easy constant folding
-* [x] Prevent obvious InstCombine cleanup
-
-**Definition of done for L2:**
-Each context seed kind (`pointer`, `stack`, `global`, `environment`, `nonce`)
-plus the unfoldable `x*(x+1)` family survives `opt -passes=instcombine,
-simplifycfg`. Verified by `testing/scripts/verify_opaque_predicates_level2.py`
-against the locally built `clang-cl`/`opt`/`llvm-config`. The Level-1
-algebraic predicate over the same seeds folds (control), proving the survival
-test is non-vacuous and that the unfoldable family is what closes the gap.
-
-## Level 3 — Predicate Engine
-
-* [ ] Add predicate family registry
-* [ ] Add random predicate selection
-* [ ] Add predicate nesting
-* [ ] Add per-pass predicate style selection
-* [ ] Add solver-resistance test cases
-* [ ] Add SimplifyCFG survival tests
-* [ ] Add InstCombine survival tests
-* [ ] Add `opt -O2` survival tests
-* [ ] Use predicates in flattening
-* [ ] Use predicates in bogus control flow
-* [ ] Use predicates in anti-debug gates
-
-**Definition of done for L3:**
-Opaque predicates should survive the normal LLVM cleanup pipeline and be reusable by all other passes.
+- [x] Tier A/B/C/D recipes defined.
+- [x] `-taokari-max-no-vmp` added.
+- [x] VMP budget caps added.
+- [x] Strong blanket recipe includes BCF around flattening and MIR fortress.
+- [x] Build timing capture added.
+- [x] Tier verifiers added.
+- [x] Max + VMP hang mitigated by caps.
 
 ---
 
-# 3. Bogus Control Flow
+# 1. Active Cleanup Backlog
 
-Current status: implemented (L1 + most of L2). `BogusControlFlow.cpp` exists,
-is wired into the ObfuscationPassManager, and runs before and/or after
-flattening via `-taokari-bcf-before-fla` / `-taokari-bcf-after-fla`.
-This is one of the most important differentiators against plain Arkari.
+These are the remaining small gaps from the current roadmap. Do these before starting large new research tracks.
 
-## Level 1 — Classic BCF
+## 1.0 Performance Hardening
 
-* [ ] Add `BogusControlFlow.cpp`
-* [ ] Clone selected basic blocks
-* [ ] Insert opaque branch before real block
-* [ ] Add fake block path
-* [ ] Add junk math inside fake block
-* [ ] Add dead stores inside fake block
-* [ ] Add config probability
-* [ ] Add config loop count
-* [ ] Add annotation: `bcf`
+- [x] Close residual O(N^2) pass-manager re-walk: `isTaokariHelper` skipped `__taokari_icall_fake_` but not the real `__taokari_icall_shard_` bodies (one per call site at icall L3+), so CIE/MBA/FLA/BCF re-walked every shard each sweep. Extended the central skip-net to cover every spawned helper prefix (`__taokari_icall_shard_`, `__taokari_dyn_`, `__taokari_vmp_interp_`, `__taokari_nativeint_`, `__mhf_`, `goron_scrub_string_`, `__global_variable_initializer_`). No protection loss: generated stubs are already obfuscated by their owning pass.
 
-## Level 2 — Strong BCF
+## 1.1 Control Flow / BCF / MBA
 
-* [ ] Mutate cloned fake blocks
-* [ ] Add fake memory accesses
-* [ ] Add fake arithmetic chains
-* [ ] Add fake calls to safe internal junk functions
-* [ ] Add fake dependency on global nonce
-* [ ] Add per-function BCF seed
-* [ ] Add BCF after flattening option
-* [ ] Add BCF before flattening option
+- [x] 🚧 Finish BCF L3 multi-layer bogus graphs.
+- [x] 🚧 Add fake exception-looking BCF regions where safe.
+- [x] 🚧 Integrate BCF fake regions with flattening dispatcher fake cases.
+- [x] 🚧 Add MBA on flattening dispatch-state updates.
 
-## Level 3 — Fortress BCF
+## 1.2 Constants / Globals / Branches
 
-* [ ] Add multi-layer bogus graphs
-* [ ] Add fake loops
-* [ ] Add fake switch structures
-* [ ] Add fake error paths
-* [ ] Add fake cleanup paths
-* [ ] Add fake exception-looking regions where safe
-* [ ] Add fake block merging
-* [ ] Add integration with dispatcher fake cases
-* [ ] Add decompiler visual-noise mode
-* [ ] Add benchmark for CFG explosion
+- [x] Add opaque constant pass.
+- [x] Add context-dependent constants.
+- [x] Add per-function constant pool.
+- [x] Add encrypted constant pool.
+- [ ] Add page-table-backed constants.
+- [x] Add indirect constant references.
+- [x] Add constant access through helper shards.
+- [ ] Add fake recovery paths for indirect branches.
+- [ ] Add split global storage.
 
-**Definition of done for L3:**
-The CFG should contain convincing fake regions that static analysis cannot cheaply prune.
+## 1.3 Dynamic / Integrity
 
----
+- [x] Add post-link hash patching.
+- [x] Add whole-binary or section-range checksum after function-level integrity.
+- [x] Add a verifier for final `.text` section hashing.
+- [x] Ensure dynamic protection remains optional and off by default unless explicitly selected by profile.
 
-# 4. Mixed Boolean Arithmetic
+## 1.4 VM Remaining L2/L3 Items
 
-Current status: Level 1 done (add/sub/xor/and/or identities, i32/i64, config
-probability, `mba` annotation, correctness tests). Level 2 pending.
-This is needed to hide simple arithmetic, constants and dispatch calculations.
+- [x] 🧪 Add decompiler-lift test for VMP functions.
+- [x] Add per-function overhead budget for VMP.
+- [x] 🧪 Add decompiler/IDA snapshot proof for runtime rekey and DirtyBytes guard shape when IDA is available.
+- [x] Add polymorphic VM builds.
+- [x] Add per-function ISA randomization beyond opcode permutation.
+- [x] Add encrypted basic-block bytecode.
+- [x] Add handler MBA.
+- [x] Add handler BCF.
+- [x] Add stronger rolling/cross-function bytecode integrity checks.
+- [x] Add VM devirtualization test samples.
+- [x] Add anti-debug/anti-trace inside the interpreter loop through the DynamicProtection framework.
+- [x] Add anti-emulation checks suitable for protected commercial builds.
+- [x] Add cross-function VM state.
+- [x] Add per-build handler-table obfuscation seed verification.
 
-## Level 1 — Basic MBA
+## 1.5 Config / Build / Testing
 
-* [x] Add `MBA.cpp`
-* [x] Replace `add`
-* [x] Replace `sub`
-* [x] Replace `xor`
-* [x] Replace `and`
-* [x] Replace `or`
-* [x] Support integer types
-* [x] Add config probability
-* [x] Add annotation: `mba`
-* [x] Add correctness tests
-
-Example identities:
-
-* `a + b = (a ^ b) + 2 * (a & b)`
-* `a - b = a + (~b) + 1`
-* `a ^ b = (a | b) - (a & b)`
-
-## Level 2 — Optimizer-Resistant MBA
-
-* [ ] Add multiple MBA rounds
-* [ ] Add random identity selection
-* [ ] Add opaque constants inside MBA
-* [ ] Add runtime nonce mixing
-* [ ] Add optional `optnone` helper wrappers
-* [ ] Add InstCombine survival tests
-* [ ] Add Reassociate survival tests
-* [ ] Add GVN survival tests
-
-## Level 3 — Fortress MBA
-
-* [ ] Add polymorphic MBA templates
-* [ ] Add per-function MBA style
-* [ ] Add MBA on dispatch state updates
-* [ ] Add MBA on constant decryptors
-* [ ] Add MBA on string decryptors
-* [ ] Add MBA on page-table decryptors
-* [ ] Add solver-resistance samples
-* [ ] Add overhead budget system
-* [ ] Add hot-loop avoidance
-* [ ] Add performance profile tests
-
-**Definition of done for L3:**
-MBA should not just make expressions longer.
-It should survive optimizer cleanup and hide meaningful arithmetic in sensitive code.
+- [x] Add max binary-size growth limit.
+- [x] Add max compile-time growth limit.
+- [x] Add max runtime overhead target.
+- [x] 🧪 Add decompiler snapshot tests to the normal release-blocking suite.
+- [x] 📚 Add clean Linux build instructions.
+- [x] ⚙️ Add CI build check.
+- [x] Identify new pass-manager migration blockers.
+- [x] Create new-PM wrapper prototype.
+- [x] Port one simple module pass to new-PM.
+- [x] Port one simple function pass to new-PM.
+- [x] Test Taokari under the current LLVM new-PM pipeline.
+- [x] Finish MIR config keys per sub-pass.
+- [x] 📚 Document that `-taokari-max` is budgeted and how VMP opt-in behaves.
 
 ---
 
-# 5. Constant Encryption
+# 2. Expansion Track A — Cross-Platform Support
 
-Current status: present, but needs runtime hardness.
-Main weakness: pure constant-expression transformations can sometimes be folded again.
+Goal: make Taokari less Windows-only without losing the current Windows x64 stability.
 
-## Level 1 — Existing Pass Cleanup
+## A1. Linux Build Path
 
-* [x] Constant integer encryption exists
-* [x] Constant floating-point encryption exists
-* [x] Levels 0–3 exist
-* [x] Audit all constant folding risks
-* [x] Add more tests for `-O2`
-* [x] Add tests for LTO
-* [x] Add tests for MSVC clang-cl
-* [x] Add config for minimum constant size
+- [x] 📚 Write clean Linux build instructions.
+- [x] ⚙️ Add Ubuntu build script.
+- [x] ⚙️ Add Ninja/CMake preset for Linux.
+- [x] 🧪 Add Linux smoke test with a tiny C program.
+- [x] 🧪 Add Linux smoke test with a tiny C++ program.
+- [x] 🧪 Add Linux test for exceptions and RTTI if supported.
+- [x] 🧪 Add Linux string/constant encryption test.
+- [x] 🧪 Add Linux indirect call/branch/global test.
+- [x] 🧪 Add Linux VMP opt-in function test.
 
-## Level 2 — Runtime-Mixed Constants
+## A2. AArch64 / ARM64 Expansion
 
-* [x] Add global runtime nonce
-* [x] Mix decryptor with runtime load
-* [x] Add volatile seed option
-* [x] Add per-function seed mixing
-* [x] Add cache at function entry
-* [x] Keep dedup cache pattern
-* [x] Prevent re-encryption recursion
-* [x] Add constant decryptor MBA option
+- [x] AArch64 pointer-auth path exists.
+- [x] AArch64 MIR parity planning exists.
+- [x] Add AArch64 build smoke test.
+- [x] Add AArch64 indirect branch/call parity test.
+- [x] Add AArch64 string/constant encryption parity test.
+- [ ] Add AArch64 MIR no-op infrastructure smoke test.
+- [ ] Add AArch64 MIR dirtybytes equivalent only if architecture-safe.
+- [x] Document which MIR sub-passes are x86-only.
 
-## Level 3 — Fortress Constants
+## A3. Platform Feature Matrix
 
-* [ ] Add opaque constant pass
-* [ ] Add context-dependent constants
-* [ ] Add per-use decrypt option
-* [ ] Add per-function constant pool
-* [ ] Add encrypted constant pool
-* [ ] Add page-table-backed constants
-* [ ] Add indirect constant references
-* [ ] Add constant access through helper shards
-* [ ] Add LTO survival tests
-* [ ] Add binary diff tests
-
-**Definition of done for L3:**
-Important constants should not appear plainly in IR, binary disassembly or decompiler output.
+- [x] 📚 Create `docs/PLATFORM_MATRIX.md`.
+- [x] List Windows x64 pass support.
+- [x] List Linux x64 pass support.
+- [x] List AArch64 pass support.
+- [x] Mark unsupported combinations explicitly.
+- [x] Add release-blocking tests per supported platform.
 
 ---
 
-# 6. String Encryption
+# 3. Expansion Track B — VM Fortress Evolution
 
-Current status: present and decent.
-Main weakness: plaintext decrypt status and predictable decrypt flow.
+Goal: make the VM harder to signature, harder to lift and safer to ship.
 
-## Level 1 — Clean Existing StringEnc
+## B1. VM Polymorphism
 
-* [x] String encryption exists
-* [x] i8 decrypt function exists
-* [x] i16 decrypt function exists
-* [x] Per-string status exists
-* [x] Junk-padded table exists
-* [x] Audit all plaintext status slots
-* [x] Add tests for UTF-16 strings
-* [x] Add tests for wide strings
-* [x] Add config for minimum string length
-* [x] Add skip list for harmless strings
+- [x] Add per-build interpreter layout randomization.
+- [x] Randomize alloca layout.
+- [x] Randomize spill/register strategy where safe.
+- [x] Randomize handler order and handler grouping per function.
+- [x] Randomize operand encoding per function.
+- [x] 🧪 Add two-build structural-diff verifier.
+- [x] 🧪 Assert two builds do not share a VM signature.
 
-## Level 2 — Stronger StringEnc
+## B2. Per-Function ISA Randomization
 
-* [x] Replace plaintext status flag
-* [x] Add encrypted sentinel
-* [x] Add per-build nonce
-* [x] Add per-string key schedule
-* [x] Randomize key length
-* [x] Randomize decryptor shape
-* [x] Add position-dependent key mixing
-* [x] Add optional local stack decrypt
-* [x] Add optional heap decrypt
-* [x] Add optional re-encrypt-after-use
+- [x] Split stable VM opcodes into opcode families.
+- [x] Allow equivalent handlers with different operand formats.
+- [x] Add per-function opcode-set generation.
+- [x] Add absent/decoy handlers so functions do not share the same ISA surface.
+- [x] 🧪 Add verifier that two `+vmp` functions cannot reuse the same opcode map.
+- [x] 🧪 Add differential harness coverage for each opcode family.
 
-## Level 3 — Fortress StringEnc
+## B3. Encrypted Basic-Block Bytecode
 
-* [x] Add polymorphic decryptors
-* [x] Add decryptor MBA
-* [x] Add decryptor flattening
-* [x] Add decryptor indirect calls
-* [x] Add string shards
-* [x] Add split string pools
-* [x] Add fake string pools
-* [x] Add string access through page table
-* [x] Add delayed decrypt mode
-* [x] Add memory lifetime tests
-* [x] Add string dump resistance tests
+- [x] Add per-basic-block bytecode key.
+- [x] Add per-basic-block integrity tag.
+- [x] Decrypt block only on edge transfer.
+- [x] Re-key state after each virtual edge.
+- [x] Refuse malformed block transfers with a clean tamper path.
+- [x] 🧪 Add bytecode block mutation fuzzer.
+- [x] 🧪 Add optimizer survival test for per-block encryption.
 
-**Definition of done for L3:**
-A `strings` scan should reveal nothing important, and a memory dump should not trivially contain every decrypted string forever.
+## B4. Handler Obfuscation
 
----
+- [x] Apply MBA inside arithmetic handlers.
+- [x] Apply BCF to selected handler bodies.
+- [x] Apply MIR noise to generated handler code where safe.
+- [x] Add fake but reachable handler bodies.
+- [x] Avoid breaking VM correctness or liveness.
+- [x] 🧪 Add native-vs-VMP differential test after handler obfuscation.
+- [x] 🧪 Add decompiler snapshot test for handler bodies.
 
-# 7. Indirect Calls
+## B5. Anti-Trace / Anti-Emulation
 
-Current status: strong baseline.
-Main weakness: edge cases and externally visible symbols.
+- [x] Route interpreter-loop checks through DynamicProtection.
+- [x] Add configurable anti-trace gate.
+- [x] Add configurable anti-emulation gate.
+- [x] Add safe false-positive mode for development.
+- [x] Add profile knob: `vm.anti_trace = off/light/strong`.
+- [x] 🧪 Add false-positive benchmark.
+- [x] 🧪 Add clean execution test on normal hardware.
 
-## Level 1 — Safety Audit
+## B6. Cross-Function VM State
 
-* [x] Indirect call page table exists
-* [x] Callee dedup cache exists
-* [x] Enhanced page table exists
-* [x] Skip declarations reliably
-* [x] Skip weak symbols
-* [x] Skip `dllimport`
-* [x] Skip externally visible unsafe callees
-* [x] Skip `alwaysinline`
-* [x] Add correctness tests for function pointers
-* [x] Add tests for virtual calls
-* [x] Add tests for templates
-
-## Level 2 — Stronger Indirection
-
-* [x] Add per-call probability
-* [x] Add per-function probability
-* [x] Add encrypted two-share mode
-* [x] Add runtime seed in address reconstruction
-* [x] Add MBA to pointer reconstruction
-* [x] Add fake page-table entries
-* [x] Add shuffled page-table layout
-* [x] Add page-table integrity check
-
-## Level 3 — Fortress Indirect Calls
-
-* [x] Add per-object pointer-auth discriminator
-* [x] Add module-seed PAC discriminator
-* [x] Add callout integration
-* [x] Add function shard calls
-* [x] Add fake call edges
-* [x] Add multiple call reconstruction formulas
-* [x] Add indirect call decryptor variants
-* [x] Add cross-module safety tests
-* [x] Add AArch64 test case
-* [x] Add Windows x64 test case
-
-**Definition of done for L3:**
-The static call graph should be unreliable, incomplete and expensive to reconstruct.
+- [x] Add shared obfuscated module state.
+- [x] Make selected handlers depend on module state.
+- [x] Update state through opaque transitions.
+- [x] Keep isolated function testing possible through a test-only mode.
+- [x] 🧪 Add verifier that lifting one function alone is incomplete.
+- [x] 🧪 Add regression tests for multi-function VMP programs.
 
 ---
 
-# 8. Indirect Branches
+# 4. Expansion Track C — Machine IR / Backend Evolution
 
-Current status: strong baseline.
-Main weakness: no AArch64 parity test and limited fake target noise.
+Goal: make protection survive below the IR layer and keep decompilers from repairing classic LLVM patterns.
 
-## Level 1 — Safety
+## C1. MIR Configuration
 
-* [x] Indirect branch page table exists
-* [x] BlockAddress support exists
-* [ ] Add more `indirectbr` tests
-* [ ] Add EH compatibility tests
-* [ ] Add AArch64 smoke test
-* [ ] Add x64 Windows test
-* [ ] Audit block address edge cases
+- [x] Finish config keys for each MIR sub-pass.
+- [x] Add probability config for `dirtybytes`.
+- [x] Add probability config for `junk`.
+- [x] Add probability config for `sub`.
+- [x] Add probability config for `split`.
+- [x] Add probability config for `fakeprologue`.
+- [x] Add per-function annotation parsing for MIR sub-pass selection.
+- [x] 🧪 Add config validation tests.
 
-## Level 2 — Stronger Branch Tables
+## C2. MIR Safety
 
-* [ ] Add fake block entries
-* [ ] Add fake encrypted indices
-* [ ] Add shuffled target tables
-* [ ] Add runtime nonce mixing
-* [ ] Add MBA for index decrypt
-* [ ] Add branch target verification
-* [ ] Add config probability
+- [x] Add liveness regression tests for every MIR sub-pass.
+- [x] Add post-RA verifier gate to release mode.
+- [x] Add fallback when a machine function is unsafe for MIR transformation.
+- [x] Add crash reproducer minimizer for MIR failures.
+- [x] 🧪 Add large C++ binary smoke test.
 
-## Level 3 — Fortress Indirect Branches
+## C3. MIR Decompiler Resistance
 
-* [ ] Add per-function branch table variants
-* [ ] Add multiple decrypt formulas
-* [ ] Add bogus branch destinations
-* [ ] Add trap destinations
-* [ ] Add fake recovery paths
-* [ ] Add branch-table integrity checks
-* [ ] Add dispatcher integration
-* [ ] Add cross-pass tests with flattening
-* [ ] Add cross-pass tests with BCF
-
-**Definition of done for L3:**
-Static block targets should be noisy and hard to recover without executing or emulating the function.
+- [x] Add more anti-microcode instruction substitutions.
+- [x] Add architecture-safe dirty-byte patterns.
+- [x] Add function-boundary confusion variants.
+- [x] Add fake call/prologue patterns where safe.
+- [x] 🧪 Add IDA snapshot comparison.
+- [x] 🧪 Add Ghidra headless snapshot comparison.
+- [x] 🧪 Add binary-level metric for function boundary fragmentation.
 
 ---
 
-# 9. Indirect Global Variables
+# 5. Expansion Track D — Testing, Decompiler Snapshots & Metrics
 
-Current status: present and useful.
-Main weakness: should become more polymorphic and better tested.
+Goal: make “hard to reverse” measurable instead of based on feeling.
 
-## Level 1 — Safety
+## D1. Decompiler Snapshot Pipeline
 
-* [x] Indirect global variable page table exists
-* [x] Skips thread-local globals
-* [x] Skips DLL-import globals
-* [x] Dedup cache exists
-* [ ] Add tests for const globals
-* [ ] Add tests for mutable globals
-* [ ] Add tests for large structs
-* [ ] Add tests for arrays
-* [ ] Add tests for C++ static locals
+- [x] IDA snapshot path exists for later.
+- [x] 🧪 Add optional IDA runner detection.
+- [x] 🧪 Add optional Ghidra headless runner detection.
+- [x] Dump CFG node/edge count per target function.
+- [x] Dump decompiler pseudocode length per target function.
+- [x] Dump switch-recovery result if available.
+- [x] Dump call-graph recovery result.
+- [x] Store snapshots as JSON artifacts.
+- [x] Skip gracefully when IDA/Ghidra is not installed.
 
-## Level 2 — Stronger Global Access
+## D2. Gnarliness Gates
 
-* [ ] Add fake global entries
-* [ ] Add shuffled global table
-* [ ] Add per-function global cache
-* [ ] Add runtime nonce mixing
-* [ ] Add MBA on global pointer decrypt
-* [ ] Add config for sensitive globals only
-* [ ] Add annotation: `indgv`
+- [x] Node/edge ratio bars exist for Tier B/C/D.
+- [x] `.text` entropy is measured but not used as hard bar.
+- [x] Add fake-case density bar.
+- [x] Add indirect rewrite count bar.
+- [x] Add call-graph breakage bar.
+- [x] Add string leak bar.
+- [x] Add symbol leak bar.
+- [x] Add VMP signature-divergence bar.
+- [x] Add MIR survival bar.
 
-## Level 3 — Fortress Globals
+## D3. Release Dashboard
 
-* [ ] Add split global storage
-* [ ] Add encrypted global pools
-* [ ] Add fake global pools
-* [ ] Add per-use global decrypt option
-* [ ] Add pointer-auth discriminator for globals
-* [ ] Add global access integrity check
-* [ ] Add cross-pass test with string encryption
-* [ ] Add cross-pass test with constant encryption
-
-**Definition of done for L3:**
-Sensitive global references should not look like direct global accesses in the decompiler.
+- [x] Regression dashboard exists.
+- [x] Add per-tier dashboard summary.
+- [x] Add pass cost summary.
+- [x] Add slowest pass summary.
+- [x] Add transformed function count summary.
+- [x] Add VM compatibility summary.
+- [x] Add skipped-function reason summary.
+- [x] Add output path for CI artifacts.
 
 ---
 
-# 10. Function Outlining / Callout Obfuscation
+# 6. Expansion Track E — Developer UX / Profiles / Tooling
 
-Current status: missing.
-This is a major differentiator from base Arkari.
+Goal: make Taokari easy to use without turning protection into an all-or-nothing chaos button.
 
-## Level 1 — Basic Function Splitting
+## E1. Profiles
 
-* [ ] Add `FunctionOutlining.cpp`
-* [ ] Split selected basic blocks into helper functions
-* [ ] Preserve arguments
-* [ ] Preserve return values
-* [ ] Preserve side effects
-* [ ] Add annotation: `outline`
-* [ ] Add config for max shards
-* [ ] Add simple correctness tests
+- [x] Dev profile exists.
+- [x] Balanced profile exists.
+- [x] Strong profile exists.
+- [x] Fortress profile exists.
+- [x] Add `mobile` profile for smaller binaries.
+- [x] Add `debuggable-strong` profile for internal testing.
+- [x] Add `vmp-spear` profile for annotation-only virtualization.
+- [x] Add profile inheritance in config.
+- [x] Add profile validation.
 
-## Level 2 — Indirect Shards
+## E2. Budget System
 
-* [ ] Route shard calls through indirect call page table
-* [ ] Add fake shard functions
-* [ ] Add shard name randomization
-* [ ] Add shard argument scrambling
-* [ ] Add shard return scrambling
-* [ ] Add per-function shard count
-* [ ] Add performance guardrails
+- [x] Per-pass budget system exists.
+- [x] Add global binary-size growth budget.
+- [x] Add global compile-time budget.
+- [x] Add global runtime overhead target.
+- [x] Add per-function VMP budget override.
+- [x] Add warning when profile exceeds budget.
+- [x] Add hard-fail mode when budget exceeds limit.
 
-## Level 3 — Fortress Callout
+## E3. Config Generator
 
-* [ ] Add multi-layer function shards
-* [ ] Add shard dispatcher
-* [ ] Add fake shard graph
-* [ ] Add shard integrity checks
-* [ ] Add cross-shard constant pools
-* [ ] Add cross-shard string pools
-* [ ] Add outline + flattening mode
-* [ ] Add outline + BCF mode
-* [ ] Add outline + MBA mode
-* [ ] Add decompiler quality test
+- [x] Add `taokari-config-wizard.py`.
+- [x] Ask for target platform.
+- [x] Ask for protection goal.
+- [x] Ask for performance budget.
+- [x] Ask whether VMP should be allowed.
+- [x] Generate JSON config.
+- [x] Generate suggested Clang flags.
+- [x] Generate annotation guide.
+- [x] Generate expected test command.
 
-**Definition of done for L3:**
-A sensitive function should no longer exist as one clean static function body.
+## E4. Build Integration
 
----
-
-# 11. Metadata / Symbol / Debug Info Stripping
-
-Current status: partially covered by MSVC RTTI eraser.
-Goal: remove accidental leaks.
-
-## Level 1 — Basic Metadata Cleanup
-
-* [x] MSVC RTTI name erase exists
-* [x] Strip `llvm.ident`
-* [x] Strip `!dbg`
-* [x] Strip `DIFile`
-* [x] Strip source paths
-* [x] Strip compiler version strings
-* [x] Add config toggle
-* [x] Add metadata leak tests
-
-## Level 2 — Stronger Symbol Hygiene
-
-* [x] Randomize internal symbol names
-* [x] Randomize obfuscation helper names
-* [x] Randomize decryptor names
-* [x] Randomize table names
-* [x] Hide pass fingerprints
-* [x] Add fake helper symbols
-* [x] Add export allowlist
-
-## Level 3 — Fortress Metadata Hygiene
-
-* [x] Add full release-strip profile
-* [x] Add PDB hygiene docs
-* [x] Add Mach-O metadata support
-* [x] Add ELF metadata support
-* [x] Add PE section-name randomization option
-* [x] Add helper section randomization
-* [x] Add symbol diff test
-* [x] Add source-path leak test
-* [x] Add RTTI leak test
-
-**Definition of done for L3:**
-The binary should not leak project paths, compiler identifiers, helper names or obvious Taokari fingerprints.
+- [x] Add CMake helper module.
+- [x] Add Ninja example.
+- [x] Add Visual Studio project example.
+- [x] Add `build_strong.bat` docs.
+- [x] Add `build_fortress.bat` docs.
+- [x] Add example with selected `+vmp` function.
+- [x] Add example with `-vmp` wrapper function.
 
 ---
 
-# 12. Dynamic Protections
+# 7. Expansion Track F — Real-World Compatibility Suite
 
-Current status: not implemented.
-These must be optional and off by default.
+Goal: avoid building a beautiful obfuscator that breaks real programs.
 
-## Level 1 — Basic Runtime Checks
+## F1. C / C++ Feature Fixtures
 
-* [ ] Add optional anti-debug check
-* [ ] Add optional timing check
-* [ ] Add optional breakpoint check
-* [ ] Add optional PEB check on Windows
-* [ ] Add config toggle
-* [ ] Add annotation: `dyn`
-* [ ] Add safe failure mode
-* [ ] Add false-positive tests
+- [x] Add pointer-heavy C fixture.
+- [x] Add template-heavy C++ fixture.
+- [ ] Add exception-heavy C++ fixture.
+- [x] Add virtual dispatch fixture.
+- [x] Add static local initialization fixture.
+- [x] Add thread-local storage fixture.
+- [x] Add atomics fixture.
+- [x] Add SIMD/intrinsics fixture.
+- [x] Add large switch fixture.
+- [x] Add callback/function-pointer fixture.
 
-## Level 2 — Distributed Runtime Checks
+## F2. Binary Type Fixtures
 
-* [ ] Insert checks in multiple functions
-* [ ] Guard checks with opaque predicates
-* [ ] Hide checks behind indirect calls
-* [ ] Add fake checks
-* [ ] Add check result mixing
-* [ ] Add delayed checks
-* [ ] Add runtime nonce dependency
-* [ ] Add tamper flag propagation
+- [x] EXE startup gate exists.
+- [x] DLL LoadLibrary gate exists.
+- [x] Manual-map DLL gate exists.
+- [x] Add static library fixture.
+- [x] Add plugin-style DLL fixture.
+- [x] Add exported C API fixture.
+- [x] Add C++ class export fixture.
+- [x] Add mixed C/C++ build fixture.
 
-## Level 3 — Fortress Dynamic Protection
+## F3. Third-Party Library Fixtures
 
-* [ ] Add function-level integrity checks
-* [ ] Add cross-function integrity checks
-* [ ] Add post-link hash patching
-* [ ] Add encrypted hash table
-* [ ] Add randomized check placement
-* [ ] Add check-call indirection
-* [ ] Add tamper response policy
-* [ ] Add anti-patch sentinel
-* [ ] Add debugger-resistant control paths
-* [ ] Add full correctness test suite
-* [ ] Add false-positive benchmark
-
-**Definition of done for L3:**
-Tampering or debugging should not be detected by one obvious check.
-Checks should be distributed, indirect, guarded and hard to remove cleanly.
+- [x] Add tiny AES fixture.
+- [x] Add hashing fixture.
+- [x] Add compression fixture.
+- [x] Add JSON parser fixture.
+- [x] Add allocator-heavy fixture.
+- [x] Add math-heavy fixture.
+- [x] Add parser/state-machine fixture.
 
 ---
 
-# 13. Code Virtualization
-
-Current status: L1.5 complete; Level 2 started.
-This should be treated as advanced / expensive protection.
-
-## Product Direction — Compatibility-First VM Protection
-
-The goal is not to virtualize every instruction in every program at any cost.
-That creates a huge interpreter, heavy slowdown, more compatibility bugs, and
-one obvious reversing target. The product goal is a practical VMProtect-style
-alternative: keep the EXE/DLL ABI normal, keep loaders working, and turn the
-sensitive code into VM bytecode so the original logic is no longer readable as
-native code.
-
-**Principle:** full compatibility means the protected program still runs.
-It does not mean every instruction must become VM bytecode. Unsupported or
-loader-sensitive code should either stay native or be split around, with clear
-diagnostics explaining what was virtualized and what stayed native.
-
-Protection target:
-
-* [x] Native EXE programs keep working under normal process startup
-* [x] DLLs keep working under `LoadLibrary` / `GetProcAddress`
-* [x] DLLs keep working under manual mapping when imports, relocations, TLS,
-      section protections, and entrypoint invocation are handled by the loader
-* [x] Native code can call VM-protected code
-* [x] VM-protected code can call native code
-* [x] Sensitive functions become bytecode + VM state transitions
-* [x] Reversing protected logic requires recovering the bytecode format,
-      opcode mapping, handler semantics, key schedule, call-thunk routing,
-      local/frame model, and pointer/memory model
-
-What should be virtualized first:
-
-* [ ] License checks
-* [ ] Auth / entitlement decisions
-* [ ] Crypto or proprietary algorithms
-* [ ] Game or product logic that should not read cleanly in a decompiler
-* [ ] Anti-tamper decisions and policy code
-
-What should not be forced through the VM by default:
-
-* [ ] CRT startup / loader-critical code
-* [ ] `DllMain` unless the function is known small and safe
-* [ ] SEH / EH-heavy regions
-* [ ] TLS initialization glue
-* [ ] System callback thunks
-* [ ] Hot loops unless explicitly allowed by budget knobs
-* [ ] Code using unsupported IR patterns when native fallback preserves behavior
-
-Compatibility roadmap:
-
-* [x] Add `void` protected-function support
-* [x] Add raw `switch` lowering
-* [x] Add `memcpy` / `memset` / `memmove` intrinsic support
-* [x] Add multi-index and struct-field GEP support
-* [x] Add pointer args and pointer returns in VM direct calls
-* [x] Add indirect/function-pointer call support or split-around fallback
-* [x] Add function splitting: VM-supported regions become bytecode,
-      unsupported islands stay native
-* [x] Add compatibility report: per function `virtualized`, `partially
-      virtualized`, or `skipped`, with exact reason
-* [x] Keep EXE, normal DLL load, and manual-map DLL tests as release-blocking
-      gates
-
-**Definition of done for full compatibility:**
-Real-world EXE and DLL programs continue to run, sensitive code can be made
-unreadable without breaking unsupported glue, and every fallback is explicit.
-The VM should maximize protected coverage while preserving behavior, not
-silently force unsafe IR through an incomplete interpreter.
-
-## Level 1 — Research Prototype
-
-* [x] Study xVMP architecture
-* [x] Define Taokari VM scope
-* [x] Choose stack VM or register VM
-* [x] Choose bytecode format
-* [x] Add annotation: `vmp`
-* [x] Add one arithmetic opcode
-* [x] Add one memory opcode
-* [x] Add one branch opcode
-* [x] Add minimal VM interpreter
-* [x] Add one toy test function
-
-## Level 1.5 — Capability & Safety Bridge
-
-Motivation: L1 only handles `add/sub/xor`, signed compares, `select`,
-`br`, `ret`. `hasUnsupportedIR` rejects every function with `mul`, `and`,
-`or`, shifts, unsigned compares, `phi`, real loads/stores, atomics, or
-casts. The single test (`vmp_basic`) is `(a+b)^17` + one `if`. Jumping
-straight to L2 (bytecode encryption, per-function opcode mapping, handler
-shuffling/flattening) would build crypto on top of a VM that almost no
-real function qualifies for, with no way to catch regressions.
-
-This tier widens coverage, refactors the dispatch so L2 has something to
-shuffle, and adds the differential test harness + benchmark that L2's
-correctness/performance claims depend on.
-
-**Execution order (decided):** 1.5.2 (refactor dispatch) → 1.5.3 (harness)
-→ 1.5.1 (widen IR) → 1.5.4 (benchmark/bounds). Refactor lands before any
-behavior change; harness covers the widened IR; benchmark closes the tier.
-
-**Scope decisions:**
-- Memory: middle way now — `AllocaInst` + load/store to **VM-local** stack
-  only. Full real pointers (external pointer args, globals, aliasing) are a
-  separate L2 step, not 1.5.
-- Calls: allow all **direct** calls in 1.5.1 (internal + declared). External
-  calls trampoline out of the VM. Indirect/virtual calls stay deferred.
-- Harness: Python orchestrator driving build/run + C/C++ self-comparing
-  case functions doing the actual output diff.
-
-### 1.5.1 — Widen IR Coverage (unblocks "Virtualize selected functions")
-
-* [x] Add integer binary: `Mul`, `And`, `Or`, `Shl`, `LShr`, `AShr`
-* [x] Add integer div/rem: `SDiv`, `UDiv`, `SRem`, `URem`
-* [x] Add unsigned compares: `UGT`, `ULT`, `UGE`, `ULE`
-* [x] Handle `PHINode` (lower to slot copies in predecessors → unlocks loops)
-* [x] Handle `AllocaInst` + `LoadInst`/`StoreInst` to **VM-local** stack
-      (middle way — local arrays/scalars; no external pointer args yet)
-* [x] Allow all **direct** `CallBase`: internal VMP'd calls + declared/external
-      callees trampoline out of the VM
-* [x] Track per-operand width/signedness instead of blind i64 promotion
-* [x] Audit `SExtOrTrunc` arg path for sign/width correctness under new ops
-
-### 1.5.2 — Refactor Handler Table (unblocks shuffling / opcode mapping / fake handlers)
-
-* [x] Replace inline `switch` with handler descriptor table (name, arity, builder)
-* [x] Make opcodes table indices, not magic numbers `1..17`
-* [x] Add per-handler arity/validation
-
-### 1.5.3 — Differential Correctness Harness (must precede any dispatch/encryption change)
-
-* [x] Build case function per opcode (binary, cmp, select, shift, div/rem)
-* [x] Add loop + nested branch + multi-return case functions
-* [x] Run each case compiled native vs VMP over input grid, compare outputs
-* [x] This is what catches the i64-promotion class of bug before L2
-
-### 1.5.4 — Baseline Benchmark + Safety Bounds
-
-* [x] Measure interpreter overhead vs native (baseline for L2 benchmark)
-* [x] Add build-time stack-depth check (current 64-slot stack silently overflows)
-* [x] Add PC bounds check in interpreter (matters once L2 encrypts bytecode)
-* [x] Add locals-slot count check (current 64 silent cap)
-
-**Definition of done for L1.5:**
-Each new opcode is differentially tested native vs VM. The dispatcher is
-table-driven so L2 can shuffle/map without rewriting the interpreter. Real
-functions (loops, pointer loads, multi-return) virtualize and pass the
-differential harness. A baseline benchmark exists so L2 overhead claims are
-measurable.
-
-## Level 2 — Practical VM
-
-Current status: the L1.5 interpreter already ships several features the
-old L2 list re-asked for. Recorded here as `[x]` so effort goes into the
-real gaps (runtime safety, cipher hardening, per-function interpreter
-diversity, callee-table hardening, anti-analysis), not into rework.
-
-Already landed at L1.5 (verified in `CodeVirtualization.cpp`):
-
-* [x] Virtualize selected functions
-* [x] Encrypt bytecode (`encryptBytecodeWord`, per-word XOR keystream in `replaceWithVM`)
-* [x] Add per-function VM key (`BytecodeKey = RNG()` per `replaceWithVM` call)
-* [x] Add bytecode decrypt at runtime (`fetchWord` re-derives the keystream)
-* [x] Add per-function opcode mapping (`OpcodeMask` XOR over every opcode word,
-      generated per function — note: single XOR *mask*, not a permutation table;
-      upgrade is a real L2 step below)
-* [x] Add handler shuffling (`std::shuffle` in `buildHandlerTable` — note:
-      shuffle is per *module* because the interpreter is a module singleton;
-      per-function divergence is a real L2 step below)
-* [x] Add VM correctness tests (L1.5.3 differential harness)
-* [x] Add performance benchmark (L1.5.4 native-vs-VMP overhead + bounds)
-
-Real L2 work, ordered so each step unblocks the next and every step closes
-one concrete failure mode. Do not reorder Phase A — every later hardening
-claim is meaningless if the VM memory-corrupts on tampered bytecode.
-
-### Phase A — Runtime memory safety (precondition for "bulletproof")
-
-The L1.5 bounds checks (stack depth, PC < bcLen, frame/locals cap) are
-*build-time only*. Once bytecode is encrypted and the key is recoverable
-(it currently is — see Phase C), a patched stream must fault cleanly,
-not write out of bounds. This phase makes the VM safe under active
-tampering before any crypto is piled on top.
-
-* [x] Add runtime SP bounds check (underflow → trap; overflow into the
-      64-slot `Stack` alloca → trap). Build-time `checkStackDepth` does
-      not help once the attacker patches bytecode at rest.
-* [x] Add runtime `Locals` slot index bounds check (`OpLoadSlot`/
-      `OpStoreSlot` currently do `Locals[slot]` with no check)
-* [x] Add runtime `Frame` slot index bounds check (`OpLoadPtr`/`OpStorePtr`
-      currently do `Frame[idx]` with no check; a patched frame index walks
-      into adjacent stack)
-* [x] Add handler-arity / PC-desync detection (if a fetch lands mid-opcode
-      because an immediate was patched, trap instead of silently skewing PC
-      for the rest of the run)
-* [x] Add div/rem-by-zero guard (`OpSDiv`/`OpUDiv`/`OpSRem`/`OpURem` —
-      defined trap, not host `#DE` killing the whole process)
-* [x] Replace silent `ret 0` Bad block with trap + tamper flag (silent
-      wrong results are worse than a loud crash; the flag feeds Phase F's
-      anti-analysis and L3's tamper-response)
-
-### Phase B — Full real pointer support (the promoted 1.5 item, decomposed)
-
-Unblocks virtualizing real C/C++ pointer-heavy functions. Each sub-step
-is independently landable and differentially testable.
-
-* [x] Add external pointer arg support (`LoadInst`/`StoreInst` through
-      pointer params via `OpLoadMem` / `OpStoreMem`)
-* [x] Add global pointer access (loads/stores through `GlobalVariable` addrs
-      via the VMP pointer table)
-* [x] Add non-constant GEP support (runtime offset via `OpGep`)
-* [x] Add alignment handling (misaligned access under VM matches native
-      semantics through bytewise memory ops)
-* [x] Add pointer aliasing differential cases (native vs VM over aliasing
-      patterns)
-* [x] Add pointer-width correctness (`ptrtoint`/`inttoptr` uses `DataLayout`
-      pointer-width gates; opaque-pointer-aware)
-
-### Phase C — Cipher & key hardening (current scheme is trivially recoverable)
-
-The L1.5 cipher is XOR with a `key + PC * golden_ratio` keystream, and
-the key is a *plaintext literal* at the call site. Hex-Rays shows
-`BytecodeKey` directly. This phase kills that leakage.
-
-* [x] Derive `BytecodeKey` at runtime from a seed + opaque computation
-      (no plaintext key literal in IR; mix with a runtime nonce like the
-      Constant Encryption L2 pass already does)
-* [x] Replace XOR+golden-ratio stream cipher with a real PRF / split-key
-      schedule (the golden-ratio LCG is a known, reversible pattern)
-* [x] Encrypt immediates with a separate layer (today only opcode *words*
-      are masked via `OpcodeMask`; immediates ride the XOR stream and
-      leak structure once the keystream is recovered)
-* [x] Upgrade opcode mapping from single XOR mask to a per-opcode
-      permutation table (`OpcodeMask` is one mask for all opcodes; a
-      per-opcode bijection defeats "find the mask, decrypt all" attacks)
-* [x] Add per-basic-block key rotation (one key per function is one
-      breakpoint for the analyst; per-BB rotation forces re-derivation
-      per block)
-* [x] Add bytecode integrity tag (HMAC/CRC computed at build, checked at
-      VM entry — patched bytecode is detected before it runs, feeds the
-      Phase A tamper flag)
-
-### Phase D — Per-function interpreter diversity
-
-Currently `getOrCreateInterpreter` returns one module-wide
-`__taokari_vmp_interp_i64`. Reversing *one* +vmp function reveals the
-handler table, opcode layout and shuffle for *every* +vmp function in
-the module. This is the single biggest force-multiplier for an analyst
-and must close before L3 polymorphism is meaningful.
-
-* [x] Add per-function interpreter clone (each +vmp fn gets its own
-      `__taokari_vmp_interp_<fn>` with its own handler table + shuffle)
-* [x] Add indirect handler dispatch (replace the recognizable `switch`
-      with an encrypted function-pointer table indexed by the decrypted
-      opcode — kills the clean switch Hex-Rays lifts for free)
-* [x] Add handler flattening (flatten each handler's internal CFG so a
-      single handler is not a one-block read)
-
-### Phase E — Callee-table hardening
-
-`finalizeCalleeTable` stores `ptrtoint(thunk)` as plaintext i64. A
-memory dump resolves every VM callee instantly, and the thunks call the
-real callee directly so the static call graph still resolves.
-
-* [x] Encrypt callee-table entries (plaintext pointer dump currently
-      hands the analyst every VM callee)
-* [x] Route thunks through the existing IndirectCall page table (reuse
-      Section 7 instead of inventing a parallel indirection)
-* [x] Obfuscate thunks themselves (BCF + MBA on argument marshaling so
-      the i64→typed-arg load pattern is not a fingerprint)
-
-### Phase F — Anti-analysis basics
-
-Without these, frequency analysis on handler hits maps every opcode in
-minutes (the most-used handler is almost certainly `OpAdd`/`OpStoreSlot`).
-
-* [ ] Add anti-frequency-analysis padding (emit dummy opcodes/handlers
-      to flatten the handler-hit histogram a tracer records)
-* [ ] Add fake opcodes (opcodes that decrypt to no-ops or to junk
-      handlers; inflate the analyst's opcode map)
-* [ ] Add fake handlers (dead switch cases that look real, never fire on
-      well-formed bytecode)
-
-### Phase G — Hardened-VM testing (bulletproof = tested under attack)
-
-The L1.5.3 harness covers *correct* IR. It does not cover what the VM
-does under tampering, optimizer pressure, or decompiler lifting.
-
-* [ ] Add bytecode-mutation fuzz harness (flip random words/bits in the
-      encrypted stream → must trap via Phase A, never memory-unsafe)
-* [ ] Add property-based differential test (random IR programs across
-      the Phase B ISA → native vs VM, shrinks on mismatch)
-* [ ] Add optimizer survival test (`opt -O2`, `-O3`, LTO must not fold
-      the encrypted bytecode or recover the runtime key)
-* [ ] Add decompiler-lift test (Hex-Rays/Ghidra/IDA snapshot of a VM'd
-      function — baseline what an analyst actually sees)
-
-### Phase H — Performance guardrails (so bulletproof stays shippable)
-
-* [ ] Add hot-loop detection (refuse to VM functions with a high
-      backedge-taken count; interpreter-in-a-hot-loop is catastrophic)
-* [ ] Add per-function overhead budget (refuse virtualization if the
-      L1.5.4 benchmark measures > N× native for this function)
-* [ ] Add bytecode size budget (cap blowup; refuse if `P.Words.size()`
-      exceeds a configurable fraction of native code size)
-
-### Reverse-engineering report follow-up
-
-* [ ] Poll the still-running full harness process (`PID 35844`) and record
-      the final result; if it fails, fix only the failing seam and rerun the
-      smallest reproducer first.
-* [ ] Add runtime integrity outside the VM for native Max/CFF code: protect
-      patched `main`/wrapper/control-flow regions, not only VM bytecode.
-* [ ] Add a function-level integrity check prototype first; verify patching a
-      protected native block trips the tamper path.
-* [ ] Add whole-binary or section-range checksum only after function-level
-      integrity works.
-* [ ] Add a verifier that patches one protected native byte and proves runtime
-      detects it without memory unsafety.
-* [ ] Harden VMP handler-set reuse: make handler layout/order/shape differ per
-      function or per build beyond current per-function interpreter cloning.
-* [ ] Add verifier that two VMP functions in one binary do not share the same
-      handler-table signature.
-* [ ] Add handler body obfuscation for VMP interpreters: apply safe BCF/MBA or
-      MIR noise to handler bodies without breaking VM correctness.
-* [ ] Add fake handler execution noise that cannot be removed by simple DBI
-      "never executed" profiling.
-* [ ] Emit anti-frequency-analysis padding opcodes by default in Max VMP, with
-      a bounded budget.
-* [ ] Add verifier that valid VMP bytecode contains padding/fake opcode hits
-      and that runtime output still matches native.
-* [ ] Strengthen fake opcodes/fake handlers so they are not only registered
-      dead cases; make them appear plausible in static and trace views.
-* [ ] Fix StringEncryption's remaining XOR-key weakness: replace single-pass
-      inline XOR-looking decode with rolling or stateful per-character mixing.
-* [ ] Add verifier that the string literal/key schedule is not recoverable as
-      adjacent encrypted bytes plus inline XOR key.
-* [ ] Harden IndirectCall thunks that still collapse to trivial `jmp target`
-      patterns in native output.
-* [ ] Add verifier that protected indirect-call thunks do not expose direct
-      static jump targets.
-* [ ] Add optimizer survival checks for runtime-rekeyed VMP bytecode under
-      `-O2`, `-O3`, and LTO.
-* [ ] Add VM bytecode mutation fuzz harness: flip encrypted words/bits and
-      require clean tamper handling, never unsafe memory access.
-* [ ] Add decompiler/IDA snapshot proof for the new VMP runtime rekey and
-      DirtyBytes guard shape when IDA is available.
-* [ ] Add PC encryption at rest in the VMP interpreter loop.
-* [ ] Add VM stack/locals encryption at rest between handlers.
-* [ ] Add interpreter self-verification for handler table/code patching.
-* [ ] Add tamper-response policy so VM/native integrity failures do not always
-      become an obvious crash.
-* [ ] Keep next work one seam per commit: implement, rebuild
-      `build\taokari-local\bin\clang.exe`, run focused verifier, run regression
-      harness, clean temp/cache files, commit locally, do not push.
-
-**Definition of done for L2:**
-Every Phase A bound fires as a clean trap (never memory unsafety) under
-a bytecode-mutation fuzzer. Real C/C++ pointer-heavy functions pass the
-differential harness (Phase B). The key is not a plaintext literal and
-the cipher survives an analyst with the binary (Phase C). Each +vmp
-function has its own interpreter and the dispatch is not a clean switch
-(Phase D). The callee table is not a plaintext pointer dump (Phase E).
-Handler frequency analysis is flat (Phase F). `-O2`/`-O3`/LTO and a
-Hex-Rays lift do not recover plaintext logic (Phase G). Overhead is
-bounded and measured per function (Phase H).
-
-## Level 3 — Fortress VM
-
-L3 takes the L2 VM from "hard per function" to "polymorphic across
-builds, hostile to emulation, and resistant to devirtualization tooling."
-Nothing here is meaningful without L2 Phases A/C/D landed first —
-polymorphism on an unsafe or cryptographically trivial VM is noise.
-
-* [ ] Add polymorphic VM builds (per-build interpreter shape: handler
-      structure, alloca layout, register/spill choices differ across two
-      builds of the same source)
-* [ ] Add per-function ISA randomization (per-function opcode *set*, not
-      just permutation — some handlers present/absent, operand encoding
-      varies, so two +vmp functions in the same binary share no ISA)
-* [ ] Add encrypted basic-block bytecode (per-BB keys + integrity tags
-      beyond the L2 per-function scheme; decryption triggered on edge
-      transfer, not at function entry)
-* [ ] Add handler MBA (apply Section 4 MBA inside each handler's
-      arithmetic so the handler body itself is not a clean lift)
-* [ ] Add handler BCF (apply Section 3 BCF to each handler so the
-      handler CFG is not trivially readable)
-* [ ] Add fake opcodes (promote from L2 Phase F once the runtime
-      tolerates them, or land directly here as fortress-tier)
-* [ ] Add fake handlers (same)
-* [ ] Add bytecode integrity checks (promote from L2 Phase C, or land
-      here as cross-function/rolling integrity rather than entry-only)
-* [ ] Add anti-frequency-analysis padding (promote from L2 Phase F, or
-      land here as trace-resistance rather than histogram flattening)
-* [ ] Add VM devirtualization test samples (canonical samples an analyst
-      would feed to a devirt tool — must fail to lift cleanly)
-* [ ] Add heavy warning for overhead (Fortress VM is expensive; the pass
-      must refuse silently slowing a release build without an explicit
-      opt-in)
-
-L3 fortress additions beyond the original list — these are what make the
-VM hostile to *automated* reversing, not just manual reading:
-
-* [ ] Add PC encryption (PC is a plain i64 alloca; a debugger reads
-      control flow for free — encrypt the PC register at rest between
-      fetches)
-* [ ] Add stack/locals encryption at rest between handlers (operand
-      stack and Locals are plaintext i64 arrays; encrypt in the gaps so
-      a memory snapshot does not reveal intermediate values)
-* [ ] Add anti-debug/anti-trace inside the interpreter loop
-      (single-stepping dispatch reveals every handler — gate on
-      Section 12 Dynamic Protections when available)
-* [ ] Add anti-emulation (env/timing checks so the VM refuses to run
-      under a scriptable lifter — the VM must run on real hardware)
-* [ ] Add tamper-response policy (Phase A's tamper flag triggers
-      silent-wrong-results, slow-decay, or trap depending on config —
-      never an obvious crash that tells the analyst they hit a check)
-* [ ] Add VM self-verification (interpreter hashes its own handler
-      table before running; patched handler → tamper flag)
-* [ ] Add cross-function VM state (shared obfuscated runtime so a
-      single +vmp function cannot be lifted in isolation — its
-      handlers depend on module-wide state)
-* [ ] Add per-build handler-table obfuscation seed (two builds of the
-      same source produce structurally different handler tables, so a
-      signature from one build does not match the next)
-
-**Definition of done for L3:**
-Selected functions should not resemble native code logic anymore.
-Two builds of the same source should not share a VM signature. A
-devirtualization tool fed the L3 samples should fail to lift cleanly.
-Tampering (bytecode patch, handler patch, single-step trace, memory
-snapshot) should be detected and routed through the tamper-response
-policy rather than producing an obvious crash. Overhead is heavy,
-measured, and gated behind an explicit opt-in.
+# 8. Suggested Next 15 Development Commits
+
+This is the “do this next without thinking too much” queue.
+
+1. [x] 📚 Document `-taokari-max`, `-taokari-max-no-vmp` and VMP budget behaviour in `docs/CONFIGURATION.md`.
+2. [x] Finish MIR config keys per sub-pass.
+3. [x] Add per-function VMP overhead budget.
+4. [x] Add VMP decompiler snapshot verifier that skips if IDA/Ghidra is unavailable.
+5. [x] Add BCF multi-layer bogus graphs.
+6. [x] Add BCF dispatcher fake-case integration.
+7. [x] Add MBA on flattening dispatch-state updates.
+8. [x] Add constant encryption per-function pool.
+9. [x] Add encrypted constant pool.
+10. [x] Add indirect constant references through helper shards.
+11. [x] Add post-link `.text` hash patching prototype.
+12. [ ] Add Linux build instructions and smoke test.
+13. [x] Add new-PM blocker document.
+14. [x] Add config wizard prototype.
+15. [x] Add release dashboard summary for Tier A/B/C/D.
 
 ---
 
-# 14. Configuration / Annotations
-
-Current status: partially present.
-Goal: make Taokari controllable instead of “all or nothing”.
-
-## Level 1 — Config Documentation
-
-* [ ] Document all current JSON keys
-* [ ] Document all current flags
-* [ ] Document all current levels
-* [ ] Add examples for each pass
-* [ ] Add config validation
-* [ ] Add error messages for invalid keys
-* [ ] Add default config file
-
-## Level 2 — Per-Function Control
-
-* [x] Add annotation: `fla`
-* [x] Add annotation: `bcf`
-* [x] Add annotation: `mba`
-* [x] Add annotation: `icall`
-* [x] Add annotation: `indbr`
-* [x] Add annotation: `indgv`
-* [x] Add annotation: `strenc` (alias `cse`)
-* [x] Add annotation: `constenc` (alias `cie`)
-* [x] Add annotation: `noobf`
-
-## Level 3 — Profiles
-
-* [ ] Add profile: `dev`
-* [ ] Add profile: `balanced`
-* [ ] Add profile: `strong`
-* [ ] Add profile: `fortress`
-* [ ] Add per-pass budget system
-* [ ] Add max binary size growth limit
-* [ ] Add max compile time growth limit
-* [ ] Add max runtime overhead target
-* [ ] Add config report output
-* [ ] Add final build summary
-
-**Definition of done for L3:**
-A user should be able to protect only sensitive functions with a sane profile and predictable overhead.
-
----
-
-# 15. Testing / Verification / Benchmarks
-
-Current status: basic test harness exists.
-This is required before Taokari can become serious.
-
-## Level 1 — Expand Tests
-
-* [x] Current test harness exists
-* [x] Add all pass flags to matrix
-* [x] Add levels 0–3 to matrix
-* [x] Add C test
-* [x] Add C++ test
-* [x] Add template test
-* [x] Add exception test
-* [x] Add virtual call test
-* [x] Add global variable test
-* [x] Add string test
-* [x] Add constant test
-
-## Level 2 — Measure Costs
-
-* [ ] Record binary size
-* [ ] Record compile time
-* [ ] Record runtime
-* [ ] Record number of transformed functions
-* [ ] Record number of transformed instructions
-* [ ] Record number of obfuscated strings
-* [ ] Record number of obfuscated constants
-* [ ] Add CSV output
-* [ ] Add JSON output
-
-## Level 3 — Attack-Oriented Verification
-
-* [ ] Run `opt -O2` survival tests
-* [ ] Run `opt -O3` survival tests
-* [ ] Run LTO survival tests
-* [ ] Add decompiler snapshot tests
-* [ ] Add string leak tests
-* [ ] Add symbol leak tests
-* [ ] Add CFG complexity metric
-* [ ] Add call graph breakage metric
-* [ ] Add regression dashboard
-* [ ] Add release-blocking test mode
-
-**Definition of done for L3:**
-Every new pass must prove three things: it still runs correctly, it costs an acceptable amount, and it survives obvious cleanup attacks.
-
----
-
-# 16. Build System / LLVM Future-Proofing
-
-Current status: legacy PM only.
-Not urgent, but must be tracked.
-
-## Level 1 — Build Cleanup
-
-* [ ] Remove stale `C:\Arkari` cache assumptions
-* [ ] Document `configure-release.ps1`
-* [ ] Document `VCPKG_ROOT`
-* [ ] Add clean Windows build instructions
-* [ ] Add clean Linux build instructions
-* [ ] Add CI build check
-
-## Level 2 — New Pass Manager Planning
-
-* [ ] List all legacy passes
-* [ ] Identify new-PM migration blockers
-* [ ] Create new-PM wrapper prototype
-* [ ] Port one simple module pass
-* [ ] Port one simple function pass
-* [ ] Test with current LLVM pipeline
-
-## Level 3 — New-PM Compatibility
-
-* [ ] Port all major passes
-* [ ] Keep legacy PM compatibility
-* [ ] Add new-PM test matrix
-* [ ] Add clang pipeline tests
-* [ ] Add docs for both modes
-* [ ] Add migration guide
-
-**Definition of done for L3:**
-Taokari should survive future LLVM changes instead of being trapped in one legacy pipeline forever.
-
----
-
-# 17. Suggested Release Profiles
-
-## Profile: Dev
-
-Purpose: fast compile, easy debugging.
-
-* [ ] Metadata strip only
-* [ ] Light string encryption
-* [ ] Light constant encryption
-* [ ] No flattening
-* [ ] No BCF
-* [ ] No MBA
-* [ ] No dynamic checks
-
-## Profile: Balanced
-
-Purpose: good protection without insane overhead.
-
-* [ ] Flatten selected functions
-* [ ] String encryption L2
-* [ ] Constant encryption L2
-* [ ] Indirect calls L1/L2
-* [ ] Metadata strip L2
-* [ ] Light MBA
-* [ ] Light BCF
-
-## Profile: Strong
-
-Purpose: serious IP protection.
-
-* [ ] Flattening L2
-* [ ] Opaque predicates L2
-* [ ] BCF L2
-* [ ] MBA L2
-* [ ] String encryption L2/L3
-* [ ] Constant encryption L3
-* [ ] Indirect calls L2/L3
-* [ ] Function outlining L2
-* [ ] Metadata strip L3
-
-## Profile: Fortress
-
-Purpose: maximum practical protection for sensitive functions only.
-
-* [ ] Flattening L3
-* [ ] Opaque predicates L3
-* [ ] BCF L3
-* [ ] MBA L3
-* [ ] String encryption L3
-* [ ] Constant encryption L3
-* [ ] Indirect calls L3
-* [ ] Indirect branches L3
-* [ ] Indirect globals L3
-* [ ] Function outlining L3
-* [ ] Dynamic protections L3
-* [ ] Optional virtualization L3
-* [ ] Full benchmark required
-* [ ] Full regression suite required
-
----
-
-# 18. Suggested Implementation Order
-
-## Milestone 1 — Stabilize Arkari Base
-
-* [ ] Expand tests
-* [ ] Add config docs
-* [ ] Add size thresholds
-* [ ] Add safer skip logic
-* [ ] Audit current passes
-
-## Milestone 2 — Add Opaque Predicate Core
-
-* [ ] Implement opaque predicate engine
-* [ ] Add optimizer survival tests
-* [ ] Integrate with flattening
-* [ ] Integrate with future BCF
-
-## Milestone 3 — Add Bogus Control Flow
-
-* [ ] Implement BCF L1
-* [ ] Add BCF L2
-* [ ] Combine with flattening
-* [ ] Benchmark overhead
-
-## Milestone 4 — Add MBA
-
-* [ ] Implement MBA L1
-* [ ] Add optimizer resistance
-* [ ] Add MBA to decryptors
-* [ ] Add hot-loop avoidance
-
-## Milestone 5 — Harden Data Protection
-
-* [ ] StringEnc L2
-* [ ] StringEnc L3
-* [ ] ConstantEnc L2
-* [ ] ConstantEnc L3
-* [ ] Metadata strip L3
-
-## Milestone 6 — Add Function Outlining
-
-* [ ] Basic outlining
-* [ ] Indirect shard calls
-* [ ] Fake shard graph
-* [ ] Cross-pass tests
-
-## Milestone 7 — Add Dynamic Protections
-
-* [ ] Runtime checks L1
-* [ ] Distributed checks L2
-* [ ] Function integrity L3
-* [ ] Post-link patching
-
-## Milestone 8 — Optional VM
-
-* [ ] VM prototype
-* [ ] Bytecode encryption
-* [ ] Per-function ISA
-* [ ] Handler obfuscation
-
----
-
-# 19. Personal Priority List
-
-Most impact for Taokari first:
-
-1. [ ] Opaque predicate engine
-2. [ ] Bogus control flow
-3. [ ] Stronger flattening
-4. [ ] Runtime-mixed constant encryption
-5. [ ] StringEnc status hardening
-6. [ ] MBA pass
-7. [ ] Metadata stripping
-8. [ ] Function outlining
-9. [ ] Dynamic protections
-10. [ ] Optional virtualization
-
----
-
-# 20. Final Goal
-
-Taokari should become more than “Arkari with a new name”.
-
-The final identity should be:
-
-* Fast enough for real C++ projects
-* Stronger than classic OLLVM
-* Cleaner than random GitHub obfuscators
-* Configurable per function
-* Stable on Windows x64
-* Prepared for AArch64
-* Hard to decompile
-* Hard to simplify
-* Hard to fingerprint
-* Hard to patch
-* Still testable and maintainable
-
----
-
-# 21. Machine IR (CodeGen) Obfuscation
-
-Current status: Level 1 infrastructure done.
-This is the layer categorically absent from earlier sections — every other
-section runs on LLVM IR and is therefore visible to IR-level tools and to the
-Hex-Rays microcode lifter in clean form. D810's default rule sets recognise
-and collapse classic OLLVM-class IR patterns; the MIR layer survives because
-it runs in the codegen pipeline, after register allocation and scheduling, so
-its output reaches the binary below the point Hex-Rays lifts from. See
-`docs/MACHINE_IR_OBFUSCATION.md`.
-
-## Level 1 — Infrastructure
-
-* [x] Add `TaokariMachineObf` directory under `llvm/lib/CodeGen/`
-* [x] Add `MachineFunctionPass` base helper (dual legacy + new-PM, mirroring `lib/CodeGen/FEntryInserter.cpp`)
-* [x] Add X86 `TargetPassConfig` hook in `addPreEmitPass()`
-* [x] Add `-mllvm -taokari-mir=<passes>` flag
-* [x] Add annotation: `mir`
-* [x] Add per-function enable/disable (`+mir` opt-in, `-mir` opt-out)
-* [x] Add smoke test: pass runs, binary still executes correctly (`testing/scripts/verify_machine_obf_level1.py`)
-* [x] Document MIR pass registration for legacy PM (`docs/MACHINE_IR_OBFUSCATION.md`)
-
-**Definition of done for L1:**
-The MIR pass is scheduled in the X86 codegen pipeline, gated by the flag and
-the annotation, emits a semantically-neutral marker that survives to the
-binary, and a no-op on program behavior is verified end to end. The full
-obfuscation regression matrix stays green (57 PASS / 0 FAIL).
-
-## Level 2 — Core MIR Passes
-
-* [x] Parse the `-taokari-mir=<passes>` comma-list into individual sub-passes
-* [x] Add dirty bytes insertion (anti-disassembly)
-* [x] Add junk instructions with real side effects (anti-dataflow)
-* [x] Add machine-level instruction substitution (anti-microcode-lift, e.g. add -> lea)
-* [x] Add opaque predicate engine at MIR level for the dirty-bytes guard
-* [x] Add per-pass probability
-* [~] Add config keys per MIR sub-pass
-* [x] Add annotation: per-sub-pass (`mir:dirtybytes`, etc.)
-* [x] Add correctness tests for each sub-pass
-* [x] Add post-RA correctness checks (no broken liveness)
-* [x] Add binary-level survival tests (not stripped by AsmPrinter / peephole)
-* [x] Verify no IR-level analysis can repair the MIR output
-
-## Level 3 — Fortress MIR
-
-* [x] Add function splitting / boundary corruption (anti-function-recognition)
-* [x] Add fake prologue / epilogue byte patterns between real functions
-* [x] Add unmodelled instruction emission (anti-microcode-lift, Fortress only)
-* [x] Add runtime-dependent dirty-byte guards
-* [x] Add cross-pass integration with flattening / indirect-branch
-* [x] Add decompiler snapshot tests (Hex-Rays output before/after)
-* [x] Add CFG fragmentation metric
-* [x] Add performance budget for the Fortress profile
-* [x] Add AArch64 MIR parity planning
-
-**Definition of done for L3:**
-A protected function should produce garbage microcode for Hex-Rays and should
-not be cleanly liftable without emulation. The protection must survive D810's
-default rule sets because it is below the layer D810 operates on.
+# 9. Definition of Done for the Next Roadmap Version
+
+- [x] Every open task belongs to exactly one track.
+- [x] Every track has a clear goal.
+- [ ] Every implementation task has a verifier task nearby.
+- [x] Every partial item is either completed or split into smaller checkboxes.
+- [x] Every profile has a compile-time, runtime and size budget.
+- [x] Every tier has a correctness gate and a gnarliness gate.
+- [x] The roadmap stays short enough to fit in one readable GitHub issue or project board.

@@ -28,7 +28,7 @@ using namespace llvm;
 // avoid pulling NoFolder into the public Utils.h header.
 namespace llvm {
 Value *buildMBAAdd(IRBuilder<NoFolder> &IRB, Value *A, Value *B,
-                   const Twine &Name);
+                   const Twine &Name, uint64_t Salt);
 } // namespace llvm
 
 // Number of distinct decryptor loop shapes the polymorphic decryptor builder
@@ -58,16 +58,22 @@ static CallInst *createDecryptorCall(IRBuilder<> &IRB, Value *Callee,
   return IRB.CreateCall(DecFunc->getFunctionType(), Callee, Args);
 }
 
+static uint32_t deriveStringMix(uint32_t BuildNonce, unsigned Shift,
+                                uint32_t Mask) {
+  return ((BuildNonce >> Shift) & Mask) | 1u;
+}
+
 struct StringEncryption : public ModulePass {
   static char ID;
 
   struct CSPEntry {
     CSPEntry()
-        : ID(0), Offset(0), DecGV(nullptr), DecStatus(nullptr),
+        : ID(0), Offset(0), EncGapBytes(0), DecGV(nullptr), DecStatus(nullptr),
           PendingStatus(0), DoneStatus(0), IsUTF16(false), PoolIndex(0) {}
 
     unsigned ID;
     unsigned Offset;
+    unsigned EncGapBytes;
     GlobalVariable *DecGV;
     GlobalVariable *DecStatus; // is decrypted or not
     uint32_t PendingStatus;
@@ -459,9 +465,9 @@ bool StringEncryption::runOnModule(Module &M) {
 }
 
 void StringEncryption::emitShardedPools(Module &M) {
-  // layout: | junk bytes | key 1 | encrypted string 1 | junk bytes | key 2 |
-  // encrypted string 2 | ...  Each pool is a separate global when sharding is
-  // enabled; otherwise everything lands in one global (the classic L2 shape).
+  // Each pool is a separate global when sharding is enabled; otherwise
+  // everything lands in one global. Per-entry head/tail junk breaks the old
+  // repeated |junk|key|cipher| cadence without changing the decryptor ABI.
   const unsigned PoolCount = UseShardedPool ? 4u : 1u;
   std::vector<std::vector<uint8_t>> PoolBytes(PoolCount);
   std::vector<uint8_t> JunkBytes;
@@ -483,19 +489,34 @@ void StringEncryption::emitShardedPools(Module &M) {
     Entry->Offset = static_cast<unsigned>(Data.size());
     if (!Entry->IsUTF16) {
       Data.insert(Data.end(), Entry->EncKey.begin(), Entry->EncKey.end());
-      Data.insert(Data.end(), Entry->Data.begin(), Entry->Data.end());
     } else {
       // for UTF-16: write keys as little-endian uint16_t bytes
       for (uint16_t w : Entry->EncKey16) {
         Data.push_back(static_cast<uint8_t>(w & 0xff));
         Data.push_back(static_cast<uint8_t>((w >> 8) & 0xff));
       }
+    }
+
+    Entry->EncGapBytes = 1u + static_cast<unsigned>(RNG() % 16u);
+    if (Entry->IsUTF16 && (Entry->EncGapBytes % 2u) != 0)
+      ++Entry->EncGapBytes;
+    JunkBytes.clear();
+    getRandomBytes(JunkBytes, Entry->EncGapBytes, Entry->EncGapBytes);
+    Data.insert(Data.end(), JunkBytes.begin(), JunkBytes.end());
+
+    if (!Entry->IsUTF16) {
+      Data.insert(Data.end(), Entry->Data.begin(), Entry->Data.end());
+    } else {
       // append Data16 as little-endian bytes
       for (uint16_t w : Entry->Data16) {
         Data.push_back(static_cast<uint8_t>(w & 0xff));
         Data.push_back(static_cast<uint8_t>((w >> 8) & 0xff));
       }
     }
+
+    JunkBytes.clear();
+    getRandomBytes(JunkBytes, 1, 16);
+    Data.insert(Data.end(), JunkBytes.begin(), JunkBytes.end());
   }
 
   LLVMContext &Ctx = M.getContext();
@@ -526,7 +547,7 @@ void StringEncryption::emitShardedPools(Module &M) {
       PoolPageKeys[C] = RNG();
     PoolPtrEncKey = RNG();
     CreatePageTableArgs Args{};
-    Args.CountLoop = 1;
+    Args.CountLoop = chooseModulePageTableDepth(RNG);
     Args.GVNamePrefix = M.getName().str() + "_StringPools";
     Args.RNG = &RNG;
     Args.M = &M;
@@ -628,8 +649,9 @@ uint8_t StringEncryption::mixKey8(uint8_t Key, uint32_t KeyIndex,
                                   const CSPEntry *Entry) const {
   uint32_t Mixed = Key;
   Mixed ^= (BuildNonce >> ((Position & 3) * 8)) & 0xffu;
-  Mixed ^= ((Entry->ID + 1u) * 0x5du) & 0xffu;
-  Mixed ^= ((Position + 1u) * 0x3bu + KeyIndex * 0x11u) & 0xffu;
+  Mixed ^= ((Entry->ID + 1u) * deriveStringMix(BuildNonce, 0, 0xffu)) & 0xffu;
+  Mixed ^= ((Position + 1u) * deriveStringMix(BuildNonce, 8, 0xffu) +
+            KeyIndex * deriveStringMix(BuildNonce, 16, 0xffu)) & 0xffu;
   return static_cast<uint8_t>(Mixed);
 }
 
@@ -638,8 +660,10 @@ uint16_t StringEncryption::mixKey16(uint16_t Key, uint32_t KeyIndex,
                                     const CSPEntry *Entry) const {
   uint32_t Mixed = Key;
   Mixed ^= (BuildNonce >> ((Position & 1) * 16)) & 0xffffu;
-  Mixed ^= ((Entry->ID + 1u) * 0x45d9u) & 0xffffu;
-  Mixed ^= ((Position + 1u) * 0x9e37u + KeyIndex * 0x0101u) & 0xffffu;
+  Mixed ^= ((Entry->ID + 1u) * deriveStringMix(BuildNonce, 0, 0xffffu)) &
+           0xffffu;
+  Mixed ^= ((Position + 1u) * deriveStringMix(BuildNonce, 16, 0xffffu) +
+            KeyIndex * deriveStringMix(BuildNonce, 8, 0xffffu)) & 0xffffu;
   return static_cast<uint16_t>(Mixed);
 }
 
@@ -715,9 +739,8 @@ void StringEncryption::getRandomBytes(std::vector<T> &Bytes, uint32_t MinSize,
 // Shared signature:
 //   void @goron_decrypt_string_iN(
 //       ptr plain_string, ptr data, i32 key_elem_size, i32 data_size,
-//       ptr dec_status, i32 done_status, i32 string_id, i32 build_nonce,
-//       i32 pool_offset)
-// pool_offset selects which shard global `data` came from (L3).
+//       i32 enc_gap_bytes, ptr dec_status, i32 done_status,
+//       i32 string_id, i32 build_nonce)
 Function *StringEncryption::buildSharedDecryptFunction(
     Module *M, bool IsUTF16, unsigned Variant, bool UseDecryptorMBA,
     bool UseFlattening, uint32_t BuildNonce) {
@@ -730,7 +753,7 @@ Function *StringEncryption::buildSharedDecryptFunction(
 
   FunctionType *FuncTy = FunctionType::get(
       Type::getVoidTy(Ctx),
-      {PtrTy, PtrTy, I32Ty, I32Ty, PtrTy, I32Ty, I32Ty, I32Ty}, false);
+      {PtrTy, PtrTy, I32Ty, I32Ty, I32Ty, PtrTy, I32Ty, I32Ty, I32Ty}, false);
   // The base name is kept stable across variants so the L1 verifier (and any
   // external symbol matchers) still find the decryptor; the variant only
   // changes the IR shape, not the symbol name.
@@ -746,6 +769,7 @@ Function *StringEncryption::buildSharedDecryptFunction(
   Argument *Data = ArgIt++;
   Argument *KeyElemSizeArg = ArgIt++;
   Argument *DataSizeArg = ArgIt++;
+  Argument *EncGapBytesArg = ArgIt++;
   Argument *DecStatusArg = ArgIt++;
   Argument *DoneStatusArg = ArgIt++;
   Argument *StringIDArg = ArgIt++;
@@ -761,6 +785,7 @@ Function *StringEncryption::buildSharedDecryptFunction(
   Data->addAttrs(NoCaptureAttrBuilder);
   KeyElemSizeArg->setName("key_elem_size");
   DataSizeArg->setName("data_size");
+  EncGapBytesArg->setName("enc_gap_bytes");
   DecStatusArg->setName("dec_status");
   DecStatusArg->addAttrs(NoCaptureAttrBuilder);
   DoneStatusArg->setName("done_status");
@@ -781,8 +806,9 @@ Function *StringEncryption::buildSharedDecryptFunction(
   // key_elem_size * 2
   Value *KeySizeBytesVal = IsUTF16 ? IRB.CreateShl(KeyElemSizeArg, 1)
                                    : static_cast<Value *>(KeyElemSizeArg);
+  Value *EncOffset = IRB.CreateAdd(KeySizeBytesVal, EncGapBytesArg);
 
-  Value *EncPtr = IRB.CreateInBoundsGEP(IRB.getInt8Ty(), Data, KeySizeBytesVal);
+  Value *EncPtr = IRB.CreateInBoundsGEP(IRB.getInt8Ty(), Data, EncOffset);
   Value *DecStatus = IRB.CreateLoad(I32Ty, DecStatusArg);
   // Variant 0: plain status load. Variant 1: volatile status load (extra
   // memory dependency an analyst must follow). Both compare against
@@ -819,14 +845,21 @@ Function *StringEncryption::buildSharedDecryptFunction(
   Value *NoncePart = IRB.CreateLShr(BuildNonceArg, Shift);
   Value *Mask = IRB.getInt32(IsUTF16 ? 0xffff : 0xff);
   NoncePart = IRB.CreateAnd(NoncePart, Mask);
+
+  auto BuildMix = [&](unsigned ShiftBits) -> Value * {
+    Value *Part = IRB.CreateLShr(BuildNonceArg, IRB.getInt32(ShiftBits));
+    Part = IRB.CreateAnd(Part, Mask);
+    return IRB.CreateOr(Part, IRB.getInt32(1));
+  };
+  const unsigned PositionMixShift = IsUTF16 ? 16 : 8;
+  const unsigned KeyIndexMixShift = IsUTF16 ? 8 : 16;
   Value *StringPart = IRB.CreateMul(IRB.CreateAdd(StringIDArg, IRB.getInt32(1)),
-                                    IRB.getInt32(IsUTF16 ? 0x45d9 : 0x5d));
+                                    BuildMix(0));
   StringPart = IRB.CreateAnd(StringPart, Mask);
   Value *PositionPart =
       IRB.CreateMul(IRB.CreateAdd(LoopCounter, IRB.getInt32(1)),
-                    IRB.getInt32(IsUTF16 ? 0x9e37 : 0x3b));
-  Value *KeyIndexPart =
-      IRB.CreateMul(KeyIdx, IRB.getInt32(IsUTF16 ? 0x0101 : 0x11));
+                    BuildMix(PositionMixShift));
+  Value *KeyIndexPart = IRB.CreateMul(KeyIdx, BuildMix(KeyIndexMixShift));
   PositionPart = IRB.CreateAnd(IRB.CreateAdd(PositionPart, KeyIndexPart), Mask);
   Value *MixedKey = IRB.CreateXor(KeyCharZext, NoncePart);
   MixedKey = IRB.CreateXor(MixedKey, StringPart);
@@ -970,7 +1003,8 @@ Function *StringEncryption::buildSharedScrubFunction(Module *M, bool IsUTF16) {
   PointerType *PtrTy = PointerType::getUnqual(Ctx);
   Type *I32Ty = Type::getInt32Ty(Ctx);
   FunctionType *FuncTy = FunctionType::get(
-      Type::getVoidTy(Ctx), {PtrTy, PtrTy, I32Ty, I32Ty, PtrTy, I32Ty}, false);
+      Type::getVoidTy(Ctx), {PtrTy, PtrTy, I32Ty, I32Ty, I32Ty, PtrTy, I32Ty},
+      false);
   Function *ScrubFunc = Function::Create(
       FuncTy, GlobalValue::PrivateLinkage,
       IsUTF16 ? "goron_scrub_string_i16" : "goron_scrub_string_i8", M);
@@ -982,6 +1016,7 @@ Function *StringEncryption::buildSharedScrubFunction(Module *M, bool IsUTF16) {
   Argument *Data = ArgIt++;
   Argument *KeyElemSizeArg = ArgIt++;
   Argument *DataSizeArg = ArgIt++;
+  Argument *EncGapBytesArg = ArgIt++;
   Argument *DecStatusArg = ArgIt++;
   Argument *PendingStatusArg = ArgIt;
 
@@ -989,6 +1024,7 @@ Function *StringEncryption::buildSharedScrubFunction(Module *M, bool IsUTF16) {
   Data->setName("data");
   KeyElemSizeArg->setName("key_elem_size");
   DataSizeArg->setName("data_size");
+  EncGapBytesArg->setName("enc_gap_bytes");
   DecStatusArg->setName("dec_status");
   PendingStatusArg->setName("pending_status");
 
@@ -999,7 +1035,8 @@ Function *StringEncryption::buildSharedScrubFunction(Module *M, bool IsUTF16) {
   IRB.SetInsertPoint(Enter);
   Value *KeySizeBytesVal = IsUTF16 ? IRB.CreateShl(KeyElemSizeArg, 1)
                                    : static_cast<Value *>(KeyElemSizeArg);
-  Value *EncPtr = IRB.CreateInBoundsGEP(IRB.getInt8Ty(), Data, KeySizeBytesVal);
+  Value *EncOffset = IRB.CreateAdd(KeySizeBytesVal, EncGapBytesArg);
+  Value *EncPtr = IRB.CreateInBoundsGEP(IRB.getInt8Ty(), Data, EncOffset);
   IRB.CreateBr(LoopBody);
 
   IRB.SetInsertPoint(LoopBody);
@@ -1172,7 +1209,8 @@ bool StringEncryption::processConstantStringUse(Function *F) {
     Value *Callee = resolveDecryptorCallee(IRB, DecFunc);
     fixEH(createDecryptorCall(IRB, Callee, DecFunc,
                               {OutBuf, Data, IRB.getInt32(KeyElemSize),
-                               IRB.getInt32(DataSize), StatusPtr,
+                               IRB.getInt32(DataSize),
+                               IRB.getInt32(Entry->EncGapBytes), StatusPtr,
                                IRB.getInt32(Entry->DoneStatus),
                                IRB.getInt32(Entry->ID),
                                IRB.getInt32(BuildNonce)}));
@@ -1214,7 +1252,8 @@ bool StringEncryption::processConstantStringUse(Function *F) {
           Entry->IsUTF16 ? SharedScrubFuncI16 : SharedScrubFuncI8;
       fixEH(IRB.CreateCall(ScrubFunc,
                            {OutBuf, Data, IRB.getInt32(KeyElemSize),
-                            IRB.getInt32(DataSize), Entry->DecStatus,
+                            IRB.getInt32(DataSize),
+                            IRB.getInt32(Entry->EncGapBytes), Entry->DecStatus,
                             IRB.getInt32(Entry->PendingStatus)}));
     }
     // L3 delayed-decrypt: always scrub the temporary buffer (stack or heap)
@@ -1227,7 +1266,8 @@ bool StringEncryption::processConstantStringUse(Function *F) {
       IRB.CreateStore(IRB.getInt32(Entry->PendingStatus), TmpStatus);
       fixEH(IRB.CreateCall(ScrubFunc,
                            {OutBuf, Data, IRB.getInt32(KeyElemSize),
-                            IRB.getInt32(DataSize), TmpStatus,
+                            IRB.getInt32(DataSize),
+                            IRB.getInt32(Entry->EncGapBytes), TmpStatus,
                             IRB.getInt32(Entry->PendingStatus)}));
     }
   };
@@ -1283,7 +1323,8 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                 fixEH(createDecryptorCall(
                     IRB, Callee, DecFunc,
                     {OutBuf, Data, IRB.getInt32(KeyElemSize),
-                     IRB.getInt32(DataSize), Entry->DecStatus,
+                     IRB.getInt32(DataSize), IRB.getInt32(Entry->EncGapBytes),
+                     Entry->DecStatus,
                      IRB.getInt32(Entry->DoneStatus), IRB.getInt32(Entry->ID),
                      IRB.getInt32(BuildNonce)}));
 
@@ -1426,9 +1467,10 @@ void StringEncryption::flattenDecryptor(Function &F, uint32_t BuildNonce) {
   Switch->addCase(IRB.getInt32(1), Succ1);
   // Add a couple of junk cases pointing at the trap to bulk out the table
   // without changing reachability. Mask junk values out of the real range.
-  unsigned JunkSeed = (BuildNonce >> 8) ^ 0x9e3779b9u;
+  unsigned JunkSeed = (BuildNonce >> 8) ^ (BuildNonce << 7) ^ (BuildNonce | 1u);
   for (unsigned I = 0; I < 3; ++I) {
-    unsigned Junk = 2u + ((JunkSeed + I * 0x100u) & 0x7fffffu);
+    unsigned Junk = 2u + ((JunkSeed + I * deriveStringMix(BuildNonce, 16, 0xffu)) &
+                          0x7fffffu);
     if (Junk <= 1)
       continue;
     Switch->addCase(IRB.getInt32(Junk), Trap);

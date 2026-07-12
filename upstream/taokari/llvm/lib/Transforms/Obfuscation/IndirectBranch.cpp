@@ -213,7 +213,7 @@ struct IndirectBranch : public FunctionPass {
     PtrEncKey = RNG();
 
     CreatePageTableArgs createPageTableArgs;
-    createPageTableArgs.CountLoop = 1;
+    createPageTableArgs.CountLoop = chooseModulePageTableDepth(RNG);
     createPageTableArgs.GVNamePrefix = M.getName().str() + "_IndirectBr";
     createPageTableArgs.RNG = &RNG;
     createPageTableArgs.M = &M;
@@ -222,6 +222,10 @@ struct IndirectBranch : public FunctionPass {
     createPageTableArgs.ObjectKeys = &BBKeys;
     createPageTableArgs.OutPageTable = &BBPageTable;
     createPageTableArgs.PtrEncKey = PtrEncKey;
+    // L2+: pad with a per-build decoy count so table size does not expose
+    // a fixed real-target ratio.
+    createPageTableArgs.FakeEntries = chooseFakeEntryCount(
+        RNG, static_cast<unsigned>(BBAddrTargets.size()));
 
     createPageTable(createPageTableArgs);
     return false;
@@ -270,10 +274,12 @@ struct IndirectBranch : public FunctionPass {
 
     SmallVector<GlobalVariable *, 8> FuncBBPageTable;
     DenseMap<Constant *, unsigned>   FuncBBIndex;
+    unsigned                         FuncPageDepth = 0;
 
     if (opt.level()) {
+      FuncPageDepth = choosePageTableDepth(RNG, opt.level());
       CreatePageTableArgs createPageTableArgs;
-      createPageTableArgs.CountLoop = opt.level();
+      createPageTableArgs.CountLoop = FuncPageDepth;
       createPageTableArgs.GVNamePrefix =
           M.getName().str() + Fn.getName().str() + "_IndirectBr";
       createPageTableArgs.M = &M;
@@ -283,17 +289,28 @@ struct IndirectBranch : public FunctionPass {
       createPageTableArgs.ObjectKeys = &FuncKeys;
       createPageTableArgs.OutPageTable = &FuncBBPageTable;
       createPageTableArgs.PtrEncKey = PtrEncKey;
+      // L2+ fake entries: same idea as the module-level padding but on
+      // the per-function page table, so function-local tables vary too.
+      createPageTableArgs.FakeEntries = chooseFakeEntryCount(
+          RNG, static_cast<unsigned>(FuncBBs.size()));
 
       enhancedPageTable(createPageTableArgs, &FuncBBIndex);
     }
 
     auto *IntTy = getPageTableIntTy(M);
+    // Per-branch probability gate: caps how many conditional branches per
+    // function get rewritten, bounding compile time and binary size. The
+    // ObfOpt probability defaults to 101 (unset) meaning "convert all".
+    unsigned Prob = opt.probability() <= 100 ? opt.probability() : 100;
     for (auto BI : FuncBrs) {
       if (BI && BI->isConditional()) {
         if (isTrapLikeBlock(BI->getSuccessor(0)) ||
             isTrapLikeBlock(BI->getSuccessor(1))) {
           continue;
         }
+        if (Prob < 100 &&
+            std::uniform_int_distribution<unsigned>(1, 100)(RNG) > Prob)
+          continue;
         IRBuilder<> IRB(BI);
 
         auto Cond = BI->getCondition();
@@ -314,7 +331,7 @@ struct IndirectBranch : public FunctionPass {
         auto NextIndex = IRB.CreateSelect(Cond, TIndex, FIndex);
 
         BuildDecryptArgs buildDecrypt;
-        buildDecrypt.FuncLoopCount = opt.level();
+        buildDecrypt.FuncLoopCount = FuncPageDepth;
         buildDecrypt.NextIndex = 0;
         buildDecrypt.NextIndexValue = NextIndex;
         buildDecrypt.Fn = &Fn;
@@ -325,6 +342,11 @@ struct IndirectBranch : public FunctionPass {
         buildDecrypt.ModuleKey = BBKeys[AddrTBB];
         buildDecrypt.FuncKey = FuncKeys[AddrTBB];
         buildDecrypt.PtrEncKey = PtrEncKey;
+        // L2+: match IndirectCall's nonce mixing, MBA index decrypt,
+        // and branch target verification.
+        buildDecrypt.RuntimeSeed = opt.level() > 1 ? RNG() : 0;
+        buildDecrypt.UseMBA = opt.level() > 1;
+        buildDecrypt.IntegrityCheck = opt.level() > 1;
         Triple T(M.getTargetTriple());
         buildDecrypt.PtrAuthKey = T.isAArch64() ? 0 : -1;
         buildDecrypt.PtrAuthDisc = 0;

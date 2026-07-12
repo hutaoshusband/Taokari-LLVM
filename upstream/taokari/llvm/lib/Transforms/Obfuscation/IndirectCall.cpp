@@ -1,5 +1,6 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/Transforms/Obfuscation/IndirectCall.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
@@ -29,6 +30,38 @@ Function *getDirectCallee(CallBase &CB) {
 bool isGeneratedIcallFunction(Function &F) {
   return F.getName().starts_with("__taokari_icall_shard_") ||
          F.getName().starts_with("__taokari_icall_fake_");
+}
+
+bool isOutlinedShard(Function &Callee) {
+  return Callee.hasLocalLinkage() && Callee.getName().contains(".shard");
+}
+
+bool isNonLocalJumpFn(StringRef Name) {
+  return Name == "setjmp" || Name == "_setjmp" || Name == "longjmp" ||
+         Name == "sigsetjmp" || Name == "siglongjmp" ||
+         Name == "__llvm_sjlj_setjmp";
+}
+
+bool moduleUsesNonLocalJumps(Module &M) {
+  for (Function &F : M) {
+    if (!F.hasName())
+      continue;
+    if (isNonLocalJumpFn(F.getName()))
+      return true;
+  }
+  for (Function &F : M) {
+    if (F.isDeclaration())
+      continue;
+    for (Instruction &I : instructions(F)) {
+      auto *CB = dyn_cast<CallBase>(&I);
+      if (!CB)
+        continue;
+      Function *Callee = CB->getCalledFunction();
+      if (Callee && isNonLocalJumpFn(Callee->getName()))
+        return true;
+    }
+  }
+  return false;
 }
 
 bool isSafeCallee(CallBase &CB, Function *Callee) {
@@ -65,8 +98,10 @@ struct IndirectCall : public FunctionPass {
   std::mt19937_64                  RNG;
   uint64_t                         PtrEncKey = 0;
   uint64_t                         ModulePacSeed = 0;
+  uint64_t                         ModulePacSalt = 0;
 
   bool RunOnFuncChanged = false;
+  bool SkipOutlinedShards = false;
 
   IndirectCall(ObfuscationOptions *argsOptions) : FunctionPass(ID) {
     this->ArgsOptions = argsOptions;
@@ -82,6 +117,13 @@ struct IndirectCall : public FunctionPass {
 
   StringRef getPassName() const override {
     return {"IndirectCall"};
+  }
+
+  uint64_t nextNonZeroKey() {
+    uint64_t Key = RNG();
+    while (!Key)
+      Key = RNG();
+    return Key;
   }
 
   Value *zeroFor(Type *Ty) {
@@ -121,14 +163,33 @@ struct IndirectCall : public FunctionPass {
 
     auto &Ctx = M.getContext();
     auto *I64 = Type::getInt64Ty(Ctx);
-    uint64_t Seed = RNG();
-    if (!Seed)
-      Seed = 0xC3A5C85C97CB3127ULL;
+    auto *PtrTy = PointerType::getUnqual(Ctx);
+    uint64_t Seed = nextNonZeroKey();
     auto *SeedGV = new GlobalVariable(
         M, I64, false, GlobalValue::PrivateLinkage,
         ConstantInt::get(I64, Seed),
         "__taokari_icall_shard_seed_" + Callee->getName());
     SeedGV->setAlignment(Align(8));
+
+    // Pointer tables. The shard body has no direct call edge to the real
+    // callee: the address is loaded from a private global as an i64 (the
+    // linker fills the slot with an IMAGE_REL_AMD64_ADDR64 reloc, exactly
+    // like the existing IndirectCall page-table entries), inttoptr'd to a
+    // function pointer and called indirectly. The IR has no `call @callee`
+    // edge for Hex-Rays or a static disassembler to lift directly; the
+    // absolute address lives in .data as a reloc, the same place every
+    // other IndirectCall entry already lives, so no new leakage is added.
+    Constant *CalleePtrInt = ConstantExpr::getPtrToInt(Callee, I64);
+    auto *CalleePtrGV = new GlobalVariable(
+        M, I64, false, GlobalValue::PrivateLinkage, CalleePtrInt,
+        "__taokari_icall_shard_ptr_" + Callee->getName());
+    CalleePtrGV->setAlignment(Align(8));
+
+    Constant *FakePtrInt = ConstantExpr::getPtrToInt(FakeTarget, I64);
+    auto *FakePtrGV = new GlobalVariable(
+        M, I64, false, GlobalValue::PrivateLinkage, FakePtrInt,
+        "__taokari_icall_shard_fptr_" + Callee->getName());
+    FakePtrGV->setAlignment(Align(8));
 
     BasicBlock *Entry = BasicBlock::Create(Ctx, "entry", Shard);
     BasicBlock *Real = BasicBlock::Create(Ctx, "real", Shard);
@@ -142,35 +203,72 @@ struct IndirectCall : public FunctionPass {
 
     IRBuilder<> B(Entry);
     auto *A = B.CreateAlignedLoad(I64, SeedGV, Align(8), true);
-    auto *Bv = B.CreateAdd(B.CreateAlignedLoad(I64, SeedGV, Align(8), true),
-                           ConstantInt::get(I64, 1));
-    B.CreateCondBr(B.CreateICmpEQ(A, Bv), Fake, Real);
+    auto *Bv = B.CreateAlignedLoad(I64, SeedGV, Align(8), true);
+    Value *Pred = nullptr;
+    switch (RNG() % 3) {
+    case 1: {
+      auto *Salt = ConstantInt::get(I64, nextNonZeroKey());
+      Value *L = B.CreateXor(A, Salt, "shard.pred.xor.l");
+      Value *R = B.CreateAdd(B.CreateXor(Bv, Salt, "shard.pred.xor.r"),
+                             ConstantInt::get(I64, 1), "shard.pred.xor.inc");
+      Pred = B.CreateICmpEQ(L, R, "shard.pred");
+      break;
+    }
+    case 2: {
+      auto *Salt = ConstantInt::get(I64, nextNonZeroKey());
+      Value *L = B.CreateAdd(A, Salt, "shard.pred.add.l");
+      Value *R = B.CreateXor(B.CreateAdd(Bv, Salt, "shard.pred.add.r"),
+                             ConstantInt::get(I64, 1), "shard.pred.add.flip");
+      Pred = B.CreateICmpEQ(L, R, "shard.pred");
+      break;
+    }
+    default: {
+      Value *R = B.CreateAdd(Bv, ConstantInt::get(I64, 1),
+                             "shard.pred.inc");
+      Pred = B.CreateICmpEQ(A, R, "shard.pred");
+      break;
+    }
+    }
+    B.CreateCondBr(Pred, Fake, Real);
 
     SmallVector<Value *, 8> Args;
     for (Argument &Arg : Shard->args())
       Args.push_back(&Arg);
 
+    // Runtime pointer reconstruction: load the absolute address from the
+    // private pointer table, inttoptr to a function pointer, then an
+    // indirect call. The called operand is a runtime value, so the IR has
+    // no direct call edge to the real callee for Hex-Rays or a static
+    // disassembler to lift.
+    auto emitIndirectShardCall = [&](BasicBlock *BB, GlobalVariable *PtrGV,
+                                     FunctionType *FTy) -> CallInst * {
+      IRBuilder<> B2(BB);
+      auto *AddrInt = B2.CreateAlignedLoad(I64, PtrGV, Align(8), true,
+                                           "shard.addr");
+      Value *DecPtr = B2.CreateIntToPtr(AddrInt, PtrTy, "shard.ptr");
+      auto *Call = B2.CreateCall(FTy, DecPtr, Args);
+      return Call;
+    };
+
     B.SetInsertPoint(Fake);
-    if (Callee->getReturnType()->isVoidTy()) {
-      auto *FakeCall = B.CreateCall(FakeTarget, Args);
-      FakeCall->setCallingConv(Callee->getCallingConv());
-      B.CreateRetVoid();
-    } else {
-      auto *FakeCall = B.CreateCall(FakeTarget, Args);
-      FakeCall->setCallingConv(Callee->getCallingConv());
-      Value *FakeResult = FakeCall;
-      B.CreateRet(FakeResult);
+    {
+      auto *FakeCall =
+          emitIndirectShardCall(Fake, FakePtrGV, FakeTarget->getFunctionType());
+      if (Callee->getReturnType()->isVoidTy())
+        B.CreateRetVoid();
+      else
+        B.CreateRet(FakeCall);
     }
 
     B.SetInsertPoint(Real);
-    if (Callee->getReturnType()->isVoidTy()) {
-      auto *RealCall = B.CreateCall(Callee, Args);
-      RealCall->setCallingConv(Callee->getCallingConv());
-      B.CreateRetVoid();
-    } else {
-      auto *RealCall = B.CreateCall(Callee, Args);
-      RealCall->setCallingConv(Callee->getCallingConv());
-      B.CreateRet(RealCall);
+    {
+      auto *RealCall =
+          emitIndirectShardCall(Real, CalleePtrGV, Callee->getFunctionType());
+      if (Callee->getReturnType()->isVoidTy()) {
+        B.CreateRetVoid();
+      } else {
+        B.CreateRet(RealCall);
+      }
     }
 
     CalleeShards[Callee] = Shard;
@@ -178,16 +276,17 @@ struct IndirectCall : public FunctionPass {
   }
 
   Function *fortressCallee(Module &M, Function *Callee) {
-    return ArgsOptions->iCallOpt()->level() > 2 ? getOrCreateCallShard(M, Callee)
-                                                : Callee;
+    if (ArgsOptions->iCallOpt()->level() <= 2 || SkipOutlinedShards)
+      return Callee;
+    return getOrCreateCallShard(M, Callee);
   }
 
   uint64_t pacDiscriminator(Function *Fn, Function *Callee) const {
     uint64_t H = ModulePacSeed ^ CalleeKeys.lookup(Callee);
     H ^= static_cast<uint64_t>(hash_value(Fn->getName())) << 1;
     H ^= static_cast<uint64_t>(hash_value(Callee->getName())) << 33;
-    H ^= 0x9E3779B97F4A7C15ULL;
-    return H ? H : 0xD1B54A32D192ED03ULL;
+    H ^= ModulePacSalt;
+    return H ? H : ModulePacSalt;
   }
 
   void NumberCallees(Module &M) {
@@ -204,13 +303,16 @@ struct IndirectCall : public FunctionPass {
             if (!isSafeCallee(*CB, Callee)) {
               continue;
             }
+            if (SkipOutlinedShards && Callee && isOutlinedShard(*Callee)) {
+              continue;
+            }
 
             FunctionCallSites[&F].insert(CI);
 
             Function *TableCallee = fortressCallee(M, Callee);
             if (CalleeKeys.count(TableCallee) == 0) {
               Callees.push_back(TableCallee);
-              CalleeKeys[TableCallee] = RNG();
+              CalleeKeys[TableCallee] = nextNonZeroKey();
             }
           }
         }
@@ -226,9 +328,9 @@ struct IndirectCall : public FunctionPass {
     CalleeObjectShareTable = nullptr;
     CalleeKeys.clear();
     CalleeShards.clear();
-    ModulePacSeed = RNG();
-    if (!ModulePacSeed)
-      ModulePacSeed = 0xA0761D6478BD642FULL;
+    ModulePacSeed = nextNonZeroKey();
+    ModulePacSalt = nextNonZeroKey();
+    SkipOutlinedShards = moduleUsesNonLocalJumps(M);
 
     NumberCallees(M);
     if (!Callees.size()) {
@@ -238,7 +340,7 @@ struct IndirectCall : public FunctionPass {
     PtrEncKey = RNG();
 
     CreatePageTableArgs createPageTableArgs;
-    createPageTableArgs.CountLoop = 1;
+    createPageTableArgs.CountLoop = chooseModulePageTableDepth(RNG);
     createPageTableArgs.GVNamePrefix = M.getName().str() + "_IndirectCallee";
     createPageTableArgs.RNG = &RNG;
     createPageTableArgs.M = &M;
@@ -249,7 +351,7 @@ struct IndirectCall : public FunctionPass {
     createPageTableArgs.PtrEncKey = PtrEncKey;
     if (ArgsOptions->iCallOpt()->level() > 1) {
       createPageTableArgs.FakeEntries =
-          std::max<unsigned>(1, Callees.size() / 2);
+          chooseFakeEntryCount(RNG, static_cast<unsigned>(Callees.size()));
       createPageTableArgs.TwoShare = true;
       createPageTableArgs.OutObjectShareTable = &CalleeObjectShareTable;
     }
@@ -283,6 +385,8 @@ struct IndirectCall : public FunctionPass {
       auto *Callee = getDirectCallee(*CB);
       if (!isSafeCallee(*CB, Callee))
         continue;
+      if (SkipOutlinedShards && Callee && isOutlinedShard(*Callee))
+        continue;
       if (std::uniform_int_distribution<unsigned>(1, 100)(RNG) >
           probabilityOrFull(opt.probability()))
         continue;
@@ -304,10 +408,12 @@ struct IndirectCall : public FunctionPass {
 
     SmallVector<GlobalVariable *, 8> FuncCalleePageTable;
     DenseMap<Constant *, unsigned>   FuncCalleeIndex;
+    unsigned                         FuncPageDepth = 0;
 
     if (opt.level()) {
+      FuncPageDepth = choosePageTableDepth(RNG, opt.level());
       CreatePageTableArgs createPageTableArgs;
-      createPageTableArgs.CountLoop = opt.level();
+      createPageTableArgs.CountLoop = FuncPageDepth;
       createPageTableArgs.GVNamePrefix =
           M.getName().str() + Fn.getName().str() + "_IndirectCallee";
       createPageTableArgs.RNG = &RNG;
@@ -319,7 +425,8 @@ struct IndirectCall : public FunctionPass {
       createPageTableArgs.PtrEncKey = PtrEncKey;
       if (opt.level() > 1)
         createPageTableArgs.FakeEntries =
-            std::max<unsigned>(1, FuncCallees.size() / 2);
+            chooseFakeEntryCount(RNG,
+                                 static_cast<unsigned>(FuncCallees.size()));
 
       enhancedPageTable(createPageTableArgs, &FuncCalleeIndex);
     }
@@ -360,7 +467,7 @@ struct IndirectCall : public FunctionPass {
         Function *       Callee = KV.first;
         Function *       TableCallee = fortressCallee(M, Callee);
         BuildDecryptArgs buildDecrypt;
-        buildDecrypt.FuncLoopCount = opt.level();
+        buildDecrypt.FuncLoopCount = FuncPageDepth;
         buildDecrypt.NextIndex = opt.level()
                                    ? FuncCalleeIndex[TableCallee]
                                    : CalleeIndex[TableCallee];
@@ -392,6 +499,8 @@ struct IndirectCall : public FunctionPass {
       Function *Callee = getDirectCallee(*CB);
       if (!isSafeCallee(*CB, Callee))
         continue;
+      if (SkipOutlinedShards && Callee && isOutlinedShard(*Callee))
+        continue;
 
       auto CacheIt = CalleeDedupCache.find(Callee);
       if (CacheIt != CalleeDedupCache.end()) {
@@ -403,7 +512,7 @@ struct IndirectCall : public FunctionPass {
       } else {
         Function *TableCallee = fortressCallee(M, Callee);
         BuildDecryptArgs buildDecrypt;
-        buildDecrypt.FuncLoopCount = opt.level();
+        buildDecrypt.FuncLoopCount = FuncPageDepth;
         buildDecrypt.NextIndex = opt.level()
                                    ? FuncCalleeIndex[TableCallee]
                                    : CalleeIndex[TableCallee];

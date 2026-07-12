@@ -5,6 +5,7 @@ add_llvm_component_library(LLVMObfuscation
   ObfuscationOptions.cpp
   Virtualization/CodeVirtualization.cpp
   MBA.cpp
+  FunctionOutlining.cpp
   BogusControlFlow.cpp
   IndirectBranch.cpp
   IndirectCall.cpp
@@ -15,7 +16,11 @@ add_llvm_component_library(LLVMObfuscation
   ConstantIntEncryption.cpp
   ConstantFPEncryption.cpp
   MicrosoftRTTIEraser.cpp
+  ItaniumRTTIEraser.cpp
   MetadataHygiene.cpp
+  NativeIntegrity.cpp
+  DynamicProtection.cpp
+  OpaqueConstant.cpp
   
   COMPONENT_NAME
   Obfuscation
@@ -30,6 +35,7 @@ add_llvm_component_library(LLVMObfuscation
   Core
   Support
   TargetParser
+  Analysis
   TransformUtils
   Linker
   )

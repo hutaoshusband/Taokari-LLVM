@@ -26,13 +26,11 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+CLANG = tp.CLANG
+VSDEVCMD = tp.VSDEVCMD
 
 # A realworld-flavored source: every function is annotated +vmp, exercises a
 # distinct L1.5 feature, and produces deterministic output. Functions that the
@@ -224,6 +222,46 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+
+    with tempfile.TemporaryDirectory(prefix="taokari-vmp-eh-") as eh_tmp:
+        eh_dir = Path(eh_tmp)
+        eh_src = eh_dir / "eh_unwind.cpp"
+        eh_src.write_text(
+            "#include <stdio.h>\n"
+            "#include <stdexcept>\n"
+            "__attribute__((noinline)) int thrower(int x){\n"
+            "    if(x<0) throw std::runtime_error(\"neg\");\n"
+            "    return x*2;\n"
+            "}\n"
+            "__attribute__((noinline)) int middle(int x){\n"
+            "    int r=thrower(x); return r+1;\n"
+            "}\n"
+            "__attribute__((noinline)) int outer_wrap(int x){\n"
+            "    try { return middle(x); }\n"
+            "    catch (const std::exception&) { return -1; }\n"
+            "}\n"
+            "int main(void){\n"
+            "    printf(\"eh:%d:%d\\n\", outer_wrap(5), outer_wrap(-1));\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8")
+        for opt in ("-O0", "-O2"):
+            eh_exe = eh_dir / f"eh_unwind_{opt}.exe"
+            res = run([str(CLANG), str(eh_src), opt, "-std=c++17", "-fdeclspec",
+                       "-D_GNU_SOURCE", "-mllvm", "-taokari", "-mllvm", "-taokari-vmp",
+                       "-o", str(eh_exe)], use_vs_env=True)
+            if res.returncode:
+                print(f"eh-unwind {opt}: compile failed", file=sys.stderr)
+                print(res.stderr, end="", file=sys.stderr)
+                return 1
+            eh_ran = run([str(eh_exe)])
+            want = "eh:11:-1\n"
+            if eh_ran.returncode or eh_ran.stdout != want:
+                print(f"eh-unwind {opt}: VMP broke exception unwinding "
+                      f"(rc={eh_ran.returncode}, out={eh_ran.stdout!r})",
+                      file=sys.stderr)
+                return 1
+
     print("vmp coverage: ok")
     return 0
 

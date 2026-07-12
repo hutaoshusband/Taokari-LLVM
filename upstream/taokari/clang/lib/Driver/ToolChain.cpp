@@ -1064,6 +1064,11 @@ ToolChain::path_list ToolChain::getArchSpecificLibPaths() const {
 bool ToolChain::needsProfileRT(const ArgList &Args) {
   if (Args.hasArg(options::OPT_noprofilelib))
     return false;
+  for (const Arg *A : Args.filtered(options::OPT_mllvm)) {
+    StringRef Value(A->getValue(0));
+    if (Value == "-taokari-max" || Value == "--taokari-max")
+      return false;
+  }
 
   return Args.hasArg(options::OPT_fprofile_generate) ||
          Args.hasArg(options::OPT_fprofile_generate_EQ) ||
@@ -1077,6 +1082,12 @@ bool ToolChain::needsProfileRT(const ArgList &Args) {
 }
 
 bool ToolChain::needsGCovInstrumentation(const llvm::opt::ArgList &Args) {
+  for (const Arg *A : Args.filtered(options::OPT_mllvm)) {
+    StringRef Value(A->getValue(0));
+    if (Value == "-taokari-max" || Value == "--taokari-max")
+      return false;
+  }
+
   return Args.hasArg(options::OPT_coverage) ||
          Args.hasFlag(options::OPT_fprofile_arcs, options::OPT_fno_profile_arcs,
                       false);

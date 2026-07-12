@@ -7,13 +7,11 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+CLANG = tp.CLANG
+VSDEVCMD = tp.VSDEVCMD
 
 MARKER = bytes.fromhex("48 8d 40 00")
 DIRTY_STACK = bytes.fromhex(
@@ -22,7 +20,10 @@ DIRTY_STACK = bytes.fromhex(
 DIRTY_STACK_DEC = bytes.fromhex(
     "9c 50 51 48 89 e0 48 8d 48 ff 48 0f af c1 a8 01 74 08 0f 0b eb fe cc f1 0f 0b 59 58 9d"
 )
-DIRTY_GUARDS = (DIRTY_STACK, DIRTY_STACK_DEC)
+DIRTY_SHIFT = bytes.fromhex(
+    "9c 50 51 48 89 e0 48 d1 e0 a8 01 74 08 0f 0b eb fe cc f1 0f 0b 59 58 9d"
+)
+DIRTY_GUARDS = (DIRTY_STACK, DIRTY_STACK_DEC, DIRTY_SHIFT)
 OLD_DOUBLE_XOR_DIRTY = bytes.fromhex(
     "9c 50 8a 04 24 34 a7 34 a7 3a 04 24 74 08 0f 0b eb fe cc f1 0f 0b 58 9d"
 )
@@ -78,6 +79,8 @@ def run(command: list[str], **kw) -> subprocess.CompletedProcess[str]:
 
 
 def run_vs(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    if not tp.IS_WINDOWS:
+      return subprocess.run(command, cwd=cwd, text=True, capture_output=True)
     with tempfile.NamedTemporaryFile("w", suffix=".cmd", delete=False, encoding="utf-8") as h:
         batch = Path(h.name)
         h.write(

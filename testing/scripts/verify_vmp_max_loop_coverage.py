@@ -7,13 +7,11 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+CLANG = tp.CLANG
+VSDEVCMD = tp.VSDEVCMD
 HIST_RE = re.compile(
     r"padding histogram \((\d+) opcodes, (\d+) top hits, "
     r"(\d+) bp, (\d+) pad hits\)"
@@ -116,7 +114,7 @@ def main() -> int:
             print("vmp max loop coverage: FAIL (missing no-unroll cc1 arg)",
                   file=sys.stderr)
             return 1
-        if "-taokari-vmp-padding=15" not in probe_text:
+        if "-taokari-vmp-padding=5" not in probe_text:
             print("vmp max loop coverage: FAIL (missing max padding cc1 arg)",
                   file=sys.stderr)
             return 1
@@ -130,7 +128,7 @@ def main() -> int:
             "-mllvm", "-taokari-vmp-padding=0",
         ], use_vs_env=True)
         override_text = override.stdout + override.stderr
-        if override.returncode or "-taokari-vmp-padding=15" in override_text:
+        if override.returncode or "-taokari-vmp-padding=5" in override_text:
             print("vmp max loop coverage: FAIL (padding override ignored)",
                   file=sys.stderr)
             return 1

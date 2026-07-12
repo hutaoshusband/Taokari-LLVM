@@ -16,13 +16,11 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+CLANG = tp.CLANG
+VSDEVCMD = tp.VSDEVCMD
 
 
 SOURCE = r'''
@@ -74,6 +72,8 @@ def run(command: list[str], **kw) -> subprocess.CompletedProcess[str]:
 
 
 def run_vs(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+  if not tp.IS_WINDOWS:
+    return subprocess.run(command, cwd=cwd, text=True, capture_output=True)
   with tempfile.NamedTemporaryFile("w", suffix=".cmd", delete=False,
                                    encoding="utf-8") as handle:
     batch = Path(handle.name)
@@ -98,6 +98,8 @@ def must(result: subprocess.CompletedProcess[str], label: str) -> None:
 
 def compile_exe(src: Path, out: Path, cfg: Path | None) -> None:
   cmd = [str(CLANG), str(src), "-std=c++17", "-O2", "-o", str(out)]
+  if not tp.IS_WINDOWS:
+    cmd += ["-fdeclspec", "-D_GNU_SOURCE"]
   if cfg:
     cmd += ["-mllvm", "-taokari", "-mllvm", "-taokari-cse",
             "-mllvm", f"-taokari-cfg={cfg}"]
@@ -110,6 +112,8 @@ def emit_ir(src: Path, out: Path, cfg: Path) -> str:
       "-mllvm", "-taokari", "-mllvm", "-taokari-cse",
       "-mllvm", f"-taokari-cfg={cfg}", "-o", str(out),
   ]
+  if not tp.IS_WINDOWS:
+    cmd += ["-fdeclspec", "-D_GNU_SOURCE"]
   must(run_vs(cmd, src.parent), "emit IR")
   return out.read_text(encoding="utf-8")
 
@@ -150,10 +154,11 @@ def check_ir(ir: str, *, require_global_status: bool = True) -> None:
   i16_body = re.search(r"define private void @goron_decrypt_string_i16\b[\s\S]*?\n}", ir)
   if not i8_body or not i16_body:
     raise SystemExit("missing i8/i16 decryptor body")
-  if not all(needle in i8_body.group(0) for needle in ["lshr", "59", "17"]):
-    raise SystemExit("i8 decryptor lacks nonce/position key mixing")
-  if not all(needle in i16_body.group(0) for needle in ["lshr", "40503", "257"]):
-      raise SystemExit("i16 decryptor lacks nonce/position key mixing")
+  for label, body in {"i8": i8_body.group(0), "i16": i16_body.group(0)}.items():
+    if body.count("lshr") < 3 or body.count(" or ") < 3:
+      raise SystemExit(f"{label} decryptor lacks nonce-derived key mixing")
+    if re.search(r"mul i32 [^\n,]+, (?:93|59|17|17881|40503|257)\b", body):
+      raise SystemExit(f"{label} decryptor kept fixed key-mix literal")
 
 
 def check_optional_ir(ir: str, mode: str) -> None:

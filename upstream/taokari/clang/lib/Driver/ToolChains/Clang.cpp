@@ -438,6 +438,24 @@ static void addPGOAndCoverageFlags(const ToolChain &TC, Compilation &C,
           << ProfileSampleUseArg->getSpelling() << TC.getTriple().str();
   }
 
+  if (hasTaokariMaxProtection(Args)) {
+    Args.ClaimAllArgs(options::OPT_fprofile_generate);
+    Args.ClaimAllArgs(options::OPT_fprofile_generate_EQ);
+    Args.ClaimAllArgs(options::OPT_fcs_profile_generate);
+    Args.ClaimAllArgs(options::OPT_fcs_profile_generate_EQ);
+    Args.ClaimAllArgs(options::OPT_fprofile_instr_generate);
+    Args.ClaimAllArgs(options::OPT_fprofile_instr_generate_EQ);
+    Args.ClaimAllArgs(options::OPT_fprofile_use);
+    Args.ClaimAllArgs(options::OPT_fprofile_use_EQ);
+    Args.ClaimAllArgs(options::OPT_fprofile_instr_use);
+    Args.ClaimAllArgs(options::OPT_fprofile_instr_use_EQ);
+    Args.ClaimAllArgs(options::OPT_coverage);
+    Args.ClaimAllArgs(options::OPT_ftest_coverage);
+    Args.ClaimAllArgs(options::OPT_fcoverage_mapping);
+    Args.ClaimAllArgs(options::OPT_fprofile_arcs);
+    return;
+  }
+
   if (ProfileGenerateArg) {
     if (ProfileGenerateArg->getOption().matches(
             options::OPT_fprofile_instr_generate_EQ))
@@ -7551,7 +7569,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       !hasMllvmOptionPrefix(Args, "-taokari-vmp-padding=") &&
       !hasMllvmOptionPrefix(Args, "--taokari-vmp-padding=")) {
     CmdArgs.push_back("-mllvm");
-    CmdArgs.push_back("-taokari-vmp-padding=15");
+    CmdArgs.push_back("-taokari-vmp-padding=5");
   }
 
   StringRef VecWidth = parseMPreferVectorWidthOption(D.getDiags(), Args);

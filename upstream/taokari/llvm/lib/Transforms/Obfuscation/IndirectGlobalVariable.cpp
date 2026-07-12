@@ -1,4 +1,5 @@
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DataLayout.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Transforms/Obfuscation/IndirectGlobalVariable.h"
@@ -9,6 +10,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/Support/RandomNumberGenerator.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/TargetParser/Triple.h"
 
 #include <random>
@@ -16,6 +18,17 @@
 #define DEBUG_TYPE "indgv"
 
 using namespace llvm;
+
+static cl::opt<uint32_t> IndGvMinSize(
+    "taokari-indgv-min-size", cl::init(0), cl::NotHidden,
+    cl::desc("Only indirect globals whose storage is at least this many bytes. "
+             "0 = all eligible globals. Skips low-value small globals so the "
+             "page-table cost lands on the sensitive (larger) ones."));
+static cl::opt<bool> IndGvNoDedup(
+    "taokari-indgv-no-dedup", cl::init(false), cl::NotHidden,
+    cl::desc("Per-use global decrypt: skip the entry-block dedup cache so "
+             "every access to a global gets its own decrypt sequence. More "
+             "resilient (no shared slot to patch) at the cost of larger code."));
 
 namespace {
 struct IndirectGlobalVariable : public FunctionPass {
@@ -31,6 +44,9 @@ struct IndirectGlobalVariable : public FunctionPass {
 
   std::mt19937_64 RNG;
   uint64_t        PtrEncKey = 0;
+  // Module-seeded PAC discriminator material (AArch64 only; mirrors icall).
+  uint64_t        ModulePacSeed = 0;
+  uint64_t        ModulePacSalt = 0;
   bool            RunOnFuncChanged = false;
 
   IndirectGlobalVariable(ObfuscationOptions *argsOptions) : FunctionPass(ID) {
@@ -47,6 +63,24 @@ struct IndirectGlobalVariable : public FunctionPass {
 
   StringRef getPassName() const override {
     return {"IndirectGlobalVariable"};
+  }
+
+  uint64_t nextNonZeroKey() {
+    uint64_t K = RNG();
+    while (!K)
+      K = RNG();
+    return K;
+  }
+
+  // Per-global PAC discriminator (AArch64 only). Mixes the module seed, the
+  // global's page-table key, and a name hash so each global gets a distinct
+  // signing context -- a signed pointer forged for one global does not
+  // authenticate for another.
+  uint64_t pacDiscriminator(Function &Fn, GlobalVariable *GV) const {
+    uint64_t H = ModulePacSeed ^ GVKeys.lookup(GV);
+    H ^= static_cast<uint64_t>(hash_value(GV->getName())) << 1;
+    H ^= ModulePacSalt;
+    return H ? H : ModulePacSalt;
   }
 
   void NumberGlobalVariable(Module &M) {
@@ -70,6 +104,21 @@ struct IndirectGlobalVariable : public FunctionPass {
             }
             if (GV->getMetadata("noobf")) {
               continue;
+            }
+            if (GV->hasName()) {
+              StringRef N = GV->getName();
+              if (N.starts_with("_ZTV") || N.starts_with("_ZTI") ||
+                  N.starts_with("_ZTS"))
+                continue;
+            }
+            // Sensitive-globals filter: skip globals smaller than the
+            // configured threshold so the page-table cost lands on the larger
+            // (more interesting) globals, not low-value single-byte flags.
+            if (IndGvMinSize) {
+              uint64_t Sz = M.getDataLayout().getTypeAllocSize(
+                  GV->getValueType());
+              if (Sz < IndGvMinSize)
+                continue;
             }
 
             FunctionGVs[&F].insert(GV);
@@ -96,9 +145,11 @@ struct IndirectGlobalVariable : public FunctionPass {
     }
 
     PtrEncKey = RNG();
+    ModulePacSeed = nextNonZeroKey();
+    ModulePacSalt = nextNonZeroKey();
 
     CreatePageTableArgs createPageTableArgs;
-    createPageTableArgs.CountLoop = 1;
+    createPageTableArgs.CountLoop = chooseModulePageTableDepth(RNG);
     createPageTableArgs.GVNamePrefix = M.getName().str() + "_IndirectGVs";
     createPageTableArgs.RNG = &RNG;
     createPageTableArgs.M = &M;
@@ -107,8 +158,37 @@ struct IndirectGlobalVariable : public FunctionPass {
     createPageTableArgs.ObjectKeys = &GVKeys;
     createPageTableArgs.OutPageTable = &GVPageTable;
     createPageTableArgs.PtrEncKey = PtrEncKey;
+    // L2+: pad with a per-build decoy count so table size does not expose
+    // a fixed real-global ratio.
+    createPageTableArgs.FakeEntries = chooseFakeEntryCount(
+        RNG, static_cast<unsigned>(GlobalVariables.size()));
 
     createPageTable(createPageTableArgs);
+
+    // L3+: emit entirely separate decoy global pools -- private internal
+    // arrays of random bytes that look like real data storage but are never
+    // referenced by real code. They pollute the global-variable view so a
+    // reverser cannot tell the real globals from the decoys by listing them.
+    if (ArgsOptions->indGvOpt()->level() >= 3) {
+      auto &Ctx = M.getContext();
+      auto *I64 = Type::getInt64Ty(Ctx);
+      unsigned Pools = 1 + (RNG() % 3);
+      for (unsigned P = 0; P < Pools; ++P) {
+        unsigned Words = 2 + (RNG() % 4);
+        SmallVector<Constant *, 8> Vals;
+        for (unsigned W = 0; W < Words; ++W)
+          Vals.push_back(ConstantInt::get(I64, RNG()));
+        auto *ArrTy = ArrayType::get(I64, Words);
+        auto *Pool = new GlobalVariable(M, ArrTy, true,
+                                        GlobalValue::PrivateLinkage,
+                                        ConstantArray::get(ArrTy, Vals),
+                                        M.getName() + "_IndirectGV_fakepool");
+        Pool->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+        Pool->setAlignment(Align(8));
+        Pool->addMetadata("noobf", *MDNode::get(Ctx, {}));
+        appendToCompilerUsed(M, {Pool});
+      }
+    }
     return false;
   }
 
@@ -139,10 +219,12 @@ struct IndirectGlobalVariable : public FunctionPass {
 
     SmallVector<GlobalVariable *, 8> FuncGVPageTable;
     DenseMap<Constant *, unsigned>   FuncGVIndex;
+    unsigned                         FuncPageDepth = 0;
 
     if (opt.level()) {
+      FuncPageDepth = choosePageTableDepth(RNG, opt.level());
       CreatePageTableArgs createPageTableArgs;
-      createPageTableArgs.CountLoop = opt.level();
+      createPageTableArgs.CountLoop = FuncPageDepth;
       createPageTableArgs.GVNamePrefix =
           M.getName().str() + Fn.getName().str() + "_IndirectGVs";
       createPageTableArgs.RNG = &RNG;
@@ -176,7 +258,9 @@ struct IndirectGlobalVariable : public FunctionPass {
     Instruction *AllocaInsertPt = &*EntryBB.begin();
     auto *PtrTy = PointerType::getUnqual(Fn.getContext());
     for (auto &KV : GVUseCount) {
-      if (KV.second <= 1)
+      // Per-use decrypt option: skip the dedup cache so every global access
+      // gets its own decrypt (no shared slot a reverser can patch once).
+      if (IndGvNoDedup || KV.second <= 1)
         continue;
       IRBuilder<> AIB(AllocaInsertPt);
       GVDedupCache[KV.first] = AIB.CreateAlloca(PtrTy, nullptr);
@@ -196,7 +280,7 @@ struct IndirectGlobalVariable : public FunctionPass {
       for (auto &KV : GVDedupCache) {
         auto *           GV = KV.first;
         BuildDecryptArgs buildDecrypt;
-        buildDecrypt.FuncLoopCount = opt.level();
+        buildDecrypt.FuncLoopCount = FuncPageDepth;
         buildDecrypt.NextIndex = opt.level() ? FuncGVIndex[GV] : GVIndex[GV];
         buildDecrypt.NextIndexValue = nullptr;
         buildDecrypt.Fn = &Fn;
@@ -207,8 +291,13 @@ struct IndirectGlobalVariable : public FunctionPass {
         buildDecrypt.ModuleKey = GVKeys[GV];
         buildDecrypt.FuncKey = FuncKeys[GV];
         buildDecrypt.PtrEncKey = PtrEncKey;
+        // L2+: match IndirectCall/IndirectBranch nonce mixing and MBA
+        // pointer decrypt.
+        buildDecrypt.RuntimeSeed = opt.level() > 1 ? RNG() : 0;
+        buildDecrypt.UseMBA = opt.level() > 1;
+        buildDecrypt.IntegrityCheck = opt.level() > 1;
         buildDecrypt.PtrAuthKey = T.isAArch64() ? 2 : -1;
-        buildDecrypt.PtrAuthDisc = 0;
+        buildDecrypt.PtrAuthDisc = pacDiscriminator(Fn, GV);
         auto        GVPtr = buildPageTableDecryptIR(buildDecrypt);
         IRBuilder<> SIB(DecryptPt);
         SIB.CreateAlignedStore(GVPtr, KV.second, Align{1}, true);
@@ -242,7 +331,7 @@ struct IndirectGlobalVariable : public FunctionPass {
                 GV->getType(), CacheIt->second, Align{1}, true);
           } else {
             BuildDecryptArgs buildDecrypt;
-            buildDecrypt.FuncLoopCount = opt.level();
+            buildDecrypt.FuncLoopCount = FuncPageDepth;
             buildDecrypt.NextIndex =
                 opt.level() ? FuncGVIndex[GV] : GVIndex[GV];
             buildDecrypt.NextIndexValue = nullptr;
@@ -256,7 +345,7 @@ struct IndirectGlobalVariable : public FunctionPass {
             buildDecrypt.PtrEncKey = PtrEncKey;
             Triple T(M.getTargetTriple());
             buildDecrypt.PtrAuthKey = T.isAArch64() ? 2 : -1;
-            buildDecrypt.PtrAuthDisc = 0;
+            buildDecrypt.PtrAuthDisc = pacDiscriminator(Fn, GV);
             GVPtr = buildPageTableDecryptIR(buildDecrypt);
           }
 

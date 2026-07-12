@@ -27,15 +27,13 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-OBJDUMP = ROOT / "build" / "taokari-local" / "bin" / "llvm-objdump.exe"
+CLANG = tp.CLANG
+OBJDUMP = tp.tool("llvm-objdump")
 STRINGS = "strings"  # msys2/Git ships `strings`; fall back to objdump scan below
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+VSDEVCMD = tp.VSDEVCMD
 
 SECRET = "taokari-l3-fortress-secret"
 
@@ -76,6 +74,8 @@ def run(command: list[str], **kw) -> subprocess.CompletedProcess[str]:
 
 
 def run_vs(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+  if not tp.IS_WINDOWS:
+    return subprocess.run(command, cwd=cwd, text=True, capture_output=True)
   with tempfile.NamedTemporaryFile("w", suffix=".cmd", delete=False,
                                    encoding="utf-8") as handle:
     batch = Path(handle.name)
@@ -112,6 +112,8 @@ def write_cfg(path: Path, **extra: bool) -> None:
 
 def compile_exe(src: Path, out: Path, cfg: Path | None) -> None:
   cmd = [str(CLANG), str(src), "-std=c++17", "-O2", "-o", str(out)]
+  if not tp.IS_WINDOWS:
+    cmd += ["-fdeclspec", "-D_GNU_SOURCE"]
   if cfg:
     cmd += ["-mllvm", "-taokari", "-mllvm", "-taokari-cse",
             "-mllvm", f"-taokari-cfg={cfg}"]
@@ -125,6 +127,8 @@ def emit_ir(src: Path, out: Path, cfg: Path) -> str:
       "-mllvm", "-taokari", "-mllvm", "-taokari-cse",
       "-mllvm", f"-taokari-cfg={cfg}", "-o", str(out),
   ]
+  if not tp.IS_WINDOWS:
+    cmd += ["-fdeclspec", "-D_GNU_SOURCE"]
   must(run_vs(cmd, src.parent), "emit IR")
   return out.read_text(encoding="utf-8")
 
@@ -144,6 +148,16 @@ def gate(cond: bool, label: str) -> None:
   print(f"  [ok] {label}")
 
 
+def has_nonzero_pool_gap(ir: str) -> bool:
+  for line in ir.splitlines():
+    if "call void @goron_decrypt_string_i" not in line:
+      continue
+    ints = re.findall(r"\bi32 (-?\d+)", line)
+    if len(ints) >= 3 and int(ints[2]) > 0:
+      return True
+  return False
+
+
 def main() -> int:
   parser = argparse.ArgumentParser()
   parser.add_argument("--keep", action="store_true")
@@ -158,7 +172,8 @@ def main() -> int:
     src = tmp / "strenc_l3.cpp"
     src.write_text(SOURCE, encoding="utf-8")
     plain = tmp / "plain.exe"
-    must(run_vs([str(CLANG), str(src), "-std=c++17", "-O2", "-o", str(plain)],
+    plain_flags = ["-fdeclspec", "-D_GNU_SOURCE"] if not tp.IS_WINDOWS else []
+    must(run_vs([str(CLANG), str(src), "-std=c++17", "-O2", *plain_flags, "-o", str(plain)],
                 src.parent), "plain compile")
     plain_run = run([str(plain)])
     must(plain_run, "plain run")
@@ -209,7 +224,8 @@ def main() -> int:
     single("split string pools", "stringShardedPool",
            # split pools and shards are the same mechanism (pool spread across
            # N globals); verify independently that >=2 pool globals exist.
-           lambda ir: len(re.findall(r"@EncryptedStringTable_\d+ = ", ir)) >= 2,
+           lambda ir: (len(re.findall(r"@EncryptedStringTable_\d+ = ", ir)) >= 2
+                       and has_nonzero_pool_gap(ir)),
            tmp / "split.ll", tmp / "split.exe")
     single("fake string pools", "stringFakePools",
            lambda ir: len(re.findall(r"@FakeStringPool_\d+ = ", ir)) >= 2,

@@ -4,11 +4,11 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-VSDEVCMD = Path(r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat")
+CLANG = tp.CLANG
+VSDEVCMD = tp.VSDEVCMD
 
 SOURCE = r"""
 #include <stdio.h>
@@ -71,6 +71,32 @@ def main() -> int:
         print(f"missing clang: {CLANG}", file=sys.stderr)
         return 2
 
+    source_text = (
+        ROOT / "upstream" / "taokari" / "llvm" / "lib" / "Transforms" /
+        "Obfuscation" / "BogusControlFlow.cpp"
+    ).read_text(encoding="utf-8", errors="ignore")
+    seed_choices = [
+        "OpaqueSeedKind::Pointer",
+        "OpaqueSeedKind::StackAddress",
+        "OpaqueSeedKind::Global",
+        "OpaqueSeedKind::Environment",
+        "OpaqueSeedKind::RuntimeNonce",
+    ]
+    missing_choices = [choice for choice in seed_choices
+                       if choice not in source_text]
+    if "FuncRNG() % 5" not in source_text or missing_choices:
+        print("BCF seed-source variety missing", file=sys.stderr)
+        return 1
+    if "getOrCreateJunkFunction(*Fake.getModule(), FuncRNG)" not in source_text:
+        print("BCF junk helper is not RNG-shaped", file=sys.stderr)
+        return 1
+    if "switch (FuncRNG() % 4)" not in source_text:
+        print("BCF junk helper palette missing", file=sys.stderr)
+        return 1
+    if "1103515245" in source_text or "12345" in source_text:
+        print("BCF junk helper still uses fixed LCG constants", file=sys.stderr)
+        return 1
+
     with tempfile.TemporaryDirectory(prefix="taokari-bcf-") as tmp_name:
         tmp = Path(tmp_name)
         src = tmp / "bcf.c"
@@ -91,12 +117,20 @@ def main() -> int:
             "__taokari_bcf_junk",
             "bcf.fake.call",
             "bcf.fake.nonce",
-            "bcf.seed.vload",
             "bcf.opaque",
         ]
         missing = [needle for needle in required if needle not in text]
         if missing:
             print(f"missing BCF IR markers: {', '.join(missing)}", file=sys.stderr)
+            return 1
+        seed_markers = (
+            "bcf.seed.vload",
+            "bcf.seed.p2i",
+            "bcf.seed.fp",
+            "bcf.seed.env",
+        )
+        if not any(marker in text for marker in seed_markers):
+            print("missing BCF seed-source marker", file=sys.stderr)
             return 1
 
         cfg = tmp / "bcf.json"

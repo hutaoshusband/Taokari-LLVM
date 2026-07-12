@@ -4,11 +4,11 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
-VSDEVCMD = Path(r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat")
+CLANG = tp.CLANG
+VSDEVCMD = tp.VSDEVCMD
 
 # Exercises every Level-1 MBA identity (add/sub/xor/and/or) across i32 and i64.
 SOURCE = r"""
@@ -92,6 +92,19 @@ def main() -> int:
     if not CLANG.exists():
         print(f"missing clang: {CLANG}", file=sys.stderr)
         return 2
+
+    mba_source = (
+        ROOT / "upstream" / "taokari" / "llvm" / "lib" / "Transforms" /
+        "Obfuscation" / "MBA.cpp"
+    ).read_text(encoding="utf-8", errors="ignore")
+    if "switch (FuncRNG() % 4)" not in mba_source:
+        print("MBA noise palette missing", file=sys.stderr)
+        return 1
+    if 'Name + ".noise.mul"' not in mba_source or \
+            'Name + ".noise.xor"' not in mba_source or \
+            'Name + ".noise.sub"' not in mba_source:
+        print("MBA noise shape variety missing", file=sys.stderr)
+        return 1
 
     with tempfile.TemporaryDirectory(prefix="taokari-mba-") as tmp_name:
         tmp = Path(tmp_name)

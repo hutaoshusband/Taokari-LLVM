@@ -57,6 +57,9 @@ void LowerConstantExpr(Function &F);
 bool expandConstantExpr(Function &F);
 AllocaInst *createConstantSeedCache(Function &F, std::mt19937_64 &rng,
                                     bool volatileSeed);
+unsigned chooseFakeEntryCount(std::mt19937_64 &rng, unsigned realEntries);
+unsigned choosePageTableDepth(std::mt19937_64 &rng, unsigned level);
+unsigned chooseModulePageTableDepth(std::mt19937_64 &rng);
 void createPageTable(const CreatePageTableArgs &args);
 void enhancedPageTable(const CreatePageTableArgs &args,
                        DenseMap<Constant *, unsigned> *FuncIndexMap);
@@ -66,4 +69,11 @@ Value *encryptConstant(Constant *plainConstant, Instruction *insertBefore,
                        AllocaInst *SeedCache = nullptr,
                        bool volatileSeed = true,
                        bool decryptorMBA = false);
+Value *decryptConstantCipher(Value *EncLoad, ConstantInt *Key,
+                             Constant *XorKey, unsigned BitWidth,
+                             Type *OriginValTy, Instruction *insertBefore,
+                             std::mt19937_64 &rng, unsigned level,
+                             AllocaInst *SeedCache = nullptr,
+                             bool volatileSeed = true,
+                             bool decryptorMBA = false);
 #endif

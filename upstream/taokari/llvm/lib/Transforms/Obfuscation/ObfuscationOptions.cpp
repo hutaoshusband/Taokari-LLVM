@@ -1,5 +1,6 @@
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Module.h"
@@ -16,6 +17,65 @@ namespace llvm {
 static void reportConfigError(const Twine &FileName, const Twine &Message) {
   report_fatal_error("Taokari config error in " + FileName + ": " + Message);
 }
+
+namespace {
+
+json::Value loadConfigValue(const Twine &FileName) {
+  if (!sys::fs::exists(FileName))
+    reportConfigError(FileName, "extends target does not exist");
+  auto BufOrErr = MemoryBuffer::getFileOrSTDIN(FileName);
+  if (const auto ErrCode = BufOrErr.getError())
+    reportConfigError(FileName, "cannot read extends target: " +
+                                  ErrCode.message());
+  auto Parsed = json::parse(BufOrErr.get()->getBuffer());
+  if (!Parsed)
+    reportConfigError(FileName,
+                      "extends target invalid JSON: " +
+                          toString(Parsed.takeError()));
+  if (!Parsed->getAsObject())
+    reportConfigError(FileName, "extends target root must be an object");
+  return std::move(*Parsed);
+}
+
+void deepMerge(json::Object &Dst, const json::Object &Src) {
+  for (const auto &KV : Src) {
+    const StringRef &Key = KV.getFirst();
+    const json::Value &SrcVal = KV.getSecond();
+    auto *SrcObj = SrcVal.getAsObject();
+    auto Existing = Dst.find(Key);
+    if (SrcObj && Existing != Dst.end() &&
+        Existing->second.getAsObject()) {
+      json::Object Merged = *Existing->second.getAsObject();
+      deepMerge(Merged, *SrcObj);
+      Dst[Key] = std::move(Merged);
+    } else {
+      Dst[Key] = SrcVal;
+    }
+  }
+}
+
+void resolveExtends(json::Object &Root, const Twine &FileName, unsigned Depth) {
+  if (Depth > 8)
+    reportConfigError(FileName, "extends chain too deep (cycle?)");
+  auto *ExtendsV = Root.get("extends");
+  if (!ExtendsV)
+    return;
+  auto ExtendsStr = ExtendsV->getAsString();
+  if (!ExtendsStr) {
+    reportConfigError(FileName, "extends must be a string");
+    return;
+  }
+  SmallString<256> Parent(*ExtendsStr);
+  json::Value ParentVal = loadConfigValue(Parent);
+  json::Object *ParentObj = ParentVal.getAsObject();
+  resolveExtends(*ParentObj, Parent, Depth + 1);
+  Root.erase("extends");
+  json::Object Merged = *ParentObj;
+  deepMerge(Merged, Root);
+  Root = std::move(Merged);
+}
+
+} // namespace
 
 SmallVector<std::string> readAnnotate(Function *f) {
   SmallVector<std::string> annotations;
@@ -79,6 +139,8 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
   if (!rootObj) {
     reportConfigError(FileName, "JSON root must be an object");
   }
+
+  resolveExtends(*rootObj, FileName, 0);
 
   auto procObj =
       [&FileName](const std::shared_ptr<ObfOpt> &obfOpt,
@@ -238,6 +300,30 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
         }
         obfOpt->setConstDecryptorMBA(*decryptorMba);
       }
+      if (const auto *poolValue = optObj->get("perFunctionPool")) {
+        auto pool = poolValue->getAsBoolean();
+        if (!pool) {
+          reportConfigError(FileName, obfOpt->attributeName() +
+                                          ".perFunctionPool must be boolean");
+        }
+        obfOpt->setConstPerFunctionPool(*pool);
+      }
+      if (const auto *indirectValue = optObj->get("indirectPoolRef")) {
+        auto indirect = indirectValue->getAsBoolean();
+        if (!indirect) {
+          reportConfigError(FileName, obfOpt->attributeName() +
+                                          ".indirectPoolRef must be boolean");
+        }
+        obfOpt->setConstIndirectPoolRef(*indirect);
+      }
+      if (const auto *shardsValue = optObj->get("helperShards")) {
+        auto shards = shardsValue->getAsBoolean();
+        if (!shards) {
+          reportConfigError(FileName, obfOpt->attributeName() +
+                                          ".helperShards must be boolean");
+        }
+        obfOpt->setConstHelperShards(*shards);
+      }
       if (const auto *releaseStripValue = optObj->get("releaseStrip")) {
         auto releaseStrip = releaseStripValue->getAsBoolean();
         if (!releaseStrip) {
@@ -294,6 +380,38 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
                        &ObfOpt::setStringPageTableAccess);
       readStringL3Bool("stringDelayedDecrypt",
                        &ObfOpt::setStringDelayedDecrypt);
+
+      // Validate keys: warn on unknown keys inside this pass's config
+      // object so typos surface instead of silently being ignored. The
+      // set is the union of all keys read above across every pass; a
+      // pass that does not consume a given key simply ignores the
+      // warning target.
+      static const StringSet<> KnownKeys = {
+          "enable",          "level",
+          "maxInsts",        "maxBlocks",
+          "maxAllocas",      "probability",
+          "functionProbability",
+          "loopCount",       "minConstSize",
+          "minStringLength", "skipStrings",
+          "localStackDecrypt",
+          "heapDecrypt",     "reencryptAfterUse",
+          "volatileSeed",    "decryptorMba",
+          "releaseStrip",    "randomizeSections",
+          "exportAllowlist",
+          "stringDecryptorMBA",
+          "stringDecryptorFlattening",
+          "stringDecryptorIndirectCall",
+          "stringShardedPool",
+          "stringFakePools",
+          "stringPageTableAccess",
+          "stringDelayedDecrypt"};
+      for (const auto &KV : *optObj) {
+        if (!KnownKeys.contains(KV.getFirst())) {
+          llvm::errs() << "warning: unknown taokari config key: "
+                       << obfOpt->attributeName() << "."
+                       << KV.getFirst().str() << '\n';
+        }
+      }
     };
 
     std::string key = obj.getFirst().str();
@@ -316,6 +434,35 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
         seed.resize(32, 0);
       } else {
         reportConfigError(FileName, "randomSeed must be string");
+      }
+      continue;
+    }
+    if (obj.getFirst().str() == "vm") {
+      auto *VmObj = obj.getSecond().getAsObject();
+      if (!VmObj) {
+        reportConfigError(FileName, "vm must be an object");
+      }
+      if (const auto *AntiTraceValue = VmObj->get("anti_trace")) {
+        auto AntiTrace = AntiTraceValue->getAsString();
+        if (!AntiTrace) {
+          reportConfigError(FileName, "vm.anti_trace must be string");
+        }
+        if (*AntiTrace == "off") {
+          result->setVmpAntiTraceMode(1);
+        } else if (*AntiTrace == "light") {
+          result->setVmpAntiTraceMode(2);
+        } else if (*AntiTrace == "strong") {
+          result->setVmpAntiTraceMode(3);
+        } else {
+          reportConfigError(FileName,
+                            "vm.anti_trace must be off, light or strong");
+        }
+      }
+      for (const auto &KV : *VmObj) {
+        if (KV.getFirst() != "anti_trace") {
+          llvm::errs() << "warning: unknown taokari config key: vm."
+                       << KV.getFirst().str() << '\n';
+        }
       }
       continue;
     }
@@ -452,6 +599,9 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
   result.setStringReencryptAfterUse(option->stringReencryptAfterUse());
   result.setVolatileSeed(option->volatileSeed());
   result.setConstDecryptorMBA(option->constDecryptorMBA());
+  result.setConstPerFunctionPool(option->constPerFunctionPool());
+  result.setConstIndirectPoolRef(option->constIndirectPoolRef());
+  result.setConstHelperShards(option->constHelperShards());
   result.setReleaseStrip(option->releaseStrip());
   result.setRandomizeSections(option->randomizeSections());
   result.setExportAllowlist(option->exportAllowlist());
@@ -462,6 +612,32 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
   result.setStringFakePools(option->stringFakePools());
   result.setStringPageTableAccess(option->stringPageTableAccess());
   result.setStringDelayedDecrypt(option->stringDelayedDecrypt());
+
+  if (option->attributeName() == "vmp" && !annotations.empty()) {
+    const std::string BudgetToken = "vmp-budget=";
+    for (const auto &annotation : annotations) {
+      auto pos = annotation.find(BudgetToken);
+      if (pos == std::string::npos)
+        continue;
+      auto digits = pos + BudgetToken.size();
+      uint32_t value = 0;
+      bool any = false;
+      for (; digits < annotation.size() && annotation[digits] >= '0' &&
+             annotation[digits] <= '9';
+           ++digits) {
+        value = value * 10 + static_cast<uint32_t>(annotation[digits] - '0');
+        any = true;
+      }
+      if (!any) {
+        f->getContext().diagnose(DiagnosticInfoUnsupported{
+            *f, f->getName() + ": vmp-budget= needs a non-negative integer "
+                               "(sample: vmp-budget=4096)"});
+        return result.none();
+      }
+      result.setVmpBudget(value);
+    }
+  }
+
   return result;
 }
 

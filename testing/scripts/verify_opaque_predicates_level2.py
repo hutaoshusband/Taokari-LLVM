@@ -24,16 +24,14 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build" / "taokari-local"
 CLANG_CL = BUILD / "bin" / "clang-cl.exe"
 OPT = BUILD / "bin" / "opt.exe"
 LLVM_CONFIG = BUILD / "bin" / "llvm-config.exe"
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+VSDEVCMD = tp.VSDEVCMD
 
 
 HARNESS = r'''
@@ -119,6 +117,40 @@ static int checkContextSeedsBuild() {
   return 0;
 }
 
+// Nested predicates must be algebraically correct: with a constant seed the
+// whole chain folds to the expected i1. Tests the L3 nested identity over a
+// spread of constant seeds and both i32 and i64.
+static int checkNested() {
+  LLVMContext Ctx;
+  auto *I32 = Type::getInt32Ty(Ctx);
+  auto *I64 = Type::getInt64Ty(Ctx);
+  uint64_t Seeds[] = {0, 1, 2, 3, 7, 17, 0x5a5a, 0xdeadbeefULL, 0xffffffffULL};
+  for (uint64_t S : Seeds) {
+    for (IntegerType *Ty : {I32, I64}) {
+      for (int Pass = 0; Pass < 4; ++Pass) {
+        Module M("opq-nest", Ctx);
+        Function *F = Function::Create(FunctionType::get(Ty, false),
+                                       GlobalValue::ExternalLinkage, "f", M);
+        BasicBlock *BB = BasicBlock::Create(Ctx, "entry", F);
+        IRBuilder<> IRB(BB);
+        std::mt19937_64 RNG(31 + Pass);
+        Value *Seed = ConstantInt::get(Ty, S);
+        Value *T = taokari::makeNestedTruePredicate(IRB, Seed, RNG, "t");
+        Value *Fp = taokari::makeNestedFalsePredicate(IRB, Seed, RNG, "f");
+        Value *TC = dyn_cast<ConstantInt>(T);
+        Value *FC = dyn_cast<ConstantInt>(Fp);
+        if (!TC || !FC)
+          return fail("nested predicate did not fold over a constant seed");
+        if (!cast<ConstantInt>(TC)->isOne())
+          return fail("makeNestedTruePredicate folded to false");
+        if (!cast<ConstantInt>(FC)->isZero())
+          return fail("makeNestedFalsePredicate folded to true");
+      }
+    }
+  }
+  return 0;
+}
+
 int main(int argc, char **argv) {
   if (argc >= 2 && std::strcmp(argv[1], "--emit") == 0) {
     // --emit <kind> <unfoldable>  : kind in
@@ -136,6 +168,7 @@ int main(int argc, char **argv) {
   }
   if (int R = checkVolatileLoad())       return R;
   if (int R = checkContextSeedsBuild())  return R;
+  if (int R = checkNested())             return R;
   std::puts("opaque predicates level2: ok");
   return 0;
 }
@@ -151,6 +184,8 @@ def run(command: list[str], **kw) -> subprocess.CompletedProcess[str]:
 
 
 def run_vs(command: list[str], cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
+    if not tp.IS_WINDOWS:
+      return subprocess.run(command, cwd=cwd, text=True, capture_output=True)
     with tempfile.NamedTemporaryFile("w", suffix=".cmd", delete=False,
                                      encoding="utf-8") as h:
         batch = Path(h.name)

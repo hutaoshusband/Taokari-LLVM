@@ -4,15 +4,13 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build" / "taokari-local"
 CLANG_CL = BUILD / "bin" / "clang-cl.exe"
 LLVM_CONFIG = BUILD / "bin" / "llvm-config.exe"
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+VSDEVCMD = tp.VSDEVCMD
 
 
 SOURCE = r'''
@@ -96,6 +94,8 @@ def run(command: list[str], *, cwd: Path = ROOT) -> subprocess.CompletedProcess[
 
 
 def run_vs(command: list[str], *, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
+  if not tp.IS_WINDOWS:
+    return subprocess.run(command, cwd=cwd, text=True, capture_output=True)
   with tempfile.NamedTemporaryFile("w", suffix=".cmd", delete=False, encoding="utf-8") as handle:
     batch = Path(handle.name)
     handle.write(
@@ -117,6 +117,20 @@ def main() -> int:
   if not LLVM_CONFIG.exists():
     print(f"missing llvm-config: {LLVM_CONFIG}", file=sys.stderr)
     return 2
+
+  opq_source = (
+      ROOT / "upstream" / "taokari" / "llvm" / "lib" / "Transforms" /
+      "Obfuscation" / "OpaquePredicate.cpp"
+  ).read_text(encoding="utf-8", errors="ignore")
+  if ("makeNeighborProductLowBit" not in opq_source or
+      "RNG() % 3" not in opq_source):
+    print("missing L1 opaque predicate family variety", file=sys.stderr)
+    return 1
+  if ("Salt->getLimitedValue() % 3" not in opq_source or
+      "even.sub" not in opq_source or
+      "even.xor" not in opq_source):
+    print("missing makeEvenLowBit shape variety", file=sys.stderr)
+    return 1
 
   include_dir = run([str(LLVM_CONFIG), "--includedir"]).stdout.strip()
   libs = words(run([str(LLVM_CONFIG), "--libs", "core", "support", "obfuscation"]).stdout)

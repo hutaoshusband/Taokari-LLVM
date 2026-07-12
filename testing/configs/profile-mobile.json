@@ -1,0 +1,18 @@
+{
+  "randomSeed": "mobile-mobile-mobile-mobile",
+  "meta": {
+    "enable": true,
+    "level": 1,
+    "releaseStrip": true
+  },
+  "cse": {
+    "enable": true,
+    "level": 1,
+    "minStringLength": 16
+  },
+  "cie": {
+    "enable": true,
+    "level": 1,
+    "minConstSize": 64
+  }
+}

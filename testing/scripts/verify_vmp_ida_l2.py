@@ -8,14 +8,12 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
+CLANG = tp.CLANG
 DEFAULT_IDA = Path(r"C:\Program Files\IDA Professional 9.1\ida.exe")
-VSDEVCMD = Path(
-    r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
-)
+VSDEVCMD = tp.VSDEVCMD
 IDA_SCRIPT = ROOT / "testing" / "scripts" / "ida_vmp_l2_inspect.py"
 MAP_RE = re.compile(r"\s+[0-9A-Fa-f]+:[0-9A-Fa-f]+\s+(\S+)\s+([0-9A-Fa-f]{16})\s")
 
@@ -65,7 +63,7 @@ def ida_path() -> Path:
 def map_symbols(path: Path) -> dict[str, int]:
     symbols: dict[str, int] = {}
     for name, va in MAP_RE.findall(path.read_text(encoding="utf-8", errors="ignore")):
-        if name.startswith("__taokari_vmp_interp_i64"):
+        if name in {"victim", "_victim"} or name.startswith("__taokari_vmp_interp_i64"):
             symbols[name] = int(va, 16)
     return symbols
 
@@ -92,9 +90,16 @@ def main() -> int:
             str(CLANG), str(src), "-O1", "-gcodeview", "-o", str(exe),
             "-Wl,/DEBUG:FULL", f"-Wl,/MAP:{map_file}",
             "-mllvm", "-taokari", "-mllvm", "-taokari-vmp",
+            "-mllvm", "-verify-machineinstrs",
+            "-mllvm", "-taokari-mir=dirtybytes",
         ], use_vs_env=True)
         if build.returncode:
             sys.stderr.write(build.stdout + build.stderr)
+            return 1
+
+        result = run([str(exe)])
+        if result.returncode:
+            sys.stderr.write(result.stdout + result.stderr)
             return 1
 
         env = os.environ.copy()

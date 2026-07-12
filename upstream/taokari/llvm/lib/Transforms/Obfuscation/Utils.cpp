@@ -43,21 +43,46 @@ static GlobalVariable *getOrCreatePageRuntimeSeed(Module &M, IntegerType *IntTy,
 }
 
 namespace llvm {
-// Mixed-boolean-arithmetic rewrite of integer addition: a + b is materialised
-// as (a^b) + 2*(a&b). Lives in the llvm namespace so ConstantInt/FP and String
-// decryptors can share one definition via a forward declaration.
+// Mixed-boolean-arithmetic rewrites of integer addition. Lives in the llvm
+// namespace so ConstantInt/FP and String decryptors can share one definition
+// via a forward declaration.
 Value *buildMBAAdd(IRBuilder<NoFolder> &IRB, Value *A, Value *B,
-                   const Twine &Name) {
-  Value *Xor = IRB.CreateXor(A, B, Name + ".mba.xor");
-  markNoObf(Xor);
-  Value *And = IRB.CreateAnd(A, B, Name + ".mba.and");
-  markNoObf(And);
-  Value *Carry = IRB.CreateShl(And, ConstantInt::get(A->getType(), 1),
-                               Name + ".mba.carry");
-  markNoObf(Carry);
-  Value *Add = IRB.CreateAdd(Xor, Carry, Name + ".mba.add");
-  markNoObf(Add);
-  return Add;
+                   const Twine &Name, uint64_t Salt) {
+  switch (Salt % 3) {
+  case 0: {
+    Value *Left = IRB.CreateXor(A, B, Name + ".mba.xor");
+    markNoObf(Left);
+    Value *And = IRB.CreateAnd(A, B, Name + ".mba.and");
+    markNoObf(And);
+    Value *Right = IRB.CreateShl(And, ConstantInt::get(A->getType(), 1),
+                                 Name + ".mba.carry");
+    markNoObf(Right);
+    Value *Add = IRB.CreateAdd(Left, Right, Name + ".mba.add");
+    markNoObf(Add);
+    return Add;
+  }
+  case 1: {
+    Value *Sum = IRB.CreateAdd(A, B, Name + ".mba.sum");
+    markNoObf(Sum);
+    auto *Mask = ConstantInt::get(A->getType(), Salt | 1u);
+    Value *Xor = IRB.CreateXor(Sum, Mask, Name + ".mba.xor");
+    markNoObf(Xor);
+    Value *Add = IRB.CreateXor(Xor, Mask, Name + ".mba.add");
+    markNoObf(Add);
+    return Add;
+  }
+  default: {
+    Value *NotB = IRB.CreateNot(B, Name + ".mba.not");
+    markNoObf(NotB);
+    Value *Sub = IRB.CreateSub(A, NotB, Name + ".mba.sub");
+    markNoObf(Sub);
+    Value *Add =
+        IRB.CreateSub(Sub, ConstantInt::get(A->getType(), 1), Name + ".mba.add");
+    markNoObf(Add);
+    return Add;
+  }
+  }
+  llvm_unreachable("unknown MBA add shape");
 }
 } // namespace llvm
 
@@ -92,6 +117,45 @@ AllocaInst *createConstantSeedCache(Function &F, std::mt19937_64 &rng,
   Store->setVolatile(volatileSeed);
   markNoObf(Store);
   return Slot;
+}
+
+unsigned chooseFakeEntryCount(std::mt19937_64 &rng, unsigned realEntries) {
+  if (!realEntries)
+    return 0;
+  unsigned minFakes = std::max(1u, realEntries / 4);
+  unsigned maxFakes = std::max(minFakes, realEntries);
+  return std::uniform_int_distribution<unsigned>(minFakes, maxFakes)(rng);
+}
+
+unsigned choosePageTableDepth(std::mt19937_64 &rng, unsigned level) {
+  if (!level)
+    return 0;
+  unsigned minDepth = level >= 3 ? 3u : (level > 1 ? 2u : 1u);
+  unsigned maxDepth = std::min(6u, std::max(minDepth, level + 2u));
+  return std::uniform_int_distribution<unsigned>(minDepth, maxDepth)(rng);
+}
+
+unsigned chooseModulePageTableDepth(std::mt19937_64 &rng) {
+  return std::uniform_int_distribution<unsigned>(2u, 6u)(rng);
+}
+
+static void emitIntegrityTrap(IRBuilder<> &IRB, Module *M,
+                              const BuildDecryptArgs &args) {
+  uint64_t Salt = args.RuntimeSeed ^ args.ModuleKey ^ (args.FuncKey << 7) ^
+                  (args.PtrEncKey >> 3);
+  switch (Salt % 3) {
+  case 0:
+    IRB.CreateCall(Intrinsic::getOrInsertDeclaration(M, Intrinsic::trap));
+    break;
+  case 1:
+    IRB.CreateCall(Intrinsic::getOrInsertDeclaration(M, Intrinsic::debugtrap));
+    break;
+  default:
+    IRB.CreateCall(
+        Intrinsic::getOrInsertDeclaration(M, Intrinsic::ubsantrap),
+        ConstantInt::get(IRB.getInt8Ty(), Salt & 0xffu));
+    break;
+  }
 }
 
 // Shamefully borrowed from ../Scalar/RegToMem.cpp :(
@@ -271,6 +335,21 @@ IntegerType *getPageTableIntTy(Module &M) {
                           M.getDataLayout().getPointerSizeInBits());
 }
 
+static uint8_t scramblePageMask(uint8_t Mask, uint64_t ObjKey,
+                                unsigned Round) {
+  unsigned Mul =
+      (static_cast<unsigned>(ObjKey >> ((Round & 7u) * 8u)) & 15u) | 1u;
+  unsigned Add =
+      static_cast<unsigned>((ObjKey >> (((Round + 3u) & 7u) * 8u)) ^
+                            (ObjKey >> (((Round + 1u) & 7u) * 8u))) &
+      15u;
+  return static_cast<uint8_t>(((Mask & 15u) * Mul + Add) & 15u);
+}
+
+static uint8_t pageMaskNibble(uint32_t Mask, unsigned Round) {
+  return static_cast<uint8_t>((Mask >> ((Round & 7u) * 4u)) & 15u);
+}
+
 void maskCipher(uint8_t  mask, APInt &preIndex, uint64_t objKey,
                 unsigned newIndex) {
   switch (mask) {
@@ -406,8 +485,9 @@ void createPageTable(const CreatePageTableArgs &args) {
 
       APInt preIndex(BitWidth, args.IndexMap->at(Obj));
       for (unsigned k = 0; k < 4; ++k) {
-        const auto mask = static_cast<uint8_t>(ObjMask >> (k * 4)) % 16u;
-        maskCipher(mask, preIndex, ObjFullKey, j);
+        const auto mask = pageMaskNibble(ObjMask, k);
+        maskCipher(scramblePageMask(mask, ObjFullKey, k),
+                   preIndex, ObjFullKey, j);
       }
       auto toWriteData = ConstantInt::get(IntTy, preIndex);
       ConstantObjectIndex.push_back(toWriteData);
@@ -467,8 +547,9 @@ void enhancedPageTable(const CreatePageTableArgs &     args,
                        : FuncIndexMap->at(Obj));
 
       for (unsigned k = 0; k < 2 * args.CountLoop; ++k) {
-        const auto mask = static_cast<uint8_t>(ObjMask >> (k * 4)) % 16u;
-        maskCipher(mask, preIndex, ObjFullKey, j);
+        const auto mask = pageMaskNibble(ObjMask, k);
+        maskCipher(scramblePageMask(mask, ObjFullKey, k),
+                   preIndex, ObjFullKey, j);
       }
       auto toWriteData = ConstantInt::get(IntTy, preIndex);
       ConstantObjectIndex.push_back(toWriteData);
@@ -508,7 +589,7 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
     auto *ThenTerm = SplitBlockAndInsertIfThen(BadIndex, args.InsertBefore,
                                                /*Unreachable=*/true);
     IRBuilder<> TrapB(ThenTerm);
-    TrapB.CreateCall(Intrinsic::getOrInsertDeclaration(M, Intrinsic::trap));
+    emitIntegrityTrap(TrapB, M, args);
     IRB.SetInsertPoint(args.InsertBefore);
   };
 
@@ -629,8 +710,8 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
       NextIndex = IRB.CreateLoad(IntTy, GEP);
       SmallVector<uint8_t, 16> maskIndex;
       for (unsigned j = 0; j < 2 * args.FuncLoopCount; ++j) {
-        auto mask = static_cast<uint8_t>(FuncMask >> (j * 4)) % 16u;
-        maskIndex.push_back(mask);
+        auto mask = pageMaskNibble(FuncMask, j);
+        maskIndex.push_back(scramblePageMask(mask, args.FuncKey, j));
       }
       for (int j = maskIndex.size() - 1; j >= 0; --j) {
         NextIndex = createDecIndexSwitch(maskIndex[j], NextIndex, PrevIndex,
@@ -652,8 +733,8 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
       NextIndex = IRB.CreateLoad(IntTy, GEP);
       SmallVector<uint8_t, 16> maskIndex;
       for (unsigned j = 0; j < 4; ++j) {
-        auto mask = static_cast<uint8_t>(ModuleMask >> (j * 4)) % 16u;
-        maskIndex.push_back(mask);
+        auto mask = pageMaskNibble(ModuleMask, j);
+        maskIndex.push_back(scramblePageMask(mask, args.ModuleKey, j));
       }
       for (int j = maskIndex.size() - 1; j >= 0; --j) {
         NextIndex = createDecIndexSwitch(maskIndex[j], NextIndex, PrevIndex,
@@ -693,7 +774,10 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
                                       ConstantInt::get(
                                           IntTy, -APInt(IntTy->getBitWidth(),
                                                         args.PtrEncKey)),
-                                      "taokari.ptr.decrypt")
+                                      "taokari.ptr.decrypt",
+                                      args.RuntimeSeed ^ args.ModuleKey ^
+                                          args.FuncKey ^ args.PtrEncKey ^
+                                          args.NextIndex)
                         : IRB.CreateSub(EncInt, PtrKey);
     markNoObf(DecInt);
     Value *DecPtr = IRB.CreateIntToPtr(DecInt, args.LoadTy);
@@ -709,6 +793,13 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
   }
   llvm_unreachable("BuildDecryptIR unreachable!!!");
 }
+
+Value *decryptConstantCipher(Value *EncLoad, ConstantInt *Key,
+                             Constant *XorKey, unsigned BitWidth,
+                             Type *OriginValTy, Instruction *insertBefore,
+                             std::mt19937_64 &rng, unsigned level,
+                             AllocaInst *SeedCache, bool volatileSeed,
+                             bool decryptorMBA);
 
 Value *encryptConstant(Constant *plainConstant, Instruction *insertBefore,
                        std::mt19937_64 &rng, unsigned level,
@@ -752,6 +843,21 @@ Value *encryptConstant(Constant *plainConstant, Instruction *insertBefore,
   IRBuilder<NoFolder> IRB(insertBefore);
   auto *EncLoad = IRB.CreateAlignedLoad(Enc->getType(), EncGV, Align{1}, true);
   markNoObf(EncLoad);
+  Value *Load = decryptConstantCipher(EncLoad, Key, XorKey, BitWidth,
+                                      OriginValTy, insertBefore, rng, level,
+                                      SeedCache, volatileSeed, decryptorMBA);
+  return Load;
+}
+
+Value *decryptConstantCipher(Value *EncLoad, ConstantInt *Key,
+                             Constant *XorKey, unsigned BitWidth,
+                             Type *OriginValTy, Instruction *insertBefore,
+                             std::mt19937_64 &rng, unsigned level,
+                             AllocaInst *SeedCache, bool volatileSeed,
+                             bool decryptorMBA) {
+  auto &Ctx = insertBefore->getContext();
+  IRBuilder<NoFolder> IRB(insertBefore);
+  markNoObf(EncLoad);
   Value *Load = EncLoad;
   auto loadSeed = [&](const Twine &Name) -> Value * {
     auto *SeedLoad = IRB.CreateAlignedLoad(Type::getInt64Ty(Ctx), SeedCache,
@@ -775,28 +881,49 @@ Value *encryptConstant(Constant *plainConstant, Instruction *insertBefore,
     markNoObf(Load);
   }
   if (level) {
+    SmallVector<Value *, 3> DecodeMasks;
     if (level > 2) {
       Value *NegKey = IRB.CreateNeg(XorKey);
       markNoObf(NegKey);
-      Load = IRB.CreateXor(Load, NegKey);
-      markNoObf(Load);
+      DecodeMasks.push_back(NegKey);
     }
     if (level > 1) {
       Value *AddKey = IRB.CreateAdd(XorKey, Key);
       markNoObf(AddKey);
-      Load = IRB.CreateXor(Load, AddKey);
+      DecodeMasks.push_back(AddKey);
+    }
+    DecodeMasks.push_back(XorKey);
+    std::shuffle(DecodeMasks.begin(), DecodeMasks.end(), rng);
+    for (auto *Mask : DecodeMasks) {
+      Load = IRB.CreateXor(Load, Mask, "taokari.const.mask.step");
       markNoObf(Load);
     }
-    Load = IRB.CreateXor(Load, XorKey);
-    markNoObf(Load);
   }
   if (SeedCache) {
     Load = IRB.CreateXor(Load, loadSeed("taokari.const.seed.b"),
                          "taokari.const.seed.unmix");
     markNoObf(Load);
   }
-  Load = decryptorMBA ? buildMBAAdd(IRB, Load, Key, "taokari.const.decrypt")
-                      : IRB.CreateAdd(Load, Key);
+  auto addKeyPart = [&](Value *Base, Value *Part,
+                        const Twine &Name) -> Value * {
+    Value *Next = decryptorMBA ? buildMBAAdd(IRB, Base, Part, Name, rng())
+                               : IRB.CreateAdd(Base, Part, Name);
+    markNoObf(Next);
+    return Next;
+  };
+  if (level > 1) {
+    auto *Share = ConstantInt::get(Key->getType(), rng());
+    auto *Rest = ConstantExpr::getSub(Key, Share);
+    if (rng() & 1) {
+      Load = addKeyPart(Load, Share, "taokari.const.decrypt.share.a");
+      Load = addKeyPart(Load, Rest, "taokari.const.decrypt.share.b");
+    } else {
+      Load = addKeyPart(Load, Rest, "taokari.const.decrypt.share.b");
+      Load = addKeyPart(Load, Share, "taokari.const.decrypt.share.a");
+    }
+  } else {
+    Load = addKeyPart(Load, Key, "taokari.const.decrypt");
+  }
   markNoObf(Load);
   Value *Cast = IRB.CreateBitCast(Load, OriginValTy);
   markNoObf(Cast);
