@@ -41,7 +41,13 @@ Build a real, reproducible Linux differential-test loop that exercises the *curr
 
 ## In progress
 
-- [🚧] **C4 — Full opt-level differential sweep.** Re-running after the CIE fix to confirm the whole corpus is now clean at O0/O1/O2/O3/Os/Oz.
+- [🚧] **C10 — Full release-gate suite regression check** (runs all `verify_*.py` gates including the 4 new ones).
+
+## Completed (additional)
+
+- [x] **C7 — Concurrency differential under sanitizers.** `atomics`, `multithreading`, `thread_local_storage` cases pass differential under UBSan (3/3) and the multithreading case under TSan (1/1). No data races or atomic-ordering defects introduced by obfuscation.
+- [x] **C8 — ELF integrity verifier.** `verify_elf_integrity.py` confirms the full obfuscation stack preserves PT_GNU_STACK (non-exec), PT_GNU_RELRO, DT_FLAGS_1 PIE, DT_NEEDED set, and `.init_array`/`.fini_array`/`.eh_frame`/`.eh_frame_hdr` sections. All 10 checks pass.
+- [x] **C9 — Sanitizer differential sweep.** ASan (6/6 on dynamic_memory, allocator_heavy, pointer_heavy, tiny_aes, hashing, compression) and UBSan (6/6 on arith_logic, bit_ops, math_heavy, exceptions_raii, cpp_inheritance, virtual_dispatch) — no memory errors, no leaks, no UB.
 
 ## Differential baseline (verified 2026-07-12)
 
@@ -49,8 +55,15 @@ Build a real, reproducible Linux differential-test loop that exercises the *curr
 |---|---|
 | default O2, full corpus | 50/51 (`c_seh` Windows-only by design) |
 | O0/O1/O2/O3/Os/Oz × 51 cases (pre-CIE-fix) | 296/306 — 10 failures, all `math_heavy` at O0/O1/Os/Oz from the CIE `-Os` crash |
-| O0/O1/O2/O3/Os/Oz × 51 cases (post-CIE-fix) | running |
+| **O0/O1/O2/O3/Os/Oz × 51 cases (post-CIE-fix)** | **300/300 valid Linux variants matched, 0 crashes** (306 total minus 6 `c_seh` Windows-only) |
 | 4 sanity cases × 6 opt levels (post-fix) | 24/24 |
+| ASan × 6 memory/pointer cases | 6/6 |
+| UBSan × 6 arithmetic/exception cases | 6/6 |
+| TSan × multithreading | 1/1 |
+| exceptions across obfuscated/unobfuscated boundaries (5 mixed-TU configs) | 5/5 |
+| dlopen/dlsym shared-lib differential | pass (plain==obf, exports visible, hidden not leaked, .init_array ran) |
+| ELF integrity (10 properties) | 10/10 |
+
 
 
 
