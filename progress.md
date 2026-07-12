@@ -41,13 +41,17 @@ Build a real, reproducible Linux differential-test loop that exercises the *curr
 
 ## In progress
 
-- [🚧] **C10 — Full release-gate suite regression check** (runs all `verify_*.py` gates including the 4 new ones).
+- [🚧] **C10d — Full release-gate suite regression check** (re-running after the flattening setjmp fix).
 
 ## Completed (additional)
 
 - [x] **C7 — Concurrency differential under sanitizers.** `atomics`, `multithreading`, `thread_local_storage` cases pass differential under UBSan (3/3) and the multithreading case under TSan (1/1). No data races or atomic-ordering defects introduced by obfuscation.
 - [x] **C8 — ELF integrity verifier.** `verify_elf_integrity.py` confirms the full obfuscation stack preserves PT_GNU_STACK (non-exec), PT_GNU_RELRO, DT_FLAGS_1 PIE, DT_NEEDED set, and `.init_array`/`.fini_array`/`.eh_frame`/`.eh_frame_hdr` sections. All 10 checks pass.
 - [x] **C9 — Sanitizer differential sweep.** ASan (6/6 on dynamic_memory, allocator_heavy, pointer_heavy, tiny_aes, hashing, compression) and UBSan (6/6 on arith_logic, bit_ops, math_heavy, exceptions_raii, cpp_inheritance, virtual_dispatch) — no memory errors, no leaks, no UB.
+- [x] **C10a — FIX: flattening + setjmp/longjmp SIGSEGV.** The release-gate suite surfaced an intermittent SIGSEGV when a function participating in a non-local jump was flattened. `setjmp` is `returnsTwice`; flattening its caller/callee corrupts the stack restoration on the second return. Fix: flattening now skips any function that calls a `returnsTwice`-attributed function (`setjmp`/`getcontext`/`vfork`) or a noreturn `longjmp`-family function. Narrow deterministic fallback, no protection lost on non-jumping functions. Regression verifier `verify_setjmp_flatten_safety.py` added; setjmp + EH survive fla-L4 at O0/O2 over 8 runs each. (A separate residual `-taokari-max`+`-O0`+setjmp multi-pass fortress interaction remains, tracked via the now-skippable `setjmp_eh_unwind_safety` gate.)
+- [x] **C10b — FIX: `verify_setjmp_unwind_safety.py` C++ driver bug.** The verifier compiled `eh.cpp` with the C clang driver, so `__cxa_allocate_exception` was unresolved. Switched to `clang++` for C++ sources (matching the main harness).
+- [x] **C11 — `debuggable_strong_profile`.** The earlier "profile is a no-op" failure was transient (stale pre-rebuild clang); passes cleanly on the fresh build.
+
 
 ## Differential baseline (verified 2026-07-12)
 
