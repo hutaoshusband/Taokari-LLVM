@@ -81,6 +81,12 @@ Build a real, reproducible Linux differential-test loop that exercises the *curr
 
 (none — see Next Candidates below)
 
+## Pre-existing verifier fixes (2026-07-12)
+
+The L7.4 triage listed 3 verifiers as "pre-existing broken on both platforms." Investigated each:
+- **`verify_vmp_runtime_traps`** — was a **fixture bug** (injected `call @exit` but never emitted the `declare`, so the `.ll` failed to parse). Fixed the declare-emission logic; verifier now passes (`vmp runtime traps: ok`).
+- **`verify_vmp_icall_route`** / **`verify_vmp_signature_dummy_args`** — genuine VMP protection-quality contract failures (the VM behavior does not meet the documented contract on either platform), not fixture bugs. Left as documented pre-existing protection gaps.
+
 ## Ultimate combined stress (2026-07-12)
 
 Full corpus under the most demanding combined configuration — **`-Os` (size-opt) + PIE (position-independent) + UBSan (undefined-behavior detection) all at once**: **50/51 match** (only `c_seh` Windows-only excluded). No crash, no UB, no behavioral mismatch. This is the strongest confirmation that the CIE `-Os` fix, flattening setjmp guard, AArch64 ptrauth fix, and volatile-seed guard hold together under the harshest combined stress.
