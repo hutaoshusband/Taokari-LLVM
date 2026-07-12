@@ -81,7 +81,9 @@ Build a real, reproducible Linux differential-test loop that exercises the *curr
 
 (none — see Next Candidates below)
 
-## Volatile-seed guard (2026-07-12)
+## Final post-guard UBSan lock (2026-07-12)
+
+Full corpus (`default` mode) under UBSan differential, after the volatile-seed guard: **50/51 match** (only `c_seh` Windows-only excluded). Confirms the CIE/CFE volatile-seed change introduced no UB and no behavioral regression.
 
 Defensive hardening: CIE/CFE now disable the volatile runtime constant-decrypt seed for functions that call a `returnsTwice` function (setjmp/getcontext/vfork), since the volatile nonce can change across the setjmp/longjmp boundary. Independently correct (latent unsoundness) even though it did not fix the separate NULL-pool-base SIGSEGV in the `-taokari-max`+setjmp case (gdb: `rsi=0` in a page-table byte-load post-longjmp). Full gate suite re-run: 209 PASS, 0 unexpected FAIL.
 
