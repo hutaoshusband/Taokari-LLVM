@@ -104,7 +104,19 @@ struct ConstantFPEncryption : public FunctionPass {
     // Effective minimum constant width: built-in floor (8 bits) raised by
     // the user-configured minConstSize. Narrower FP types are skipped.
     const unsigned MinBits = std::max(8u, opt.minConstSize());
-    const bool UseRuntimeSeed = opt.level() >= 2;
+    // See ConstantIntEncryption: the volatile runtime seed is unsafe across a
+    // setjmp/longjmp boundary, so functions calling a returnsTwice function
+    // (setjmp/getcontext) fall back to a static seed.
+    bool CallsReturnsTwice = false;
+    for (Instruction &I : instructions(F)) {
+      if (auto *CB = dyn_cast<CallBase>(&I)) {
+        if (CB->hasFnAttr(Attribute::ReturnsTwice)) {
+          CallsReturnsTwice = true;
+          break;
+        }
+      }
+    }
+    const bool UseRuntimeSeed = opt.level() >= 2 && !CallsReturnsTwice;
     AllocaInst *SeedCache = UseRuntimeSeed
                                  ? createConstantSeedCache(F, RNG,
                                                            opt.volatileSeed())

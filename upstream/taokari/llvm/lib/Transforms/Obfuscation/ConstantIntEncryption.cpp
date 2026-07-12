@@ -112,7 +112,22 @@ struct ConstantIntEncryption : public FunctionPass {
       return false;
     }
     const unsigned MinBits = std::max(8u, opt.minConstSize());
-    const bool UseRuntimeSeed = opt.level() >= 2;
+    // The runtime (volatile) seed is read into a stack-local nonce each call.
+    // Across a setjmp/longjmp boundary the nonce can change, so a constant
+    // decrypted before setjmp is re-decrypted with a different seed after
+    // longjmp returns -> wrong value (often a bad page-table index -> crash).
+    // Functions that call a returnsTwice function (setjmp/getcontext) must use
+    // a static seed instead.
+    bool CallsReturnsTwice = false;
+    for (Instruction &I : instructions(F)) {
+      if (auto *CB = dyn_cast<CallBase>(&I)) {
+        if (CB->hasFnAttr(Attribute::ReturnsTwice)) {
+          CallsReturnsTwice = true;
+          break;
+        }
+      }
+    }
+    const bool UseRuntimeSeed = opt.level() >= 2 && !CallsReturnsTwice;
     AllocaInst *SeedCache = UseRuntimeSeed
                                  ? createConstantSeedCache(F, RNG,
                                                            opt.volatileSeed())
