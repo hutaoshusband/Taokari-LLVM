@@ -81,6 +81,10 @@ Build a real, reproducible Linux differential-test loop that exercises the *curr
 
 (none — see Next Candidates below)
 
+## Ultimate combined stress (2026-07-12)
+
+Full corpus under the most demanding combined configuration — **`-Os` (size-opt) + PIE (position-independent) + UBSan (undefined-behavior detection) all at once**: **50/51 match** (only `c_seh` Windows-only excluded). No crash, no UB, no behavioral mismatch. This is the strongest confirmation that the CIE `-Os` fix, flattening setjmp guard, AArch64 ptrauth fix, and volatile-seed guard hold together under the harshest combined stress.
+
 ## Per-pass `-Oz` stress (2026-07-12)
 
 After the CIE `-Os` fix, confirmed no analogous crash at `-Oz`: all 9 passes (fla/bcf/mba/cse/cie/cfe/indbr/icall/indgv) at L4 compile + run correctly under `-Oz` (5/5 each on the smoke source, output matches). The size-optimization corner is clean at both `-Os` and `-Oz`.
