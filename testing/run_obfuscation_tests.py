@@ -164,6 +164,7 @@ RELEASE_GATES = [
     ReleaseGate("linux_dynamic_protection", TESTING / "scripts" / "verify_dynamic_protection_linux.py", skippable=True),
     ReleaseGate("itanium_rtti_eraser", TESTING / "scripts" / "verify_itanium_rtti_eraser.py", skippable=True),
     ReleaseGate("linux_metadata_hygiene", TESTING / "scripts" / "verify_metadata_hygiene_linux.py", skippable=True),
+    ReleaseGate("exceptions_xboundary", TESTING / "scripts" / "verify_exceptions_xboundary.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
