@@ -161,15 +161,15 @@ bool Flattening::flatten(Function *f) {
       return false;
     }
     if (auto *CB = dyn_cast<CallBase>(&I)) {
-      if (CB->hasFnAttr(Attribute::ReturnsTwice) ||
-          CB->calleeHasFnAttr(Attribute::ReturnsTwice)) {
+      if (CB->hasFnAttr(Attribute::ReturnsTwice)) {
         return false;
       }
-      if (Function *Callee = CB->getCalledFunction()) {
-        StringRef N = Callee->getName();
-        if (Callee->hasFnAttribute(Attribute::NoReturn) &&
-            (N.contains("longjmp") || N == "_longjmp" || N == "siglongjmp")) {
-          return false;
+      if (CB->doesNotReturn()) {
+        if (Function *Callee = CB->getCalledFunction()) {
+          StringRef N = Callee->getName();
+          if (N.contains("longjmp") || N == "_longjmp" || N == "siglongjmp") {
+            return false;
+          }
         }
       }
     }
