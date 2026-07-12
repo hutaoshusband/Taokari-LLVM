@@ -166,6 +166,7 @@ RELEASE_GATES = [
     ReleaseGate("linux_metadata_hygiene", TESTING / "scripts" / "verify_metadata_hygiene_linux.py", skippable=True),
     ReleaseGate("exceptions_xboundary", TESTING / "scripts" / "verify_exceptions_xboundary.py"),
     ReleaseGate("cie_wide_int_os", TESTING / "scripts" / "verify_cie_wide_int_os.py"),
+    ReleaseGate("dlopen_dlsym", TESTING / "scripts" / "verify_dlopen_dlsym.py", skippable=True),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
