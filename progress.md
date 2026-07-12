@@ -73,6 +73,13 @@ Build a real, reproducible Linux differential-test loop that exercises the *curr
 - [x] **C12 — Performance/size baseline.** 10 representative cases under the full IR stack: median compile 1.65×, runtime 1.23×, size 3.18×. No overhead added by the fixes.
 - [x] **C14 — FIX: AArch64 ptrauth.sign malformed IR + unconditional PAC.** AArch64-targeted obfuscated binaries generated malformed IR: `indirectbr i64 %x` (address must be pointer-typed) and, at indbr L3+, an unselectable `llvm.ptrauth.sign`. Two root causes in the shared `buildPageTableDecryptIR`: (a) `ptrauth.sign` is declared `(i64,i32,i64)->i64` but the code passed a `ptr` arg and used the `i64` result directly as a pointer — fixed by `ptrtoint`/`inttoptr` around the call; (b) all three indirect passes enabled PAC for *any* AArch64 target, but the intrinsic only lowers on `+pauth` (armv8.3-a+) targets — added `targetHasPAuth(F)` and gated indbr/icall/indgv on it. The X86 path (which skips ptrauth) masked both bugs. Verifier `verify_aarch64_indirect_ir.py` confirms indbr/icall/indgv L1-L4 are well-formed + AArch64-codegenable; X86 regression 5/5 on indirect-heavy cases.
 - [x] **C14-fla — Flattening API compile fix.** The setjmp guard from C10a used `CB->calleeHasFnAttr()` (nonexistent API); the WSL clang used to "verify" it was the pre-fix binary, masking the compile error. Switched to `CB->hasFnAttr()` + `CB->doesNotReturn()`. Re-verified the guard fires.
+- [x] **C18 — AArch64 all-passes parity.** Confirmed all 10 obfuscation passes (fla/bcf/mba/cse/cie/cfe/outline/indbr/icall/indgv) at L4 produce well-formed, AArch64-codegenable IR after the ptrauth fix. (No AArch64 runtime/qemu in this WSL image, so execution testing is a documented future gap.)
+- [x] **C16 — Post-AArch64 X86 regression.** Full gate suite: 209 PASS, 0 unexpected FAIL (only `c_seh` by-design + the documented setjmp skip). No X86 regression from the shared Utils.cpp changes.
+- [x] **C19 — Type-edge defect hunt (no new defects).** Verified `__float128` and `long double` (x86_fp80) both work under ConstantFPEncryption + full stack; ConstantFPEncryption's `encryptConstant` path already handles `>64`-bit via zext. No analogous bug to the CIE shard issue.
+
+## In progress
+
+- [🚧] **C20 — Final consolidated differential re-run** to confirm the full corpus + matrix is green after all three fixes.
 
 
 ## Differential baseline (verified 2026-07-12)
