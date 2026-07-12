@@ -41,7 +41,7 @@ Build a real, reproducible Linux differential-test loop that exercises the *curr
 
 ## In progress
 
-- [🚧] **C10d — Full release-gate suite regression check** (re-running after the flattening setjmp fix).
+- [🚧] **C31+ — Continued broad-spectrum stress probing** (`-Os`+PIE+UBSan, FP edges, deep exceptions, etc.). Compatibility is mature; current work is disconfirming-evidence search before moving fully into protection-hardening.
 
 ## Performance & binary-size baseline (verified 2026-07-12, post-fixes)
 
