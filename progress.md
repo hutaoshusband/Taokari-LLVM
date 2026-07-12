@@ -81,6 +81,12 @@ Build a real, reproducible Linux differential-test loop that exercises the *curr
 
 (none — see Next Candidates below)
 
+## Additional compatibility coverage (2026-07-12)
+
+- LTO differential (`-flto -fuse-ld=lld`, whole-program): 15/15 representative cases match baseline.
+- Static-link differential (`-static`): plain == obfuscated, ldd confirms genuinely static.
+- These complete the codegen-mode matrix (PIE/non-PIE/shared/static/LTO all proven).
+
 ## Final consolidated validation (2026-07-12, after all 3 fixes)
 
 | check | result |
