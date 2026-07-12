@@ -484,7 +484,7 @@ struct IndirectCall : public FunctionPass {
         buildDecrypt.RuntimeSeed = opt.level() > 1 ? RNG() : 0;
         buildDecrypt.UseMBA = opt.level() > 1;
         buildDecrypt.IntegrityCheck = opt.level() > 1;
-        buildDecrypt.PtrAuthKey = T.isAArch64() ? 0 : -1;
+        buildDecrypt.PtrAuthKey = targetHasPAuth(Fn) ? 0 : -1;
         buildDecrypt.PtrAuthDisc = pacDiscriminator(&Fn, TableCallee);
         auto        DecPtr = buildPageTableDecryptIR(buildDecrypt);
         IRBuilder<> SIB(DecryptPt);
@@ -530,7 +530,7 @@ struct IndirectCall : public FunctionPass {
         buildDecrypt.UseMBA = opt.level() > 1;
         buildDecrypt.IntegrityCheck = opt.level() > 1;
         Triple T(M.getTargetTriple());
-        buildDecrypt.PtrAuthKey = T.isAArch64() ? 0 : -1;
+        buildDecrypt.PtrAuthKey = targetHasPAuth(Fn) ? 0 : -1;
         buildDecrypt.PtrAuthDisc = pacDiscriminator(&Fn, TableCallee);
         auto FnPtr = buildPageTableDecryptIR(buildDecrypt);
         FnPtr->setName("Call_" + Callee->getName());

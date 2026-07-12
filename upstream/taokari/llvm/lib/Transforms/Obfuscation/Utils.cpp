@@ -139,6 +139,18 @@ unsigned chooseModulePageTableDepth(std::mt19937_64 &rng) {
   return std::uniform_int_distribution<unsigned>(2u, 6u)(rng);
 }
 
+bool targetHasPAuth(const Function &F) {
+  Triple T(F.getParent()->getTargetTriple());
+  if (!T.isAArch64())
+    return false;
+  StringRef TF = F.getFnAttribute("target-features").getValueAsString();
+  return TF.contains("+pauth") || TF.contains("+pacre") ||
+         TF.contains("v8.3a") || TF.contains("v8.4a") ||
+         TF.contains("v8.5a") || TF.contains("v8.6a") ||
+         TF.contains("v8.7a") || TF.contains("v8.8a") ||
+         TF.contains("v8.9a") || TF.contains("v9a") || TF.contains("v9.");
+}
+
 static void emitIntegrityTrap(IRBuilder<> &IRB, Module *M,
                               const BuildDecryptArgs &args) {
   uint64_t Salt = args.RuntimeSeed ^ args.ModuleKey ^ (args.FuncKey << 7) ^
@@ -781,13 +793,20 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
                         : IRB.CreateSub(EncInt, PtrKey);
     markNoObf(DecInt);
     Value *DecPtr = IRB.CreateIntToPtr(DecInt, args.LoadTy);
-    // Optional PAC pointer signing for AArch64
+    // Optional PAC pointer signing for AArch64. llvm.ptrauth.sign is declared
+    // with integer operands/return (i64 ptr, i32 key, i64 disc -> i64), so
+    // pass the pointer as an integer and cast the signed result back to the
+    // pointer type the caller expects. Without this, indirectbr receives a
+    // non-pointer address operand (illegal IR) and the intrinsic call is
+    // rejected as an incompatible signature.
     if (args.PtrAuthKey >= 0) {
-      DecPtr = IRB.CreateCall(
+      Value *PtrAsInt = IRB.CreatePtrToInt(DecPtr, IntTy, "taokari.ptr.auth.in");
+      Value *Signed = IRB.CreateCall(
           Intrinsic::getOrInsertDeclaration(M, Intrinsic::ptrauth_sign),
-          {DecPtr,
+          {PtrAsInt,
            ConstantInt::get(Type::getInt32Ty(Ctx), args.PtrAuthKey),
            ConstantInt::get(IntTy, args.PtrAuthDisc)});
+      DecPtr = IRB.CreateIntToPtr(Signed, args.LoadTy, "taokari.ptr.auth.out");
     }
     return DecPtr;
   }

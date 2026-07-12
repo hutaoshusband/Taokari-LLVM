@@ -63,6 +63,11 @@ unsigned chooseModulePageTableDepth(std::mt19937_64 &rng);
 void createPageTable(const CreatePageTableArgs &args);
 void enhancedPageTable(const CreatePageTableArgs &args,
                        DenseMap<Constant *, unsigned> *FuncIndexMap);
+// True iff the function's target is AArch64 with pointer-authentication
+// support (+pauth / armv8.3a+ / v9a). ptrauth.sign only lowers on such
+// targets, so callers must gate PAC signing on this to avoid an
+// unselectable intrinsic.
+bool targetHasPAuth(const Function &F);
 Value *buildPageTableDecryptIR(const BuildDecryptArgs &args);
 Value *encryptConstant(Constant *plainConstant, Instruction *insertBefore,
                        std::mt19937_64 &rng, unsigned level,

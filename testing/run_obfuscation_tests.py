@@ -169,6 +169,7 @@ RELEASE_GATES = [
     ReleaseGate("dlopen_dlsym", TESTING / "scripts" / "verify_dlopen_dlsym.py", skippable=True),
     ReleaseGate("elf_integrity", TESTING / "scripts" / "verify_elf_integrity.py", skippable=True),
     ReleaseGate("setjmp_flatten_safety", TESTING / "scripts" / "verify_setjmp_flatten_safety.py"),
+    ReleaseGate("aarch64_indirect_ir", TESTING / "scripts" / "verify_aarch64_indirect_ir.py", skippable=True),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
