@@ -160,6 +160,19 @@ bool Flattening::flatten(Function *f) {
         isa<CatchPadInst>(&I) || isa<CatchSwitchInst>(&I)) {
       return false;
     }
+    if (auto *CB = dyn_cast<CallBase>(&I)) {
+      if (CB->hasFnAttr(Attribute::ReturnsTwice) ||
+          CB->calleeHasFnAttr(Attribute::ReturnsTwice)) {
+        return false;
+      }
+      if (Function *Callee = CB->getCalledFunction()) {
+        StringRef N = Callee->getName();
+        if (Callee->hasFnAttribute(Attribute::NoReturn) &&
+            (N.contains("longjmp") || N == "_longjmp" || N == "siglongjmp")) {
+          return false;
+        }
+      }
+    }
   }
 
   auto &Ctx = f->getContext();
