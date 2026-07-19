@@ -64,6 +64,22 @@ Build a real, reproducible Linux differential-test loop that exercises the *curr
 
 ## Completed (additional)
 
+- [x] **C32 — FIX: CIE helper calls in exception-personality functions.**
+      CIE L3/L4 inserted helper-shard calls into Windows EH funclets without
+      valid funclet context, turning caught exceptions into access violations.
+      CIE now skips personality functions while continuing to protect ordinary
+      callees. `verify_cie_eh_semantics.py` matches native output for 8 seeds on
+      Windows and Linux. On the exception-heavy UI fixture, the guard reduced
+      best protected compile time from 2.530s to 2.364s (6.6%).
+- [x] **C33 — FIX: IndirectCall shard unwind and ABI forwarding.**
+      Fortress call shards unconditionally claimed `nounwind` and forwarded
+      only the raw function type. Exceptions therefore terminated on Windows,
+      while Linux `byval` aggregate arguments were passed with the wrong ABI.
+      Shards now inherit return/parameter ABI attributes and the inner call's
+      calling convention, and only use `nounwind` for non-throwing callees.
+      `verify_ui_animation_semantics.py` stresses 1,400 animation frames,
+      aggregate UI packets, callbacks, atomics, exceptions, and 8 seeds under
+      the loader's former all-L4 profile; Windows and Linux match native.
 - [x] **C7 — Concurrency differential under sanitizers.** `atomics`, `multithreading`, `thread_local_storage` cases pass differential under UBSan (3/3) and the multithreading case under TSan (1/1). No data races or atomic-ordering defects introduced by obfuscation.
 - [x] **C8 — ELF integrity verifier.** `verify_elf_integrity.py` confirms the full obfuscation stack preserves PT_GNU_STACK (non-exec), PT_GNU_RELRO, DT_FLAGS_1 PIE, DT_NEEDED set, and `.init_array`/`.fini_array`/`.eh_frame`/`.eh_frame_hdr` sections. All 10 checks pass.
 - [x] **C9 — Sanitizer differential sweep.** ASan (6/6 on dynamic_memory, allocator_heavy, pointer_heavy, tiny_aes, hashing, compression) and UBSan (6/6 on arith_logic, bit_ops, math_heavy, exceptions_raii, cpp_inheritance, virtual_dispatch) — no memory errors, no leaks, no UB.
@@ -157,4 +173,3 @@ Defensive hardening: CIE/CFE now disable the volatile runtime constant-decrypt s
 
 - [ ] **C13 (deferred, root-caused, mitigated)** — The `-taokari-max`+`-O0`+setjmp residual. gdb-traced: SIGSEGV at `mov (%rsi,%rdi,1),%dil` with `rsi=0` (NULL intermediate pointer) in an internal constant-decrypt path called from `main` after `longjmp` returns. Confirmed it is a **multi-pass interaction unique to `-taokari-max`**: every individual pass (incl. CIE-alone-L4) passes setjmp at `-O0` 8/8, every pair tested passes, but the full fortress combination produces a stateful-decrypt path that yields NULL after longjmp stack restoration. The volatile-seed guard (CIE/CFE disable runtime seed for returnsTwice callers) is a defensible mitigation but did not eliminate it — the residual statefulness is in the combined page-table/pool fortress decryption. Persists with `deep` (longjmp caller) fully `noobf`-excluded, confirming it is module-level constant-decryption state in `main`, not a CFG transform. Proper fix needs IR-level pipeline bisection (`-stop-after`) to isolate which max-sub-option first introduces the bad path. Narrow opt-in only; tracked via the skippable `setjmp_eh_unwind_safety` gate; flattening half fixed + covered by `verify_setjmp_flatten_safety.py`.
 - [ ] **C21+** — Protection-hardening (only after compatibility is mature, which it now is). Opaque-predicate solver-resistance and constant-context verifiers already pass on Linux; any new transform must preserve the 300/300 differential + 209-gate baseline.
-
