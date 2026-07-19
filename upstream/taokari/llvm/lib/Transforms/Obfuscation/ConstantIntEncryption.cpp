@@ -54,6 +54,8 @@ struct ConstantIntEncryption : public FunctionPass {
   bool doInitialization(Module &M) override {
     bool Changed = false;
     for (auto &F : M) {
+      if (F.hasPersonalityFn())
+        continue;
       const auto opt = ArgsOptions->toObfuscate(ArgsOptions->cieOpt(), &F);
       if (!opt.isEnabled()) {
         continue;
