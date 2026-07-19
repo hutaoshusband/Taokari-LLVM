@@ -1,18 +1,15 @@
 """Verify BCF fake-region / flattening dispatcher integration.
 
 When BCF runs before flattening (-taokari-bcf-before-fla) at fla L3+,
-the Flattening pass now chains BCF-generated fake regions (.bcf.fake
-blocks) into the dispatcher's fake-case target, so the flattening
-dispatcher's bogus switch edges route through BCF-style junk regions
-instead of only cloned real blocks.
+the Flattening pass must preserve BCF-generated fake-region exits.
+Redirecting a .bcf.fake block into the flattening trap chain changes
+BCF's fallback path from semantically equivalent junk into a crash.
 
 Contract (same source, fla L3, BCF before fla, -emit-llvm):
   * The IR contains both .bcf.fake blocks and switchFakeCaseGate/clone
     dispatcher blocks (both passes fired).
-  * At least one .bcf.fake block's terminator successor is a flattening-
-    generated block (switchFakeCaseGate / switchFakeSucc / .tao.clone /
-    switchDefault). That is the wiring this feature adds: without it,
-    every .bcf.fake successor is a real (non-flattening) block.
+  * No .bcf.fake block decodes its next dispatcher state back to the
+    function-entry case. That restart corrupts live state on the fallback path.
   * A fla-L3 build WITHOUT bcf-before-fla has no .bcf.fake blocks at all
     (proves the .bcf.fake markers come from BCF, not fla).
   * Correctness: the combined obfuscated binary runs and matches native.
@@ -57,7 +54,10 @@ int main(void) {
 }
 """
 
-BR_LABEL = re.compile(r'br label %([^\s,;]+)')
+CASE = re.compile(r'i64 (-?\d+), label %([^\s\]]+)')
+STATE_STORE = re.compile(
+    r'store volatile i64 (-?\d+), ptr %(switchVar|switchXor)'
+)
 
 
 def run(command: list[str], *, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
@@ -103,20 +103,19 @@ def emit_ir(src: Path, out: Path, extra: list[str]) -> subprocess.CompletedProce
     ])
 
 
-def parse_block_successors(text: str) -> dict[str, list[str]]:
-    succ: dict[str, list[str]] = {}
+def parse_blocks(text: str) -> dict[str, list[str]]:
+    blocks: dict[str, list[str]] = {}
     cur = None
     for line in text.splitlines():
         m = re.match(r'^([^\s;][^:]*):\s', line)
         if m and not line.startswith("  "):
             cur = m.group(1).strip()
-            succ.setdefault(cur, [])
+            blocks.setdefault(cur, [])
             continue
         if cur is None:
             continue
-        for br in BR_LABEL.findall(line):
-            succ[cur].append(br)
-    return succ
+        blocks[cur].append(line)
+    return blocks
 
 
 def main() -> int:
@@ -158,29 +157,48 @@ def main() -> int:
             print("FAIL: fla-only build leaked .bcf.fake markers", file=sys.stderr)
             return 1
 
-        succ = parse_block_successors(combined_text)
-        fla_block_markers = (
-            "switchFakeCaseGate", "switchFakeSucc", "switchDefault",
-            "switchTrap", "tao.clone", "switchDispatch", "switchBucket",
-            "loopEnd", "loopEntry",
+        probe_match = re.search(
+            r'define\b[^{]*@probe\([^)]*\)[^{]*\{(.*?)^\}',
+            combined_text, re.MULTILINE | re.DOTALL,
         )
-        wired = 0
+        if not probe_match:
+            print("FAIL: probe function missing from combined IR", file=sys.stderr)
+            return 1
+
+        probe_ir = probe_match.group(1)
+        mask = (1 << 64) - 1
+        cases = {
+            int(value) & mask: label
+            for value, label in CASE.findall(probe_ir)
+        }
+        entry_states = {
+            value for value, label in cases.items() if label.startswith("first")
+        }
+        if not entry_states:
+            print("FAIL: flattening entry state missing", file=sys.stderr)
+            return 1
+
         bcf_count = 0
-        for blk, succs in succ.items():
-            if ".bcf.fake" not in blk:
+        entry_redirects = 0
+        for name, lines in parse_blocks(probe_ir).items():
+            if ".bcf.fake" not in name:
+                continue
+            stores = dict(
+                (slot, int(value) & mask)
+                for value, slot in STATE_STORE.findall("\n".join(lines))
+            )
+            if "switchVar" not in stores or "switchXor" not in stores:
                 continue
             bcf_count += 1
-            for s in succs:
-                if any(m in s for m in fla_block_markers):
-                    wired += 1
-                    break
+            if (stores["switchVar"] ^ stores["switchXor"]) in entry_states:
+                entry_redirects += 1
+
         if bcf_count == 0:
-            print("FAIL: no .bcf.fake blocks found in successor map", file=sys.stderr)
+            print("FAIL: no flattened .bcf.fake exits found", file=sys.stderr)
             return 1
-        if wired == 0:
-            print(f"FAIL: none of {bcf_count} .bcf.fake blocks route into the "
-                  f"flattening dispatcher (integration did not fire)",
-                  file=sys.stderr)
+        if entry_redirects:
+            print(f"FAIL: {entry_redirects}/{bcf_count} .bcf.fake exits restart "
+                  f"at the flattening entry state", file=sys.stderr)
             return 1
 
         native = run([str(CLANG), str(src), "-O2", "-fno-discard-value-names",
@@ -213,8 +231,8 @@ def main() -> int:
                   file=sys.stderr)
             return 1
 
-    print(f"bcf/fla dispatcher integration: ok ({wired}/{bcf_count} .bcf.fake "
-          f"blocks wired into dispatcher, runtime matches native)")
+    print(f"bcf/fla dispatcher integration: ok ({bcf_count} .bcf.fake "
+          f"exits preserved, runtime matches native)")
     return 0
 
 
