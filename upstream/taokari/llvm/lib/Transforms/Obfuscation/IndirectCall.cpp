@@ -64,6 +64,15 @@ bool moduleUsesNonLocalJumps(Module &M) {
   return false;
 }
 
+AttributeList getABIAttributes(Function &F) {
+  const AttributeList Attrs = F.getAttributes();
+  SmallVector<AttributeSet, 8> ParamAttrs;
+  for (Argument &Arg : F.args())
+    ParamAttrs.push_back(Attrs.getParamAttrs(Arg.getArgNo()));
+  return AttributeList::get(F.getContext(), AttributeSet(),
+                            Attrs.getRetAttrs(), ParamAttrs);
+}
+
 bool isSafeCallee(CallBase &CB, Function *Callee) {
   if (!Callee || Callee->isIntrinsic())
     return false;
@@ -149,13 +158,16 @@ struct IndirectCall : public FunctionPass {
 
     auto *Shard = Function::Create(Callee->getFunctionType(),
                                    GlobalValue::InternalLinkage, Name, M);
+    Shard->setAttributes(getABIAttributes(*Callee));
     Shard->addFnAttr(Attribute::NoInline);
-    Shard->addFnAttr(Attribute::NoUnwind);
+    if (Callee->doesNotThrow())
+      Shard->addFnAttr(Attribute::NoUnwind);
     Shard->setCallingConv(Callee->getCallingConv());
 
     auto *FakeTarget = Function::Create(
         Callee->getFunctionType(), GlobalValue::InternalLinkage,
         "__taokari_icall_fake_" + std::string(Callee->getName()), M);
+    FakeTarget->setAttributes(getABIAttributes(*Callee));
     FakeTarget->addFnAttr(Attribute::NoInline);
     FakeTarget->addFnAttr(Attribute::NoUnwind);
     FakeTarget->setCallingConv(Callee->getCallingConv());
@@ -241,19 +253,20 @@ struct IndirectCall : public FunctionPass {
     // no direct call edge to the real callee for Hex-Rays or a static
     // disassembler to lift.
     auto emitIndirectShardCall = [&](BasicBlock *BB, GlobalVariable *PtrGV,
-                                     FunctionType *FTy) -> CallInst * {
+                                     Function *Target) -> CallInst * {
       IRBuilder<> B2(BB);
       auto *AddrInt = B2.CreateAlignedLoad(I64, PtrGV, Align(8), true,
                                            "shard.addr");
       Value *DecPtr = B2.CreateIntToPtr(AddrInt, PtrTy, "shard.ptr");
-      auto *Call = B2.CreateCall(FTy, DecPtr, Args);
+      auto *Call = B2.CreateCall(Target->getFunctionType(), DecPtr, Args);
+      Call->setAttributes(getABIAttributes(*Target));
+      Call->setCallingConv(Target->getCallingConv());
       return Call;
     };
 
     B.SetInsertPoint(Fake);
     {
-      auto *FakeCall =
-          emitIndirectShardCall(Fake, FakePtrGV, FakeTarget->getFunctionType());
+      auto *FakeCall = emitIndirectShardCall(Fake, FakePtrGV, FakeTarget);
       if (Callee->getReturnType()->isVoidTy())
         B.CreateRetVoid();
       else
@@ -262,8 +275,7 @@ struct IndirectCall : public FunctionPass {
 
     B.SetInsertPoint(Real);
     {
-      auto *RealCall =
-          emitIndirectShardCall(Real, CalleePtrGV, Callee->getFunctionType());
+      auto *RealCall = emitIndirectShardCall(Real, CalleePtrGV, Callee);
       if (Callee->getReturnType()->isVoidTy()) {
         B.CreateRetVoid();
       } else {

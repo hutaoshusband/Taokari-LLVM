@@ -119,6 +119,8 @@ RELEASE_GATES = [
     ReleaseGate("vmp_emulation_guard", TESTING / "scripts" / "verify_vmp_emulation_guard.py"),
     ReleaseGate("vmp_dll_load_and_manual_map", TESTING / "scripts" / "verify_vmp_dll_load.py", windows_only=True),
     ReleaseGate("semantic_memory_stress", TESTING / "scripts" / "verify_semantic_memory_stress.py"),
+    ReleaseGate("cie_eh_semantics", TESTING / "scripts" / "verify_cie_eh_semantics.py"),
+    ReleaseGate("ui_animation_semantics", TESTING / "scripts" / "verify_ui_animation_semantics.py"),
     # Section 22 Phase 1/7: prove -taokari-max + VMP no longer hangs.
     # The budget caps refuse runaway functions; -taokari-max-no-vmp is the
     # escape hatch when VMP is off entirely.
