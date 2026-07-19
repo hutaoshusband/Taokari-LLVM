@@ -138,6 +138,7 @@ def main() -> int:
         a64_ll = tmp / "icall_l3_aarch64.ll"
         a64 = clang([
             *flags, "-target", "aarch64-pc-windows-msvc",
+            "-march=armv8.3-a",
             "-S", "-emit-llvm", "-o", str(a64_ll),
         ])
         if a64.returncode:
