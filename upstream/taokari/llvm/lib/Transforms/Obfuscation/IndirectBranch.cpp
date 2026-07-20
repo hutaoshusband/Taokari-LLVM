@@ -347,8 +347,11 @@ struct IndirectBranch : public FunctionPass {
         buildDecrypt.RuntimeSeed = opt.level() > 1 ? RNG() : 0;
         buildDecrypt.UseMBA = opt.level() > 1;
         buildDecrypt.IntegrityCheck = opt.level() > 1;
-        Triple T(M.getTargetTriple());
-        buildDecrypt.PtrAuthKey = T.isAArch64() ? 0 : -1;
+        // ptrauth.sign lowers to BRAA on AArch64, which requires the +pauth
+        // target feature (armv8.3-a+). Default aarch64-linux-gnu does not
+        // enable it, so emitting the intrinsic unconditionally makes the
+        // backend fail with "Cannot select: intrinsic %llvm.ptrauth.sign".
+        buildDecrypt.PtrAuthKey = targetHasPAuth(Fn) ? 0 : -1;
         buildDecrypt.PtrAuthDisc = 0;
 
         auto            TargetPtr = buildPageTableDecryptIR(buildDecrypt);

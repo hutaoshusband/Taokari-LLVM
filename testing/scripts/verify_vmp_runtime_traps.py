@@ -281,7 +281,7 @@ def force_loud_trap(text: str) -> str:
         count=1,
         flags=re.S,
     )
-    if "@exit(" not in text:
+    if not re.search(r"declare[^@]*@exit", text):
         text += "\ndeclare void @exit(i32)\n"
     return text
 

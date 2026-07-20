@@ -54,6 +54,8 @@ struct ConstantIntEncryption : public FunctionPass {
   bool doInitialization(Module &M) override {
     bool Changed = false;
     for (auto &F : M) {
+      if (F.hasPersonalityFn())
+        continue;
       const auto opt = ArgsOptions->toObfuscate(ArgsOptions->cieOpt(), &F);
       if (!opt.isEnabled()) {
         continue;
@@ -112,7 +114,22 @@ struct ConstantIntEncryption : public FunctionPass {
       return false;
     }
     const unsigned MinBits = std::max(8u, opt.minConstSize());
-    const bool UseRuntimeSeed = opt.level() >= 2;
+    // The runtime (volatile) seed is read into a stack-local nonce each call.
+    // Across a setjmp/longjmp boundary the nonce can change, so a constant
+    // decrypted before setjmp is re-decrypted with a different seed after
+    // longjmp returns -> wrong value (often a bad page-table index -> crash).
+    // Functions that call a returnsTwice function (setjmp/getcontext) must use
+    // a static seed instead.
+    bool CallsReturnsTwice = false;
+    for (Instruction &I : instructions(F)) {
+      if (auto *CB = dyn_cast<CallBase>(&I)) {
+        if (CB->hasFnAttr(Attribute::ReturnsTwice)) {
+          CallsReturnsTwice = true;
+          break;
+        }
+      }
+    }
+    const bool UseRuntimeSeed = opt.level() >= 2 && !CallsReturnsTwice;
     AllocaInst *SeedCache = UseRuntimeSeed
                                  ? createConstantSeedCache(F, RNG,
                                                            opt.volatileSeed())
@@ -253,8 +270,10 @@ struct ConstantIntEncryption : public FunctionPass {
             opt.level(), nullptr, opt.volatileSeed(),
             opt.constDecryptorMBA());
         Value *RetVal = Dec;
-        if (E.BitWidth != 64) {
+        if (E.BitWidth < 64) {
           RetVal = B.CreateZExt(Dec, I64, "cie.shard.zext");
+        } else if (E.BitWidth > 64) {
+          RetVal = B.CreateTrunc(Dec, I64, "cie.shard.trunc");
         }
         cast<ReturnInst>(Ret)->setOperand(0, RetVal);
         E.Shard = Shard;
@@ -362,6 +381,9 @@ struct ConstantIntEncryption : public FunctionPass {
               if (IntTy->getBitWidth() < 64) {
                 CipherConstant =
                     IRB.CreateTrunc(Call, IntTy, "cie.shard.trunc");
+              } else if (IntTy->getBitWidth() > 64) {
+                CipherConstant =
+                    IRB.CreateZExt(Call, IntTy, "cie.shard.zext");
               } else {
                 CipherConstant = Call;
               }
