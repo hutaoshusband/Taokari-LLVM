@@ -20,10 +20,8 @@ Contract:
   * The guard fires: a function calling longjmp is NOT marked
     taokari-flattened, while an unrelated function in the same TU IS.
 
-Note: the heavier -taokari-max preset has a *separate* residual interaction
-with setjmp at -O0 (a multi-pass fortress-decryption effect, not flattening)
-that is tracked as a known narrow limitation; this verifier covers the
-flattening guard specifically.
+Note: -taokari-max + setjmp at -O0 is covered by verify_setjmp_unwind_safety.py
+(returnsTwice callers skip VMP/BCF/outline and stateful decrypt).
 
 Exit: 0 ok | 1 contract failure | 2 missing clang.
 """
@@ -36,6 +34,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
