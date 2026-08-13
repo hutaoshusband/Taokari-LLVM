@@ -68,6 +68,8 @@ void enhancedPageTable(const CreatePageTableArgs &args,
 // targets, so callers must gate PAC signing on this to avoid an
 // unselectable intrinsic.
 bool targetHasPAuth(const Function &F);
+bool isTaokariGeneratedHelper(const Function &F,
+                              bool IncludeOutlinedShards = true);
 Value *buildPageTableDecryptIR(const BuildDecryptArgs &args);
 Value *encryptConstant(Constant *plainConstant, Instruction *insertBefore,
                        std::mt19937_64 &rng, unsigned level,

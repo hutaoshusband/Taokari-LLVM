@@ -93,8 +93,7 @@ public:
         return false;
     if (isAllowlisted(GV.getName(), Opt))
       return false;
-    return GV.hasLocalLinkage() || GV.hasHiddenVisibility() ||
-           GV.isDiscardableIfUnused() || GV.getName().contains("RTTI");
+    return GV.hasLocalLinkage();
   }
 
   std::string digestName(StringRef Prefix, StringRef Name) {
@@ -188,13 +187,13 @@ public:
   bool randomizeSections(Module &M) {
     bool Changed = false;
     for (Function &F : M) {
-      if (!F.hasLocalLinkage() || F.isDeclaration())
+      if (!F.hasLocalLinkage() || F.isDeclaration() || F.hasComdat())
         continue;
       F.setSection(sectionFor(M, F));
       Changed = true;
     }
     for (GlobalVariable &GV : M.globals()) {
-      if (!GV.hasLocalLinkage() || GV.isDeclaration())
+      if (!GV.hasLocalLinkage() || GV.isDeclaration() || GV.hasComdat())
         continue;
       GV.setSection(sectionFor(M, GV));
       Changed = true;

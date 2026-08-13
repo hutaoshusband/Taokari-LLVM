@@ -24,10 +24,13 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
 CLANG = tp.CLANG
+CLANGXX = tp.tool("clang++")
 VSDEVCMD = tp.VSDEVCMD
 
 PLAIN_CONST = 0x12345678
@@ -83,6 +86,30 @@ int main(void) {{
   printf("ocnst:%d\\n", magic(7));
   return 0;
 }}
+"""
+
+EH_SOURCE = r"""
+#include <cstdio>
+#include <string>
+
+__attribute__((noinline)) int run(int seed) {
+  std::string s = seed & 1 ? "ocnst-yes" : "ocnst-no";
+  int acc = 0x12345678;
+  try {
+    if ((seed & 3) == 3)
+      throw seed;
+    acc ^= seed * 11 + 5;
+  } catch (int v) {
+    acc ^= v ^ (int)s.size();
+  }
+  acc += (int)s.size();
+  return acc;
+}
+
+int main() {
+  std::printf("ocnst-eh:%d:%d:%d\n", run(1), run(3), run(8));
+  return 0;
+}
 """
 
 
@@ -159,8 +186,32 @@ def main() -> int:
                   f"out={both_run.stdout!r}", file=sys.stderr)
             return 1
 
+        if not CLANGXX.exists():
+            print("opaque-constant: ok (C path; clang++ missing, EH skipped)")
+            return 0
+
+        eh = tmp / "ocnst_eh.cpp"
+        eh.write_text(EH_SOURCE, encoding="utf-8")
+        eh_native = tmp / "ocnst_eh_native.exe"
+        eh_obf = tmp / "ocnst_eh_obf.exe"
+        if not must(run([str(CLANGXX), str(eh), "-O2", "-std=c++17",
+                         "-o", str(eh_native)]), "ocnst EH native"):
+            return 1
+        if not must(run([str(CLANGXX), str(eh), "-O2", "-std=c++17",
+                         *mllvm(["-taokari", "-taokari-ocnst",
+                                 "-taokari-ocnst-prob=100"]),
+                         "-o", str(eh_obf)]), "ocnst EH protected"):
+            return 1
+        eh_nrun = run([str(eh_native)])
+        eh_orun = run([str(eh_obf)])
+        if eh_nrun.returncode or eh_orun.returncode or eh_nrun.stdout != eh_orun.stdout:
+            print(f"FAIL: ocnst EH mismatch native={eh_nrun.stdout!r} "
+                  f"obf={eh_orun.stdout!r} rc={eh_nrun.returncode}/{eh_orun.returncode}",
+                  file=sys.stderr)
+            return 1
+
     print(f"opaque-constant: ok (markers present, plaintext hidden in binary, "
-          f"runtime matches native, ocnst+cie composable)")
+          f"runtime matches native, ocnst+cie composable, EH matches)")
     return 0
 
 

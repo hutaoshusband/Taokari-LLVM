@@ -48,6 +48,8 @@ struct ConstantFPEncryption : public FunctionPass {
   bool doInitialization(Module &M) override {
     bool Changed = false;
     for (auto &F : M) {
+      if (F.hasPersonalityFn() || isTaokariGeneratedHelper(F))
+        continue;
       const auto opt = ArgsOptions->toObfuscate(ArgsOptions->cfeOpt(), &F);
       if (!opt.isEnabled()) {
         continue;

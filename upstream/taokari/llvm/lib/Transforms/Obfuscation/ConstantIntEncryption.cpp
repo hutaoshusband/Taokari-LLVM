@@ -54,7 +54,7 @@ struct ConstantIntEncryption : public FunctionPass {
   bool doInitialization(Module &M) override {
     bool Changed = false;
     for (auto &F : M) {
-      if (F.hasPersonalityFn())
+      if (F.hasPersonalityFn() || isTaokariGeneratedHelper(F))
         continue;
       const auto opt = ArgsOptions->toObfuscate(ArgsOptions->cieOpt(), &F);
       if (!opt.isEnabled()) {

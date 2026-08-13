@@ -1,6 +1,7 @@
 #include "llvm/Transforms/Obfuscation/OpaqueConstant.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationPassManager.h"
+#include "llvm/Transforms/Obfuscation/Utils.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
@@ -9,6 +10,8 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/NoFolder.h"
 #include "llvm/Pass.h"
@@ -64,13 +67,15 @@ struct OpaqueConstant : public FunctionPass {
     auto *Init = ConstantInt::get(Int64, deriveNonceValue(F, BuildSeed));
     auto *GV = new GlobalVariable(M, Int64, false, GlobalValue::PrivateLinkage,
                                   Init, Name.str(), nullptr,
-                                  GlobalVariable::NotThreadLocal, 8, true);
+                                  GlobalVariable::NotThreadLocal, 0, true);
+    GV->setAlignment(Align(8));
     GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
     return GV;
   }
 
   bool runOnFunction(Function &F) override {
-    if (F.isDeclaration() || F.isIntrinsic())
+    if (F.isDeclaration() || F.isIntrinsic() || F.hasPersonalityFn() ||
+        isTaokariGeneratedHelper(F))
       return false;
 
     auto Opt = ArgsOptions->toObfuscate(ArgsOptions->ocnstOpt(), &F);
@@ -97,9 +102,14 @@ struct OpaqueConstant : public FunctionPass {
       for (Instruction &I : BB) {
         if (I.hasMetadata("noobf") || I.isEHPad() || I.isTerminator())
           continue;
+        if (isa<AllocaInst>(&I) || isa<IntrinsicInst>(&I) || I.isAtomic())
+          continue;
         if (isa<GetElementPtrInst>(&I) || isa<PHINode>(&I))
           continue;
+        auto *CB = dyn_cast<CallBase>(&I);
         for (unsigned Op = 0; Op < I.getNumOperands(); ++Op) {
+          if (CB && CB->isBundleOperand(Op))
+            continue;
           auto *CI = dyn_cast<ConstantInt>(I.getOperand(Op));
           if (!CI)
             continue;
@@ -122,7 +132,8 @@ struct OpaqueConstant : public FunctionPass {
         GlobalVariable *EncGV = new GlobalVariable(
             *F.getParent(), Int64, false, GlobalValue::PrivateLinkage, Enc,
             Twine(F.getName()) + ".ocnst.enc." + Twine(FuncRNG() & 0xFFFF),
-            nullptr, GlobalVariable::NotThreadLocal, 8, true);
+            nullptr, GlobalVariable::NotThreadLocal, 0, true);
+        EncGV->setAlignment(Align(8));
         EncGV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
         Value *EncLoad = IRB.CreateAlignedLoad(Int64, EncGV, Align(8),
                                                "ocnst.enc.ld");

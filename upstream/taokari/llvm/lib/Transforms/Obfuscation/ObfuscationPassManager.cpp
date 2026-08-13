@@ -13,6 +13,7 @@
 #include "llvm/Transforms/Obfuscation/NativeIntegrity.h"
 #include "llvm/Transforms/Obfuscation/OpaqueConstant.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
+#include "llvm/Transforms/Obfuscation/Utils.h"
 #include "llvm/Transforms/Obfuscation/ItaniumRTTIEraser.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -358,18 +359,7 @@ static cl::opt<std::string>
 namespace llvm {
 
 static bool isTaokariHelper(const Function &F) {
-  StringRef N = F.getName();
-  return N.starts_with("__taokari_icall_fake_") ||
-         N.starts_with("__taokari_icall_shard_") ||
-         N.starts_with("__taokari_sh_") ||
-         N.starts_with("__taokari_bcf_") ||
-         N.starts_with("__taokari_dyn_") ||
-         N.starts_with("__taokari_vmp_interp_") ||
-         N.starts_with("__taokari_nativeint_") ||
-         N.starts_with("__mhf_") ||
-         N.starts_with("goron_scrub_string_") ||
-         N.starts_with("__global_variable_initializer_") ||
-         N.contains(".cie.shard.") || N.contains(".shard");
+  return isTaokariGeneratedHelper(F, true);
 }
 
 struct ObfuscationPassManager : public ModulePass {

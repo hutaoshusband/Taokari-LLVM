@@ -140,9 +140,11 @@ struct NativeIntegrity : public FunctionPass {
 
     // The prototype runs on functions explicitly marked `+nativeint`,
     // OR (when Taokari Max Protection is enabled) on every non-trivial
-    // function in the module. Max mode is the "protect everything"
-    // profile, so it extends the integrity check beyond VM bytecode to
-    // native compiled functions automatically.
+    // function that is safe to split. Max mode extends the integrity
+    // check beyond VM bytecode to native compiled functions. Personality
+    // functions are skipped: splitting their entry block breaks WinEH
+    // funclet frame indices during PEI. Callees without a personality
+    // still get the check.
     const bool MaxMode = TaokariMaxProtection;
     bool Annotated = false;
     for (const auto &Annotation : readAnnotate(&F)) {
@@ -161,6 +163,8 @@ struct NativeIntegrity : public FunctionPass {
     if (F.hasFnAttribute(Attribute::AlwaysInline))
       return false;
     if (F.hasFnAttribute("taokari-flattened"))
+      return false;
+    if (F.hasPersonalityFn() || isTaokariGeneratedHelper(F))
       return false;
 
     LLVMContext &Ctx = M.getContext();

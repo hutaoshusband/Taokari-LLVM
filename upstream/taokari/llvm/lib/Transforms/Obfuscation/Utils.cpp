@@ -151,6 +151,25 @@ bool targetHasPAuth(const Function &F) {
          TF.contains("v8.9a") || TF.contains("v9a") || TF.contains("v9.");
 }
 
+bool isTaokariGeneratedHelper(const Function &F, bool IncludeOutlinedShards) {
+  StringRef N = F.getName();
+  if (N.starts_with("__taokari_icall_fake_") ||
+      N.starts_with("__taokari_icall_shard_") ||
+      N.starts_with("__taokari_bcf_") ||
+      N.starts_with("__taokari_dyn_") ||
+      N.starts_with("__taokari_vmp_interp_") ||
+      N.starts_with("__taokari_nativeint_") ||
+      N.starts_with("__mhf_") ||
+      N.starts_with("goron_scrub_string_") ||
+      N.starts_with("goron_decrypt_string_") ||
+      N.starts_with("__global_variable_initializer_") ||
+      N.contains(".cie.shard."))
+    return true;
+  if (!IncludeOutlinedShards)
+    return false;
+  return N.starts_with("__taokari_sh_") || N.contains(".shard");
+}
+
 static void emitIntegrityTrap(IRBuilder<> &IRB, Module *M,
                               const BuildDecryptArgs &args) {
   uint64_t Salt = args.RuntimeSeed ^ args.ModuleKey ^ (args.FuncKey << 7) ^
@@ -593,6 +612,8 @@ Value *buildPageTableDecryptIR(const BuildDecryptArgs &args) {
 
   auto addBoundsCheck = [&](Value *Index, GlobalVariable *Table) {
     if (!args.IntegrityCheck)
+      return;
+    if (args.Fn->hasPersonalityFn())
       return;
     auto *ArrayTy = cast<ArrayType>(Table->getValueType());
     auto *Limit = ConstantInt::get(IntTy, ArrayTy->getNumElements());

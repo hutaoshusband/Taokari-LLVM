@@ -56,10 +56,17 @@ def run(command: list[str], *, cwd: Path = ROOT, vs: bool = False) -> subprocess
                 "exit /b %ERRORLEVEL%\n"
             )
         try:
-            return subprocess.run(["cmd.exe", "/d", "/c", str(batch)], cwd=cwd, text=True, capture_output=True, env=env)
+            return subprocess.run(
+                ["cmd.exe", "/d", "/c", str(batch)],
+                cwd=cwd, text=True, capture_output=True, env=env,
+                encoding="utf-8", errors="replace",
+            )
         finally:
             batch.unlink(missing_ok=True)
-    return subprocess.run(command, cwd=cwd, text=True, capture_output=True, env=env)
+    return subprocess.run(
+        command, cwd=cwd, text=True, capture_output=True, env=env,
+        encoding="utf-8", errors="replace",
+    )
 
 
 def checked(command: list[str], *, cwd: Path = ROOT, vs: bool = False) -> subprocess.CompletedProcess[str]:

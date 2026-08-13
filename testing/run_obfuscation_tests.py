@@ -38,6 +38,13 @@ OBF_FLAGS = [
     "-mllvm", "-taokari-cie",
     "-mllvm", "-taokari-cfe",
 ]
+# `-taokari-max` fortress preset. VMP stays annotation-only (`-no-vmp`) so the
+# corpus cannot hang; dedicated VMP gates cover virtualization separately.
+MAX_FLAGS = [
+    "-O2",
+    "-mllvm", "-taokari-max",
+    "-mllvm", "-taokari-max-no-vmp",
+]
 # Passes that accept a 0-4 level. Default tests use the strongest level.
 LEVEL_PASSES = ["indbr", "icall", "indgv", "fla", "bcf", "mba", "cie", "cfe"]
 DEFAULT_LEVEL = 4
@@ -133,6 +140,8 @@ RELEASE_GATES = [
     ReleaseGate("dynamic_protection", TESTING / "scripts" / "verify_dynamic_protection.py"),
     ReleaseGate("outline_dyn_fortress_compose", TESTING / "scripts" / "verify_outline_dyn_fortress_compose.py"),
     ReleaseGate("opaque_constant_context", TESTING / "scripts" / "verify_opaque_constant_context.py"),
+    ReleaseGate("opaque_constant", TESTING / "scripts" / "verify_opaque_constant.py"),
+    ReleaseGate("metadata_hygiene_cxx_link", TESTING / "scripts" / "verify_metadata_hygiene_cxx_link.py"),
     ReleaseGate("string_leak_bar", TESTING / "scripts" / "verify_string_leak_bar.py"),
     ReleaseGate("fake_case_density_bar", TESTING / "scripts" / "verify_fake_case_density_bar.py"),
     ReleaseGate("call_graph_breakage_bar", TESTING / "scripts" / "verify_call_graph_breakage.py"),
@@ -173,6 +182,7 @@ RELEASE_GATES = [
     ReleaseGate("elf_integrity", TESTING / "scripts" / "verify_elf_integrity.py", skippable=True),
     ReleaseGate("setjmp_flatten_safety", TESTING / "scripts" / "verify_setjmp_flatten_safety.py"),
     ReleaseGate("aarch64_indirect_ir", TESTING / "scripts" / "verify_aarch64_indirect_ir.py", skippable=True),
+    ReleaseGate("max_preset_semantics", TESTING / "scripts" / "verify_max_preset_semantics.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
@@ -386,6 +396,11 @@ CASES = [
     Case("c_globals", (case_path("c_globals") / "src" / "main.c",), "globals:11:51:18\n"),
     # Literal, format and runtime-built strings -> ConstantStringEncryption.
     Case("c_strings", (case_path("c_strings") / "src" / "main.c",), "strings:FX:108469760:1973234167\n"),
+    # Max-preset string lifetime: local pointers, reused literals, tables, and
+    # returned string constants. The default IR stack does not enable delayed
+    # decrypt; this case is the corpus hook for `--max` / `-taokari-max`.
+    Case("max_string_lifetime", (case_path("max_string_lifetime") / "src" / "main.c",),
+         "maxstr:1580956865:-83021084:-945816254:101053698:fmt-ok\n", no_rtti=True),
     # Compile-time VM prototype: annotation-selected integer toy function.
     Case("vmp_basic", (case_path("vmp_basic") / "src" / "main.c",), "vmp-basic:40:25\n", no_rtti=True),
     # SSE string-op fixture: a CRT-style vectorised byte search whose plain
@@ -447,6 +462,7 @@ def compile_case(
     level: int | None = None,
     rtti: bool = False,
     extra_flags: tuple[str, ...] = (),
+    max_preset: bool = False,
 ) -> Path:
     case_root = case_path(case.name)
     build = case_root / "build"
@@ -477,11 +493,14 @@ def compile_case(
             cmd.append("/EHsc")
         cmd += [f"-I{include}" for include in case.includes]
         if obfuscate and (not case.obfuscate_sources or source in case.obfuscate_sources):
-            cmd += OBF_FLAGS
-            if level is not None:
-                # Apply the requested 0-3 level to every level-aware pass.
-                for pass_name in LEVEL_PASSES:
-                    cmd += ["-mllvm", f"-taokari-level-{pass_name}={level}"]
+            if max_preset:
+                cmd += MAX_FLAGS
+            else:
+                cmd += OBF_FLAGS
+                if level is not None:
+                    # Apply the requested 0-3 level to every level-aware pass.
+                    for pass_name in LEVEL_PASSES:
+                        cmd += ["-mllvm", f"-taokari-level-{pass_name}={level}"]
             if rtti and not case.no_rtti:
                 # RTTI eraser rewrites MSVC ??_R0 type descriptors; it needs a
                 # randomSeed from a config file.
@@ -582,6 +601,7 @@ def run_case_differential(
     level: int | None,
     rtti: bool,
     extra_flags: tuple[str, ...],
+    max_preset: bool = False,
 ) -> None:
     # True baseline-vs-obfuscated comparison: compile the same source twice
     # (unobfuscated then obfuscated), run both, and fail on any divergence of
@@ -591,7 +611,7 @@ def run_case_differential(
     baseline = compile_case(driver, case, mode, obfuscate=False,
                             extra_flags=extra_flags)
     obf = compile_case(driver, case, mode, level=level, rtti=rtti,
-                       extra_flags=extra_flags)
+                       extra_flags=extra_flags, max_preset=max_preset)
     base_run = run([str(baseline)])
     obf_run = run([str(obf)])
     base_out = normalize_output(base_run.stdout)
@@ -622,6 +642,7 @@ def run_diff_matrix(
     shared: bool,
     sanitize: list[str] | None,
     keep_going: bool,
+    max_preset: bool = False,
 ) -> int:
     import itertools
 
@@ -672,11 +693,12 @@ def run_diff_matrix(
                         try:
                             if shared:
                                 _diff_link_only(driver, case, mode, level, rtti,
-                                                tuple(extra))
+                                                tuple(extra), max_preset=max_preset)
                             else:
                                 run_case_differential(driver, case, mode,
                                                       level=level, rtti=rtti,
-                                                      extra_flags=tuple(extra))
+                                                      extra_flags=tuple(extra),
+                                                      max_preset=max_preset)
                         except Exception as exc:
                             failures += 1
                             log("FAIL", f"{tag}: {exc}", "red")
@@ -687,14 +709,15 @@ def run_diff_matrix(
 
 
 def _diff_link_only(driver: Path, case: Case, mode: str, level: int,
-                    rtti: bool, extra_flags: tuple[str, ...]) -> None:
+                    rtti: bool, extra_flags: tuple[str, ...],
+                    max_preset: bool = False) -> None:
     # Compile-only differential for shared-object targets: verify the
     # obfuscated object links without error relative to the baseline object.
     tag = f"{mode}/{case.name}/shared"
     baseline = compile_case(driver, case, mode, obfuscate=False,
                             extra_flags=extra_flags)
     obf = compile_case(driver, case, mode, level=level, rtti=rtti,
-                       extra_flags=extra_flags)
+                       extra_flags=extra_flags, max_preset=max_preset)
     if not baseline.exists() or not obf.exists():
         raise RuntimeError(f"link-only {tag} did not produce objects")
 
@@ -726,6 +749,9 @@ def main() -> int:
                              "baseline per case and compare obfuscated output "
                              "(stdout/stderr/exit) against it, instead of the "
                              "hardcoded expected_stdout/expected_exit")
+    parser.add_argument("--max", action="store_true",
+                        help="use -taokari-max -taokari-max-no-vmp instead of "
+                             "the default per-pass IR stack")
     parser.add_argument("--opt-level", action="append", default=None,
                         choices=["O0", "O1", "O2", "O3", "Os", "Oz"],
                         help="extra optimization -O level(s) to inject into both "
@@ -770,6 +796,7 @@ def main() -> int:
             shared=args.shared,
             sanitize=args.sanitize,
             keep_going=args.keep_going,
+            max_preset=args.max,
         )
 
     benchmark_rows: list[dict[str, str | int | float]] = []
@@ -800,7 +827,8 @@ def main() -> int:
                         raise RuntimeError(f"plain benchmark run {tag} failed\n{plain_run.stdout}{plain_run.stderr}")
 
                     start = time.perf_counter()
-                    exe = compile_case(driver, case, mode, level=args.level, rtti=args.rtti)
+                    exe = compile_case(driver, case, mode, level=args.level, rtti=args.rtti,
+                                       max_preset=args.max)
                     obf_compile = time.perf_counter() - start
                     obf_runtime, ran = measure_runtime(exe)
                     benchmark_rows.append({
@@ -817,7 +845,8 @@ def main() -> int:
                         "size_overhead": f"{(exe.stat().st_size / plain_size if plain_size else 0):.6f}",
                     })
                 else:
-                    exe = compile_case(driver, case, mode, level=args.level, rtti=args.rtti)
+                    exe = compile_case(driver, case, mode, level=args.level, rtti=args.rtti,
+                                       max_preset=args.max)
                     log("EXEC", f"{tag}: {exe.relative_to(ROOT)}", "blue")
                     ran = run([str(exe)])
                 if ran.returncode != case.expected_exit or (case.expected_stdout is not None and ran.stdout != case.expected_stdout):

@@ -1,10 +1,12 @@
 #include "llvm/Transforms/Obfuscation/StringEncryption.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/NoFolder.h"
 #include "llvm/Support/RandomNumberGenerator.h"
@@ -61,6 +63,101 @@ static CallInst *createDecryptorCall(IRBuilder<> &IRB, Value *Callee,
 static uint32_t deriveStringMix(uint32_t BuildNonce, unsigned Shift,
                                 uint32_t Mask) {
   return ((BuildNonce >> Shift) & Mask) | 1u;
+}
+
+static StringRef stripLibcName(StringRef N) {
+  if (N.starts_with("\01"))
+    N = N.drop_front();
+  if (N.starts_with("__imp_"))
+    N = N.drop_front(6);
+  if (N.starts_with("_"))
+    N = N.drop_front();
+  return N;
+}
+
+static bool isKnownNonCapturingStringFn(Function *F) {
+  if (!F || !F->hasName())
+    return false;
+  StringRef N = stripLibcName(F->getName());
+  if (N.starts_with("llvm.memcpy") || N.starts_with("llvm.memmove") ||
+      N.starts_with("llvm.memset") || N.starts_with("llvm.memcmp"))
+    return true;
+  return N == "printf" || N == "puts" || N == "fputs" || N == "fprintf" ||
+         N == "sprintf" || N == "snprintf" || N == "vprintf" ||
+         N == "strlen" || N == "strcmp" || N == "strncmp" ||
+         N == "strcasecmp" || N == "strcpy" || N == "strncpy" ||
+         N == "strcat" || N == "strncat" || N == "strchr" || N == "strrchr" ||
+         N == "strstr" || N == "strpbrk" || N == "memcmp" || N == "memcpy" ||
+         N == "memmove" || N == "memset" || N == "memchr" || N == "atoi" ||
+         N == "atol" || N == "atoll" || N == "strtol" || N == "strtoul" ||
+         N == "sscanf" || N == "perror" || N == "fopen" || N == "freopen" ||
+         N == "stdio_common_vfprintf" || N == "stdio_common_vsprintf";
+}
+
+static bool callAllowsTemporary(CallBase &CB, Value *GV) {
+  if (Function *Callee = CB.getCalledFunction()) {
+    if (isKnownNonCapturingStringFn(Callee))
+      return true;
+  }
+  for (unsigned i = 0, e = CB.arg_size(); i != e; ++i) {
+    if (CB.getArgOperand(i) != GV)
+      continue;
+    if (!CB.doesNotCapture(i))
+      return false;
+  }
+  return true;
+}
+
+static bool resultMayEscapeFunction(Instruction &Inst) {
+  for (User *U : Inst.users()) {
+    if (isa<ReturnInst>(U))
+      return true;
+    if (auto *SI = dyn_cast<StoreInst>(U)) {
+      Value *Obj = getUnderlyingObject(SI->getPointerOperand());
+      if (!isa<AllocaInst>(Obj))
+        return true;
+    }
+  }
+  return false;
+}
+
+static bool useAllowsFunctionLocalTemporary(Instruction &Inst, Value *GV) {
+  if (isa<ReturnInst>(&Inst) || isa<SelectInst>(&Inst) || isa<PHINode>(&Inst))
+    return false;
+  if (resultMayEscapeFunction(Inst))
+    return false;
+  if (auto *SI = dyn_cast<StoreInst>(&Inst)) {
+    Value *Obj = getUnderlyingObject(SI->getPointerOperand());
+    return isa<AllocaInst>(Obj);
+  }
+  if (isa<LoadInst>(&Inst) || isa<CmpInst>(&Inst) ||
+      isa<GetElementPtrInst>(&Inst) || isa<SelectInst>(&Inst) ||
+      isa<PHINode>(&Inst) || isa<PtrToIntInst>(&Inst) ||
+      isa<BitCastInst>(&Inst) || isa<AddrSpaceCastInst>(&Inst))
+    return true;
+  if (auto *CB = dyn_cast<CallBase>(&Inst))
+    return callAllowsTemporary(*CB, GV);
+  return false;
+}
+
+static bool canScrubImmediatelyAfter(Instruction &Inst, Value *OutBuf) {
+  if (isa<LoadInst>(&Inst) || isa<CmpInst>(&Inst) ||
+      isa<AtomicRMWInst>(&Inst) || isa<AtomicCmpXchgInst>(&Inst))
+    return true;
+  auto *CB = dyn_cast<CallBase>(&Inst);
+  if (!CB || CB->isTerminator())
+    return false;
+  if (Function *Callee = CB->getCalledFunction()) {
+    if (isKnownNonCapturingStringFn(Callee))
+      return true;
+  }
+  for (unsigned i = 0, e = CB->arg_size(); i != e; ++i) {
+    if (CB->getArgOperand(i) != OutBuf)
+      continue;
+    if (!CB->doesNotCapture(i))
+      return false;
+  }
+  return true;
 }
 
 struct StringEncryption : public ModulePass {
@@ -436,7 +533,7 @@ bool StringEncryption::runOnModule(Module &M) {
   // decrypted one
   bool Changed = false;
   for (Function &F : M) {
-    if (F.isDeclaration())
+    if (F.isDeclaration() || isTaokariGeneratedHelper(F, false))
       continue;
     Changed |= processConstantStringUse(&F);
   }
@@ -1217,8 +1314,42 @@ bool StringEncryption::processConstantStringUse(Function *F) {
     return OutBuf;
   };
 
+  struct DeferredScrub {
+    CSPEntry *Entry;
+    Value *OutBuf;
+    Value *Data;
+  };
+  SmallVector<DeferredScrub, 8> DeferredScrubs;
+
+  auto emitScrubCall = [&](IRBuilder<> &IRB, CSPEntry *Entry, Value *OutBuf,
+                           Value *Data, bool Temporary) {
+    uint32_t KeyElemSize = Entry->IsUTF16
+                               ? static_cast<uint32_t>(Entry->EncKey16.size())
+                               : static_cast<uint32_t>(Entry->EncKey.size());
+    uint32_t DataSize = Entry->IsUTF16
+                            ? static_cast<uint32_t>(Entry->Data16.size())
+                            : static_cast<uint32_t>(Entry->Data.size());
+    Function *ScrubFunc =
+        Entry->IsUTF16 ? SharedScrubFuncI16 : SharedScrubFuncI8;
+    Value *StatusPtr = Temporary ? nullptr : static_cast<Value *>(Entry->DecStatus);
+    if (Temporary) {
+      StatusPtr = IRB.CreateAlloca(I32Ty);
+      IRB.CreateStore(IRB.getInt32(Entry->PendingStatus), StatusPtr);
+    }
+    fixEH(IRB.CreateCall(ScrubFunc,
+                         {OutBuf, Data, IRB.getInt32(KeyElemSize),
+                          IRB.getInt32(DataSize),
+                          IRB.getInt32(Entry->EncGapBytes), StatusPtr,
+                          IRB.getInt32(Entry->PendingStatus)}));
+  };
+
   auto emitAfterUse = [&](Instruction &Inst, CSPEntry *Entry, Value *OutBuf,
                           Value *Data, bool Temporary) {
+    if (Temporary && UseDelayedDecrypt &&
+        !canScrubImmediatelyAfter(Inst, OutBuf)) {
+      DeferredScrubs.push_back({Entry, OutBuf, Data});
+      return;
+    }
     Instruction *Next = Inst.getNextNode();
     if (!Next)
       return;
@@ -1241,35 +1372,11 @@ bool StringEncryption::processConstantStringUse(Function *F) {
         return;
     }
     IRBuilder<> IRB(Next);
-    uint32_t KeyElemSize = Entry->IsUTF16
-                               ? static_cast<uint32_t>(Entry->EncKey16.size())
-                               : static_cast<uint32_t>(Entry->EncKey.size());
-    uint32_t DataSize = Entry->IsUTF16
-                            ? static_cast<uint32_t>(Entry->Data16.size())
-                            : static_cast<uint32_t>(Entry->Data.size());
-    if (!Temporary && ReencryptAfterUse) {
-      Function *ScrubFunc =
-          Entry->IsUTF16 ? SharedScrubFuncI16 : SharedScrubFuncI8;
-      fixEH(IRB.CreateCall(ScrubFunc,
-                           {OutBuf, Data, IRB.getInt32(KeyElemSize),
-                            IRB.getInt32(DataSize),
-                            IRB.getInt32(Entry->EncGapBytes), Entry->DecStatus,
-                            IRB.getInt32(Entry->PendingStatus)}));
-    }
-    // L3 delayed-decrypt: always scrub the temporary buffer (stack or heap)
-    // so the plaintext never outlives the use. The scrub writes the ciphertext
-    // back over the buffer, defeating a memory dump taken after the call.
-    if (Temporary && UseDelayedDecrypt) {
-      Function *ScrubFunc =
-          Entry->IsUTF16 ? SharedScrubFuncI16 : SharedScrubFuncI8;
-      Value *TmpStatus = IRB.CreateAlloca(I32Ty);
-      IRB.CreateStore(IRB.getInt32(Entry->PendingStatus), TmpStatus);
-      fixEH(IRB.CreateCall(ScrubFunc,
-                           {OutBuf, Data, IRB.getInt32(KeyElemSize),
-                            IRB.getInt32(DataSize),
-                            IRB.getInt32(Entry->EncGapBytes), TmpStatus,
-                            IRB.getInt32(Entry->PendingStatus)}));
-    }
+    if (!Temporary && ReencryptAfterUse &&
+        canScrubImmediatelyAfter(Inst, OutBuf))
+      emitScrubCall(IRB, Entry, OutBuf, Data, false);
+    if (Temporary && UseDelayedDecrypt)
+      emitScrubCall(IRB, Entry, OutBuf, Data, true);
   };
 
   for (BasicBlock &BB : *F) {
@@ -1360,9 +1467,9 @@ bool StringEncryption::processConstantStringUse(Function *F) {
               Changed = true;
             } else if (Iter1 != CSPEntryMap.end()) {
               CSPEntry *Entry = Iter1->second;
-              // L3: delayed-decrypt never reuses the cached DecGV; every use
-              // gets a fresh temporary that is scrubbed afterwards.
-              const bool Temporary = UseStack || UseHeap;
+              const bool Temporary =
+                  !F->hasPersonalityFn() && (UseStack || UseHeap) &&
+                  useAllowsFunctionLocalTemporary(Inst, GV);
               const bool CacheGlobal = !Temporary && !ReencryptAfterUse;
               if (CacheGlobal && DecryptedGV.count(GV) > 0) {
                 Inst.replaceUsesOfWith(GV, Entry->DecGV);
@@ -1388,10 +1495,15 @@ bool StringEncryption::processConstantStringUse(Function *F) {
       }
     }
   }
-  if (UseHeap) {
+  if (!DeferredScrubs.empty() || UseHeap) {
     for (BasicBlock &BB : *F) {
-      if (ReturnInst *Ret = dyn_cast<ReturnInst>(BB.getTerminator())) {
-        IRBuilder<> IRB(Ret);
+      auto *Ret = dyn_cast<ReturnInst>(BB.getTerminator());
+      if (!Ret)
+        continue;
+      IRBuilder<> IRB(Ret);
+      for (const DeferredScrub &S : DeferredScrubs)
+        emitScrubCall(IRB, S.Entry, S.OutBuf, S.Data, true);
+      if (UseHeap) {
         for (Value *HeapAlloc : HeapAllocs)
           IRB.CreateCall(FreeFn, {HeapAlloc});
       }
@@ -1454,8 +1566,8 @@ void StringEncryption::flattenDecryptor(Function &F, uint32_t BuildNonce) {
 
   IRBuilder<> IRB(LoopBody);
   IRB.SetInsertPoint(LoopBodyTerm);
-  // ZExt the i1 condition to i32 so it can drive a switch. The two real cases
-  // are 0 and 1; everything else falls through to a trap.
+  // ZExt the i1 condition to i32 so it can drive a switch. cond_br true
+  // goes to successor 0, false to successor 1; the cases must match that.
   Value *KeyI32 = IRB.CreateZExt(BrKey, IRB.getInt32Ty(), "strenc.flat.key");
   BasicBlock *Trap = BasicBlock::Create(F.getContext(), "Trap", &F);
   IRBuilder<> TrapB(Trap);
@@ -1463,8 +1575,8 @@ void StringEncryption::flattenDecryptor(Function &F, uint32_t BuildNonce) {
       Intrinsic::getOrInsertDeclaration(F.getParent(), Intrinsic::trap));
   TrapB.CreateUnreachable();
   auto *Switch = IRB.CreateSwitch(KeyI32, Trap, 2);
-  Switch->addCase(IRB.getInt32(0), Succ0);
-  Switch->addCase(IRB.getInt32(1), Succ1);
+  Switch->addCase(IRB.getInt32(1), Succ0);
+  Switch->addCase(IRB.getInt32(0), Succ1);
   // Add a couple of junk cases pointing at the trap to bulk out the table
   // without changing reachability. Mask junk values out of the real range.
   unsigned JunkSeed = (BuildNonce >> 8) ^ (BuildNonce << 7) ^ (BuildNonce | 1u);
