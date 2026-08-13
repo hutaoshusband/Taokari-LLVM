@@ -324,6 +324,14 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
         }
         obfOpt->setConstHelperShards(*shards);
       }
+      if (const auto *ptValue = optObj->get("pageTablePoolRef")) {
+        auto pt = ptValue->getAsBoolean();
+        if (!pt) {
+          reportConfigError(FileName, obfOpt->attributeName() +
+                                          ".pageTablePoolRef must be boolean");
+        }
+        obfOpt->setConstPageTableRef(*pt);
+      }
       if (const auto *releaseStripValue = optObj->get("releaseStrip")) {
         auto releaseStrip = releaseStripValue->getAsBoolean();
         if (!releaseStrip) {
@@ -404,7 +412,11 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
           "stringShardedPool",
           "stringFakePools",
           "stringPageTableAccess",
-          "stringDelayedDecrypt"};
+          "stringDelayedDecrypt",
+          "perFunctionPool",
+          "indirectPoolRef",
+          "helperShards",
+          "pageTablePoolRef"};
       for (const auto &KV : *optObj) {
         if (!KnownKeys.contains(KV.getFirst())) {
           llvm::errs() << "warning: unknown taokari config key: "
@@ -602,6 +614,7 @@ ObfOpt ObfuscationOptions::toObfuscate(const std::shared_ptr<ObfOpt> &option,
   result.setConstPerFunctionPool(option->constPerFunctionPool());
   result.setConstIndirectPoolRef(option->constIndirectPoolRef());
   result.setConstHelperShards(option->constHelperShards());
+  result.setConstPageTableRef(option->constPageTableRef());
   result.setReleaseStrip(option->releaseStrip());
   result.setRandomizeSections(option->randomizeSections());
   result.setExportAllowlist(option->exportAllowlist());

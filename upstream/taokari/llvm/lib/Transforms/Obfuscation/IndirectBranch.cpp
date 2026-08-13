@@ -1,7 +1,9 @@
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Obfuscation/IndirectBranch.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
@@ -301,9 +303,7 @@ struct IndirectBranch : public FunctionPass {
     }
 
     auto *IntTy = getPageTableIntTy(M);
-    // Per-branch probability gate: caps how many conditional branches per
-    // function get rewritten, bounding compile time and binary size. The
-    // ObfOpt probability defaults to 101 (unset) meaning "convert all".
+    BasicBlock *Recover = nullptr;
     unsigned Prob = opt.probability() <= 100 ? opt.probability() : 100;
     for (auto BI : FuncBrs) {
       if (BI && BI->isConditional()) {
@@ -358,10 +358,39 @@ struct IndirectBranch : public FunctionPass {
         buildDecrypt.PtrAuthDisc = 0;
 
         auto            TargetPtr = buildPageTableDecryptIR(buildDecrypt);
-        IndirectBrInst *IBI = IndirectBrInst::Create(TargetPtr, 2);
+        unsigned DestHint = opt.level() >= 3 ? 3u : 2u;
+        IndirectBrInst *IBI = IndirectBrInst::Create(TargetPtr, DestHint);
         ReplaceInstWithInst(BI, IBI);
         IBI->addDestination(TBB);
         IBI->addDestination(FBB);
+        if (opt.level() >= 3) {
+          if (!Recover) {
+            Recover = BasicBlock::Create(Ctx, "indbr.recover", &Fn);
+            auto *RecTrap =
+                BasicBlock::Create(Ctx, "indbr.recover.trap", &Fn);
+            IRBuilder<> TB(RecTrap);
+            TB.CreateCall(
+                Intrinsic::getOrInsertDeclaration(&M, Intrinsic::trap));
+            TB.CreateUnreachable();
+            IRBuilder<> RB(Recover);
+            auto *I64 = Type::getInt64Ty(Ctx);
+            GlobalVariable *Nonce = M.getGlobalVariable("taokari.indbr.nonce",
+                                                        true);
+            if (!Nonce) {
+              Nonce = new GlobalVariable(
+                  M, I64, false, GlobalValue::InternalLinkage,
+                  ConstantInt::get(I64, RNG()), "taokari.indbr.nonce");
+              Nonce->addMetadata("noobf", *MDNode::get(Ctx, {}));
+            }
+            Value *S = RB.CreateLoad(I64, Nonce, true, "indbr.recover.seed");
+            Value *Pair = RB.CreateAdd(RB.CreateMul(S, S), S);
+            Value *Bit = RB.CreateAnd(Pair, ConstantInt::get(I64, 1));
+            Value *Pred = RB.CreateICmpEQ(Bit, ConstantInt::get(I64, 0),
+                                          "indbr.recover.pred");
+            RB.CreateCondBr(Pred, RecTrap, TBB);
+          }
+          IBI->addDestination(Recover);
+        }
 
         RunOnFuncChanged = true;
       }

@@ -213,9 +213,12 @@ struct ConstantIntEncryption : public FunctionPass {
       }
     }
 
+    const bool UsePageTableRef =
+        PoolGV && (opt.constPageTableRef() || opt.level() >= 4) &&
+        !CallsReturnsTwice;
     const bool UseIndirectRef =
         PoolGV && (opt.constIndirectPoolRef() || opt.level() >= 3) &&
-        !CallsReturnsTwice;
+        !CallsReturnsTwice && !UsePageTableRef;
     GlobalVariable *PoolRefGV = nullptr;
     if (UseIndirectRef) {
       auto *PtrTy = PointerType::getUnqual(F.getContext());
@@ -225,6 +228,61 @@ struct ConstantIntEncryption : public FunctionPass {
       PoolRefGV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
       PoolRefGV->addMetadata("noobf", *MDNode::get(F.getContext(), {}));
     }
+
+    SmallVector<GlobalVariable *, 8> PoolPageTable;
+    DenseMap<Constant *, unsigned> PoolPageIndex;
+    DenseMap<Constant *, uint64_t> PoolPageKeys;
+    uint64_t PoolPtrEncKey = 0;
+    if (UsePageTableRef) {
+      std::vector<Constant *> PoolObjs{PoolGV};
+      PoolPageKeys[PoolGV] = RNG();
+      PoolPtrEncKey = RNG();
+      CreatePageTableArgs PTA{};
+      PTA.CountLoop = choosePageTableDepth(RNG, opt.level());
+      PTA.GVNamePrefix = F.getName().str() + ".cie.pt";
+      PTA.RNG = &RNG;
+      PTA.M = F.getParent();
+      PTA.Objects = &PoolObjs;
+      PTA.IndexMap = &PoolPageIndex;
+      PTA.ObjectKeys = &PoolPageKeys;
+      PTA.OutPageTable = &PoolPageTable;
+      PTA.PtrEncKey = PoolPtrEncKey;
+      PTA.FakeEntries = chooseFakeEntryCount(RNG, 1);
+      createPageTable(PTA);
+      for (GlobalVariable *GV : PoolPageTable)
+        appendToCompilerUsed(*F.getParent(), {GV});
+    }
+
+    auto resolvePoolBase = [&](IRBuilder<NoFolder> &B, Function *Host,
+                               Instruction *InsertBefore) -> Value * {
+      if (UsePageTableRef && !PoolPageTable.empty()) {
+        BuildDecryptArgs BDA{};
+        BDA.FuncLoopCount = 0;
+        BDA.NextIndex = PoolPageIndex[PoolGV];
+        BDA.NextIndexValue = nullptr;
+        BDA.Fn = Host;
+        BDA.InsertBefore = InsertBefore;
+        BDA.LoadTy = PointerType::getUnqual(Host->getContext());
+        BDA.ModulePageTable = &PoolPageTable;
+        BDA.FuncPageTable = &PoolPageTable;
+        BDA.ModuleKey = PoolPageKeys[PoolGV];
+        BDA.FuncKey = 0;
+        BDA.PtrEncKey = PoolPtrEncKey;
+        BDA.RuntimeSeed = 0;
+        BDA.UseMBA = false;
+        BDA.IntegrityCheck = false;
+        BDA.PtrAuthKey = -1;
+        BDA.PtrAuthDisc = 0;
+        return buildPageTableDecryptIR(BDA);
+      }
+      if (PoolRefGV) {
+        return B.CreateAlignedLoad(
+            PointerType::getUnqual(Host->getContext()), PoolRefGV, Align{1},
+            true,
+            Host == &F ? "cie.pool.ref.ld" : "cie.shard.ref.ld");
+      }
+      return PoolGV;
+    };
 
     if (UseShards && PoolGV) {
       auto *I64 = Type::getInt64Ty(F.getContext());
@@ -243,12 +301,7 @@ struct ConstantIntEncryption : public FunctionPass {
         Instruction *Ret = BB->getTerminator();
 
         IRBuilder<NoFolder> B(Ret);
-        Value *PoolBase = PoolGV;
-        if (PoolRefGV) {
-          PoolBase = B.CreateAlignedLoad(
-              PointerType::getUnqual(F.getContext()), PoolRefGV, Align{1},
-              true, "cie.shard.ref.ld");
-        }
+        Value *PoolBase = resolvePoolBase(B, Shard, Ret);
         auto *I8 = Type::getInt8Ty(F.getContext());
         Value *BytePtr = B.CreateInBoundsGEP(
             ArrayType::get(I8, 1), PoolBase,
@@ -382,12 +435,7 @@ struct ConstantIntEncryption : public FunctionPass {
               }
             } else {
             auto *I8 = Type::getInt8Ty(F.getContext());
-            Value *PoolBase = PoolGV;
-            if (PoolRefGV) {
-              PoolBase = IRB.CreateAlignedLoad(
-                  PointerType::getUnqual(F.getContext()), PoolRefGV, Align{1},
-                  true, "cie.pool.ref.ld");
-            }
+            Value *PoolBase = resolvePoolBase(IRB, &F, InsertPoint);
             Value *BytePtr = IRB.CreateInBoundsGEP(
                 ArrayType::get(I8, 1), PoolBase,
                 {ConstantInt::get(Type::getInt32Ty(F.getContext()), 0),
