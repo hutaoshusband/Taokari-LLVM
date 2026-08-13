@@ -16,7 +16,9 @@
 #   bash scripts/sync-to-wsl.sh --rebuild  # sync, then rebuild clang + opt
 set -euo pipefail
 
-SRC="/mnt/c/Users/hutao/Documents/GitHub/Taokari-LLVM/upstream/taokari"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SRC="${TAOKARI_WIN_SRC:-$REPO_ROOT/upstream/taokari}"
 DST="$HOME/taokari-src/taokari"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 

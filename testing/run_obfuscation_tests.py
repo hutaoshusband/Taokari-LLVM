@@ -136,6 +136,9 @@ RELEASE_GATES = [
     ReleaseGate("max_build_vmp_budgeted", TESTING / "scripts" / "verify_max_build_vmp_budgeted.py"),
     ReleaseGate("setjmp_eh_unwind_safety", TESTING / "scripts" / "verify_setjmp_unwind_safety.py"),
     ReleaseGate("eh_o0_cfg_safety", TESTING / "scripts" / "verify_eh_o0_cfg_safety.py"),
+    ReleaseGate("cie_page_table_ref", TESTING / "scripts" / "verify_cie_page_table_ref.py"),
+    ReleaseGate("indbr_fake_recovery", TESTING / "scripts" / "verify_indbr_fake_recovery.py"),
+    ReleaseGate("indgv_two_share", TESTING / "scripts" / "verify_indgv_two_share.py"),
     # Section 10/12: the new opt-in passes and their full-stack compose.
     ReleaseGate("function_outlining", TESTING / "scripts" / "verify_function_outlining.py"),
     ReleaseGate("dynamic_protection", TESTING / "scripts" / "verify_dynamic_protection.py"),
