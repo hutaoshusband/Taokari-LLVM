@@ -128,6 +128,7 @@ few passes without copying the whole file.
 | `perFunctionPool` | bool | `false` | Collect every encrypted integer constant of a function into one per-function byte-array global (`.cie.pool`) instead of one global per constant. Auto-enabled at `cie.level >= 3`. |
 | `indirectPoolRef` | bool | `false` | Resolve the pool base through an opaque indirect pointer slot (`.cie.pool.ref`) instead of a direct `@pool` reference, so no use site carries a static reference to the pool global. Auto-enabled at `cie.level >= 3`. |
 | `helperShards` | bool | `false` | Route each constant access through an outlined helper shard function (`.cie.shard.<n>`) that encapsulates the pool load + decrypt, so each use site is a call rather than inlined decrypt IR. One shard per distinct encrypted constant. Auto-enabled at `cie.level >= 3`. |
+| `pageTablePoolRef` | bool | `false` | L4: resolve the pool base through a page table instead of `.cie.pool.ref`. Skipped for `setjmp`/`longjmp` callers. Auto-enabled at `cie.level >= 4`. |
 
 ### String encryption (`cse`)
 
