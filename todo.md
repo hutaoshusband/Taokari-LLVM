@@ -117,11 +117,11 @@ These are the remaining small gaps from the current roadmap. Do these before sta
 - [x] Add context-dependent constants.
 - [x] Add per-function constant pool.
 - [x] Add encrypted constant pool.
-- [ ] Add page-table-backed constants.
+- [x] Add page-table-backed constants.
 - [x] Add indirect constant references.
 - [x] Add constant access through helper shards.
-- [ ] Add fake recovery paths for indirect branches.
-- [ ] Add split global storage.
+- [x] Add fake recovery paths for indirect branches.
+- [x] Add split global storage.
 
 ## 1.3 Dynamic / Integrity
 
@@ -401,7 +401,7 @@ Goal: avoid building a beautiful obfuscator that breaks real programs.
 
 - [x] Add pointer-heavy C fixture.
 - [x] Add template-heavy C++ fixture.
-- [ ] Add exception-heavy C++ fixture.
+- [x] Add exception-heavy C++ fixture.
 - [x] Add virtual dispatch fixture.
 - [x] Add static local initialization fixture.
 - [x] Add thread-local storage fixture.

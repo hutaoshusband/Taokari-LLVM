@@ -363,9 +363,6 @@ mathematically impossible. The full living list is in [`todo.md`](todo.md).
 - Full symbol / debug-info cleanup beyond the current metadata hygiene pass.
 - AArch64 MIR port (no-op infrastructure + a dirtybytes-equivalent), and full
   new-PM migration of the remaining IR passes.
-- Page-table-backed constants, fake recovery paths for indirect branches, and
-  split global storage (still open in the constant/branch/global track).
-- Exception-heavy C++ fixture in the real-world compatibility suite.
 
 ---
 
