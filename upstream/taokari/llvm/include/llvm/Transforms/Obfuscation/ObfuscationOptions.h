@@ -56,6 +56,9 @@ protected:
   // shard per distinct encrypted constant (deduped). Off by default;
   // auto-enabled at cie.level >= 3.
   uint32_t ConstHelperShards = 0;
+  // CIE L4: resolve the pool base through a page table instead of a
+  // .cie.pool.ref load. Skipped for returnsTwice callers.
+  uint32_t ConstPageTableRef = 0;
   uint32_t ReleaseStrip = 0;
   uint32_t RandomizeSections = 0;
   std::vector<std::string> ExportAllowlist;
@@ -207,6 +210,10 @@ public:
 
   bool constHelperShards() const { return this->ConstHelperShards; }
 
+  void setConstPageTableRef(bool ref) { this->ConstPageTableRef = ref; }
+
+  bool constPageTableRef() const { return this->ConstPageTableRef; }
+
   void setReleaseStrip(bool releaseStrip) { this->ReleaseStrip = releaseStrip; }
 
   bool releaseStrip() const { return this->ReleaseStrip; }
@@ -262,6 +269,7 @@ public:
     Result.setConstPerFunctionPool(ConstPerFunctionPool);
     Result.setConstIndirectPoolRef(ConstIndirectPoolRef);
     Result.setConstHelperShards(ConstHelperShards);
+    Result.setConstPageTableRef(ConstPageTableRef);
     Result.setReleaseStrip(ReleaseStrip);
     Result.setRandomizeSections(RandomizeSections);
     Result.setExportAllowlist(ExportAllowlist);
