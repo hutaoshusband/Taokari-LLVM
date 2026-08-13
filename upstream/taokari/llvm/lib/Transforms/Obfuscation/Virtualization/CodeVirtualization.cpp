@@ -1,6 +1,7 @@
 #include "llvm/Transforms/Obfuscation/CodeVirtualization.h"
 #include "llvm/Transforms/Obfuscation/DynamicProtection.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
+#include "llvm/Transforms/Obfuscation/Utils.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
@@ -3775,6 +3776,8 @@ struct CodeVirtualization : public ModulePass {
     };
     for (Function &F : M) {
       if (shouldSkip(F))
+        continue;
+      if (functionParticipatesInNonLocalJump(F) || functionIsStdOrEhRuntime(F))
         continue;
       auto Opt = ArgsOptions->toObfuscate(ArgsOptions->vmpOpt(), &F);
       if (!Opt.isEnabled())

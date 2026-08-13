@@ -375,11 +375,14 @@ struct IndirectCall : public FunctionPass {
   bool runOnFunction(Function &Fn) override {
     if (isGeneratedIcallFunction(Fn))
       return false;
+    if (functionIsStdOrEhRuntime(Fn) || functionParticipatesInNonLocalJump(Fn))
+      return false;
 
     const auto opt = ArgsOptions->toObfuscate(ArgsOptions->iCallOpt(), &Fn);
     if (!opt.isEnabled()) {
       return false;
     }
+    const bool UnsafeNLJ = functionParticipatesInNonLocalJump(Fn);
 
     auto &M = *Fn.getParent();
 
@@ -458,7 +461,7 @@ struct IndirectCall : public FunctionPass {
     Instruction *AllocaInsertPt = &*EntryBB.begin();
     auto *PtrTy = PointerType::getUnqual(Fn.getContext());
     for (auto &KV : CalleeUseCount) {
-      if (KV.second <= 1)
+      if (UnsafeNLJ || KV.second <= 1)
         continue;
       IRBuilder<> AIB(AllocaInsertPt);
       CalleeDedupCache[KV.first] = AIB.CreateAlloca(PtrTy, nullptr);
@@ -493,9 +496,9 @@ struct IndirectCall : public FunctionPass {
         buildDecrypt.FuncKey = FuncKeys[TableCallee];
         buildDecrypt.PtrEncKey = PtrEncKey;
         buildDecrypt.ObjectShareTable = CalleeObjectShareTable;
-        buildDecrypt.RuntimeSeed = opt.level() > 1 ? RNG() : 0;
+        buildDecrypt.RuntimeSeed = (!UnsafeNLJ && opt.level() > 1) ? RNG() : 0;
         buildDecrypt.UseMBA = opt.level() > 1;
-        buildDecrypt.IntegrityCheck = opt.level() > 1;
+        buildDecrypt.IntegrityCheck = !UnsafeNLJ && opt.level() > 1;
         buildDecrypt.PtrAuthKey = targetHasPAuth(Fn) ? 0 : -1;
         buildDecrypt.PtrAuthDisc = pacDiscriminator(&Fn, TableCallee);
         auto        DecPtr = buildPageTableDecryptIR(buildDecrypt);
@@ -538,9 +541,9 @@ struct IndirectCall : public FunctionPass {
         buildDecrypt.FuncKey = FuncKeys[TableCallee];
         buildDecrypt.PtrEncKey = PtrEncKey;
         buildDecrypt.ObjectShareTable = CalleeObjectShareTable;
-        buildDecrypt.RuntimeSeed = opt.level() > 1 ? RNG() : 0;
+        buildDecrypt.RuntimeSeed = (!UnsafeNLJ && opt.level() > 1) ? RNG() : 0;
         buildDecrypt.UseMBA = opt.level() > 1;
-        buildDecrypt.IntegrityCheck = opt.level() > 1;
+        buildDecrypt.IntegrityCheck = !UnsafeNLJ && opt.level() > 1;
         Triple T(M.getTargetTriple());
         buildDecrypt.PtrAuthKey = targetHasPAuth(Fn) ? 0 : -1;
         buildDecrypt.PtrAuthDisc = pacDiscriminator(&Fn, TableCallee);

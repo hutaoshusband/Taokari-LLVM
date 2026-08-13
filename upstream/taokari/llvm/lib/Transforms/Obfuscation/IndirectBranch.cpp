@@ -249,6 +249,9 @@ struct IndirectBranch : public FunctionPass {
     if (hasNoObfMetadata(Fn)) {
       return false;
     }
+    if (functionParticipatesInNonLocalJump(Fn) || functionIsStdOrEhRuntime(Fn)) {
+      return false;
+    }
 
     LLVMContext &Ctx = Fn.getContext();
     auto &       M = *Fn.getParent();

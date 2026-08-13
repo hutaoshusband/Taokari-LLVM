@@ -147,7 +147,8 @@ bool Flattening::flatten(Function *f) {
   const bool fortressMode = flaLevel >= 3;
 
   if (f->getInstructionCount() > maxInsts || f->size() > maxBlocks ||
-      f->hasPersonalityFn()) {
+      f->hasPersonalityFn() || functionIsStdOrEhRuntime(*f) ||
+      functionParticipatesInNonLocalJump(*f)) {
     return false;
   }
 
@@ -159,19 +160,6 @@ bool Flattening::flatten(Function *f) {
     if (isa<InvokeInst>(&I) || isa<CleanupPadInst>(&I) ||
         isa<CatchPadInst>(&I) || isa<CatchSwitchInst>(&I)) {
       return false;
-    }
-    if (auto *CB = dyn_cast<CallBase>(&I)) {
-      if (CB->hasFnAttr(Attribute::ReturnsTwice)) {
-        return false;
-      }
-      if (CB->doesNotReturn()) {
-        if (Function *Callee = CB->getCalledFunction()) {
-          StringRef N = Callee->getName();
-          if (N.contains("longjmp") || N == "_longjmp" || N == "siglongjmp") {
-            return false;
-          }
-        }
-      }
     }
   }
 
@@ -237,6 +225,19 @@ bool Flattening::flatten(Function *f) {
   auto bbEndOfEntry = insertBlock->splitBasicBlock(splitPos, "first");
   origBB.insert(origBB.begin(), bbEndOfEntry);
 
+  auto insertBeforeTerm = [](IRBuilder<> &B, BasicBlock *BB) {
+    if (Instruction *T = BB->getTerminator())
+      B.SetInsertPoint(T);
+    else
+      B.SetInsertPoint(BB);
+  };
+  auto setTermBr = [](BasicBlock *BB, BasicBlock *Dest) {
+    if (Instruction *T = BB->getTerminator())
+      ReplaceInstWithInst(T, BranchInst::Create(Dest));
+    else
+      BranchInst::Create(Dest, BB);
+  };
+
   DenseSet<uint64_t> UsedCases;
   DenseMap<BasicBlock *, ConstantInt *> CaseVal;
 
@@ -251,8 +252,10 @@ bool Flattening::flatten(Function *f) {
 
   ConstantInt *EntryCase = CaseVal[bbEndOfEntry];
 
-  // Create switch variable and set as it
-  IRBuilder<> IRB{insertBlock};
+  Instruction *EntryTerm = insertBlock->getTerminator();
+  if (!EntryTerm)
+    return false;
+  IRBuilder<> IRB(insertBlock, EntryTerm->getIterator());
   const auto switchVar = IRB.CreateAlloca(IntTy, nullptr, "switchVar");
   const auto switchXorVar = IRB.CreateAlloca(IntTy, nullptr, "switchXor");
   AllocaInst *switchBogusVar = nullptr;
@@ -373,12 +376,9 @@ bool Flattening::flatten(Function *f) {
     switchCondition = buildMbaXor(IRB, enc0, xor0, "switchCond");
   }
 
-  // Move first BB on top
   insertBlock->moveBefore(bbLoopEntry);
-  BranchInst::Create(bbLoopEntry, insertBlock);
-
-  // loopEnd jump to loopEntry
-  BranchInst::Create(bbLoopEntry, bbLoopEnd);
+  setTermBr(insertBlock, bbLoopEntry);
+  setTermBr(bbLoopEnd, bbLoopEntry);
 
   auto swDefault =
       BasicBlock::Create(f->getContext(), bbName("switchDefault"), f,
@@ -467,13 +467,19 @@ bool Flattening::flatten(Function *f) {
                            bbLoopEnd);
 
     if (dispatchLayout == 0) {
-      BranchInst::Create(switchBlock, bbLoopEntry);
+      setTermBr(bbLoopEntry, switchBlock);
     } else if (dispatchLayout == 1) {
       auto dispatchGate = BasicBlock::Create(
           f->getContext(), bbName("switchDispatchGate"), f, bbLoopEnd);
-      IRB.SetInsertPoint(bbLoopEntry);
-      IRB.CreateCondBr(buildOpaqueTrue(IRB, "dispatchGate.pred"), dispatchGate,
-                       swFakeCaseGate);
+      insertBeforeTerm(IRB, bbLoopEntry);
+      if (Instruction *Old = bbLoopEntry->getTerminator()) {
+        IRB.CreateCondBr(buildOpaqueTrue(IRB, "dispatchGate.pred"), dispatchGate,
+                         swFakeCaseGate);
+        Old->eraseFromParent();
+      } else {
+        IRB.CreateCondBr(buildOpaqueTrue(IRB, "dispatchGate.pred"), dispatchGate,
+                         swFakeCaseGate);
+      }
       IRB.SetInsertPoint(dispatchGate);
       Value *gateMix = buildXorExpr(
           IRB, switchCondition, ConstantInt::get(IntTy, 0), "dispatchGate.mix");
@@ -482,8 +488,7 @@ bool Flattening::flatten(Function *f) {
     } else if (dispatchLayout == 2) {
       auto nestedOuter = BasicBlock::Create(
           f->getContext(), bbName("switchNestedDispatch"), f, bbLoopEnd);
-      IRB.SetInsertPoint(bbLoopEntry);
-      IRB.CreateBr(nestedOuter);
+      setTermBr(bbLoopEntry, nestedOuter);
       IRB.SetInsertPoint(nestedOuter);
       auto *outerSwitch = SwitchInst::Create(buildOpaqueEven(IRB, "nestedKey"),
                                              swFakeCaseGate, 1, nestedOuter);
@@ -493,9 +498,15 @@ bool Flattening::flatten(Function *f) {
           f->getContext(), bbName("switchDispatchGateA"), f, bbLoopEnd);
       auto dispatchGateB = BasicBlock::Create(
           f->getContext(), bbName("switchDispatchGateB"), f, bbLoopEnd);
-      IRB.SetInsertPoint(bbLoopEntry);
-      IRB.CreateCondBr(buildOpaqueTrue(IRB, "dispatchGateA.pred"),
-                       dispatchGateA, swFakeCaseGate);
+      insertBeforeTerm(IRB, bbLoopEntry);
+      if (Instruction *Old = bbLoopEntry->getTerminator()) {
+        IRB.CreateCondBr(buildOpaqueTrue(IRB, "dispatchGateA.pred"),
+                         dispatchGateA, swFakeCaseGate);
+        Old->eraseFromParent();
+      } else {
+        IRB.CreateCondBr(buildOpaqueTrue(IRB, "dispatchGateA.pred"),
+                         dispatchGateA, swFakeCaseGate);
+      }
       IRB.SetInsertPoint(dispatchGateA);
       IRB.CreateCondBr(buildOpaqueTrue(IRB, "dispatchGateB.pred"),
                        dispatchGateB, swFakeCaseGate);
@@ -553,7 +564,8 @@ bool Flattening::flatten(Function *f) {
         RemapInstruction(&I, VMap,
                          RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
       }
-      Clone->getTerminator()->eraseFromParent();
+      if (Instruction *CTerm = Clone->getTerminator())
+        CTerm->eraseFromParent();
       IRBuilder<> CloneIRB(Clone);
       Value *cloneJunk =
           buildXorExpr(CloneIRB, randConst(), randConst(), "cloneJunk");
@@ -564,10 +576,6 @@ bool Flattening::flatten(Function *f) {
     }
 
   }
-
-  // Remove branch jump from 1st BB and make a jump to the while
-  ReplaceInstWithInst(f->begin()->getTerminator(),
-                      BranchInst::Create(bbLoopEntry));
 
   // Put all BB in the switch (case 值使用纯随机表)
   for (auto bi = origBB.begin(); bi != origBB.end(); ++bi) {
@@ -709,7 +717,8 @@ bool Flattening::flatten(Function *f) {
       continue;
     }
 
-    IRB.SetInsertPoint(bb->getTerminator());
+    Instruction *OldTerm = bb->getTerminator();
+    IRB.SetInsertPoint(OldTerm);
 
     auto writeNextEncoded = [&](Value *NextCaseVal) {
       Value *nextXor = randStateKey();
@@ -751,7 +760,7 @@ bool Flattening::flatten(Function *f) {
       IRB.CreateStore(nextXor, switchXorVar, true);
 
       IRB.CreateBr(bbLoopEnd);
-      bb->getTerminator()->eraseFromParent();
+      OldTerm->eraseFromParent();
     };
 
     // If it's a non-conditional jump

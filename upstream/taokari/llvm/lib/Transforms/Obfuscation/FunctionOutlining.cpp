@@ -1,5 +1,6 @@
 #include "llvm/Transforms/Obfuscation/FunctionOutlining.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
+#include "llvm/Transforms/Obfuscation/Utils.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/Analysis/AssumptionCache.h"
@@ -94,6 +95,8 @@ struct FunctionOutlining : public FunctionPass {
     if (F.hasPersonalityFn())
       return false;
     if (F.isVarArg())
+      return false;
+    if (functionIsStdOrEhRuntime(F) || functionParticipatesInNonLocalJump(F))
       return false;
 
     auto Opt = ArgsOptions->toObfuscate(ArgsOptions->outlineOpt(), &F);

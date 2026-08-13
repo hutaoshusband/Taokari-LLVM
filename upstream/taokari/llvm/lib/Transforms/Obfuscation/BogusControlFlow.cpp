@@ -13,7 +13,9 @@
 #include "llvm/Support/RandomNumberGenerator.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/Transforms/Obfuscation/OpaquePredicate.h"
+#include "llvm/Transforms/Obfuscation/Utils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
 
 #include <algorithm>
 #include <random>
@@ -55,7 +57,8 @@ struct BogusControlFlow : public FunctionPass {
 
   bool runOnFunction(Function &F) override {
     if (F.isDeclaration() || F.isIntrinsic() || F.hasPersonalityFn() ||
-        F.getName().starts_with("__taokari_bcf_"))
+        F.getName().starts_with("__taokari_bcf_") ||
+        functionIsStdOrEhRuntime(F) || functionParticipatesInNonLocalJump(F))
       return false;
 
     auto Opt = ArgsOptions->toObfuscate(ArgsOptions->bcfOpt(), &F);
@@ -124,6 +127,9 @@ struct BogusControlFlow : public FunctionPass {
 
     ValueToValueMapTy VMap;
     BasicBlock *Fake = CloneBasicBlock(&BB, VMap, ".bcf.fake", &F);
+    for (Instruction &I : *Fake)
+      RemapInstruction(&I, VMap,
+                       RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
     sanitizeFake(*Fake);
     if (Level >= 2)
       mutateFake(*Fake, Level, FuncRNG);

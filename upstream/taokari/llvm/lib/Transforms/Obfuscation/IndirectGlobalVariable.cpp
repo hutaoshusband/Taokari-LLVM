@@ -41,6 +41,7 @@ struct IndirectGlobalVariable : public FunctionPass {
   DenseMap<Constant *, unsigned>   GVIndex;
   DenseMap<Constant *, uint64_t>   GVKeys;
   SmallVector<GlobalVariable *, 8> GVPageTable;
+  GlobalVariable *                 GVObjectShareTable = nullptr;
 
   std::mt19937_64 RNG;
   uint64_t        PtrEncKey = 0;
@@ -135,6 +136,7 @@ struct IndirectGlobalVariable : public FunctionPass {
   bool doInitialization(Module &M) override {
     GVIndex.clear();
     GVPageTable.clear();
+    GVObjectShareTable = nullptr;
     FunctionGVs.clear();
     GlobalVariables.clear();
     GVKeys.clear();
@@ -162,6 +164,10 @@ struct IndirectGlobalVariable : public FunctionPass {
     // a fixed real-global ratio.
     createPageTableArgs.FakeEntries = chooseFakeEntryCount(
         RNG, static_cast<unsigned>(GlobalVariables.size()));
+    if (ArgsOptions->indGvOpt()->level() > 1) {
+      createPageTableArgs.TwoShare = true;
+      createPageTableArgs.OutObjectShareTable = &GVObjectShareTable;
+    }
 
     createPageTable(createPageTableArgs);
 
@@ -198,6 +204,8 @@ struct IndirectGlobalVariable : public FunctionPass {
     if (!opt.isEnabled()) {
       return false;
     }
+    if (functionIsStdOrEhRuntime(Fn) || functionParticipatesInNonLocalJump(Fn))
+      return false;
 
     auto &M = *Fn.getParent();
 
@@ -291,8 +299,7 @@ struct IndirectGlobalVariable : public FunctionPass {
         buildDecrypt.ModuleKey = GVKeys[GV];
         buildDecrypt.FuncKey = FuncKeys[GV];
         buildDecrypt.PtrEncKey = PtrEncKey;
-        // L2+: match IndirectCall/IndirectBranch nonce mixing and MBA
-        // pointer decrypt.
+        buildDecrypt.ObjectShareTable = GVObjectShareTable;
         buildDecrypt.RuntimeSeed = opt.level() > 1 ? RNG() : 0;
         buildDecrypt.UseMBA = opt.level() > 1;
         buildDecrypt.IntegrityCheck = opt.level() > 1;
@@ -343,6 +350,7 @@ struct IndirectGlobalVariable : public FunctionPass {
             buildDecrypt.ModuleKey = GVKeys[GV];
             buildDecrypt.FuncKey = FuncKeys[GV];
             buildDecrypt.PtrEncKey = PtrEncKey;
+            buildDecrypt.ObjectShareTable = GVObjectShareTable;
             Triple T(M.getTargetTriple());
             buildDecrypt.PtrAuthKey = targetHasPAuth(Fn) ? 2 : -1;
             buildDecrypt.PtrAuthDisc = pacDiscriminator(Fn, GV);
@@ -368,6 +376,8 @@ struct IndirectGlobalVariable : public FunctionPass {
     for (auto gvPage : GVPageTable) {
       appendToCompilerUsed(M, {gvPage});
     }
+    if (GVObjectShareTable)
+      appendToCompilerUsed(M, {GVObjectShareTable});
     return true;
   }
 

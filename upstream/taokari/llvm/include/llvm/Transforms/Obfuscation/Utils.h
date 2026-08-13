@@ -26,6 +26,7 @@ struct CreatePageTableArgs {
   unsigned                           FakeEntries = 0;
   bool                               TwoShare = false;
   GlobalVariable **                  OutObjectShareTable = nullptr;
+  Constant *                         FakeFill = nullptr;
 };
 
 
@@ -70,6 +71,8 @@ void enhancedPageTable(const CreatePageTableArgs &args,
 bool targetHasPAuth(const Function &F);
 bool isTaokariGeneratedHelper(const Function &F,
                               bool IncludeOutlinedShards = true);
+bool functionParticipatesInNonLocalJump(const Function &F);
+bool functionIsStdOrEhRuntime(const Function &F);
 Value *buildPageTableDecryptIR(const BuildDecryptArgs &args);
 Value *encryptConstant(Constant *plainConstant, Instruction *insertBefore,
                        std::mt19937_64 &rng, unsigned level,
