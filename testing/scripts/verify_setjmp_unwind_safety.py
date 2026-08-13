@@ -4,6 +4,8 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _taokari_portable as tp
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -108,14 +110,6 @@ def main() -> int:
             ("eh vmp -O0", eh_src, ["-mllvm", "-taokari", "-mllvm", "-taokari-vmp"], "-O0", "eh:11:-1"),
             ("eh vmp -O2", eh_src, ["-mllvm", "-taokari", "-mllvm", "-taokari-vmp"], "-O2", "eh:11:-1"),
         ]
-        # Known residual limitation: -taokari-max (the heaviest fortress preset) +
-        # -O0 + setjmp still crashes via a multi-pass fortress-decryption
-        # interaction that is separate from the flattening returnsTwice guard
-        # (covered by verify_setjmp_flatten_safety.py). These two cases are the
-        # only known failures; everything else must pass. When only these fail,
-        # return skip-code 2 so the release-gate treats it as a known-skip
-        # rather than a regression.
-        known_residual = {"setjmp max -O0", "setjmp max+vmp -O0"}
         failed_labels: set[str] = set()
         for label, src, flags, opt, want in cases:
             exe = d / f"{label.replace(' ', '_').replace('-', '').replace('+','p')}.exe"
@@ -134,16 +128,9 @@ def main() -> int:
     if not failed_labels:
         print("setjmp/eh unwind safety: ok")
         return 0
-    new_failures = failed_labels - known_residual
-    if new_failures:
-        print(f"setjmp/eh unwind safety: FAIL ({len(new_failures)} new case(s) beyond "
-              f"the known -taokari-max+-O0 residual: {sorted(new_failures)})",
-              file=sys.stderr)
-        return 1
-    print(f"setjmp/eh unwind safety: SKIP (only the known -taokari-max+-O0 setjmp "
-          f"residual failed: {sorted(failed_labels)}); flattening guard is covered "
-          f"by verify_setjmp_flatten_safety.py")
-    return 2
+    print(f"setjmp/eh unwind safety: FAIL {sorted(failed_labels)}",
+          file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":

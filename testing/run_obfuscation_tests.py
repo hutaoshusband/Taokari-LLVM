@@ -134,7 +134,8 @@ RELEASE_GATES = [
     # escape hatch when VMP is off entirely.
     ReleaseGate("max_build_no_vmp_hang", TESTING / "scripts" / "verify_max_build_no_vmp_hang.py"),
     ReleaseGate("max_build_vmp_budgeted", TESTING / "scripts" / "verify_max_build_vmp_budgeted.py"),
-    ReleaseGate("setjmp_eh_unwind_safety", TESTING / "scripts" / "verify_setjmp_unwind_safety.py", skippable=True),
+    ReleaseGate("setjmp_eh_unwind_safety", TESTING / "scripts" / "verify_setjmp_unwind_safety.py"),
+    ReleaseGate("eh_o0_cfg_safety", TESTING / "scripts" / "verify_eh_o0_cfg_safety.py"),
     # Section 10/12: the new opt-in passes and their full-stack compose.
     ReleaseGate("function_outlining", TESTING / "scripts" / "verify_function_outlining.py"),
     ReleaseGate("dynamic_protection", TESTING / "scripts" / "verify_dynamic_protection.py"),
@@ -323,6 +324,13 @@ CASES = [
     # /rethrow. C++ exceptions lower to funclets on x64; the unwind tables and
     # the exception_ptr ABI are fragile under Flattening + BCF.
     Case("exceptions_raii", (case_path("exceptions_raii") / "src" / "main.cpp",), "exc:2100:3100:1142:4100:100:105:200:15:-3:50\n"),
+    # Exception-heavy fixture: destructor-order fingerprint across noinline
+    # frames, virtual exception hierarchies, rethrow, exception_ptr across
+    # helpers, throw from a virtual override, try/catch in a loop,
+    # function-try-block constructors, partial member construction unwind,
+    # and catching a heap-allocated exception pointer.
+    Case("exceptions_heavy", (case_path("exceptions_heavy") / "src" / "main.cpp",),
+         "exc-heavy:123876:30:807:9:8:-103:37:6:-54:12399:43:104:234996\n"),
     # Dynamic memory fixture: scalar new/delete, array new[]/delete[],
     # malloc/free, placement new, unique_ptr with custom deleter, shared_ptr
     # refcount, and weak_ptr expiry. Smart-pointer control blocks are
