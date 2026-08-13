@@ -170,6 +170,40 @@ bool isTaokariGeneratedHelper(const Function &F, bool IncludeOutlinedShards) {
   return N.starts_with("__taokari_sh_") || N.contains(".shard");
 }
 
+bool functionParticipatesInNonLocalJump(const Function &F) {
+  for (const Instruction &I : instructions(F)) {
+    const auto *CB = dyn_cast<CallBase>(&I);
+    if (!CB)
+      continue;
+    if (CB->hasFnAttr(Attribute::ReturnsTwice))
+      return true;
+    Function *Callee = CB->getCalledFunction();
+    if (!Callee || !Callee->hasName())
+      continue;
+    StringRef N = Callee->getName();
+    if (N == "setjmp" || N == "_setjmp" || N == "sigsetjmp" ||
+        N == "longjmp" || N == "_longjmp" || N == "siglongjmp" ||
+        N == "__llvm_sjlj_setjmp" || N.contains("longjmp"))
+      return true;
+  }
+  return false;
+}
+
+bool functionIsStdOrEhRuntime(const Function &F) {
+  StringRef N = F.getName();
+  if (N.starts_with("__cxa_") || N.starts_with("__gxx_") ||
+      N.starts_with("__Cxx") || N.starts_with("__std_") ||
+      N.starts_with("_Cxx") || N.starts_with("?__Cxx") ||
+      N.contains("exception_ptr") || N.contains("current_exception") ||
+      N.contains("rethrow_exception") || N.contains("uncaught_exception") ||
+      N.contains("@std@@") || N.starts_with("_ZSt") || N.starts_with("_ZNSt") ||
+      N.starts_with("_ZNKSt") || N.starts_with("_ZTSt") ||
+      N.starts_with("_ZTVNSt") || N.starts_with("_ZTINSt") ||
+      N.starts_with("_ZTSNSt"))
+    return true;
+  return false;
+}
+
 static void emitIntegrityTrap(IRBuilder<> &IRB, Module *M,
                               const BuildDecryptArgs &args) {
   uint64_t Salt = args.RuntimeSeed ^ args.ModuleKey ^ (args.FuncKey << 7) ^
@@ -440,6 +474,20 @@ void maskCipher(uint8_t  mask, APInt &preIndex, uint64_t objKey,
   }
 }
 
+static Constant *pageTableFakeFill(const CreatePageTableArgs &args) {
+  if (args.FakeFill)
+    return args.FakeFill;
+  Module &M = *args.M;
+  LLVMContext &Ctx = M.getContext();
+  if (auto *GV = M.getGlobalVariable("taokari.pt.sink", true))
+    return GV;
+  auto *Sink = new GlobalVariable(
+      M, Type::getInt8Ty(Ctx), true, GlobalValue::InternalLinkage,
+      ConstantInt::get(Type::getInt8Ty(Ctx), 0), "taokari.pt.sink");
+  Sink->addMetadata("noobf", *MDNode::get(Ctx, {}));
+  return Sink;
+}
+
 void createPageTable(const CreatePageTableArgs &args) {
   auto *         IntTy = getPageTableIntTy(*args.M);
   const unsigned BitWidth = IntTy->getBitWidth();
@@ -449,8 +497,7 @@ void createPageTable(const CreatePageTableArgs &args) {
     std::vector<std::pair<Constant *, bool>> Entries;
     for (auto *Obj : *args.Objects)
       Entries.push_back({Obj, false});
-    auto *FakePtr = ConstantPointerNull::get(
-        PointerType::getUnqual(args.M->getContext()));
+    Constant *FakePtr = pageTableFakeFill(args);
     for (unsigned I = 0; I < args.FakeEntries; ++I)
       Entries.push_back({FakePtr, true});
     std::shuffle(Entries.begin(), Entries.end(), re);
@@ -551,8 +598,7 @@ void enhancedPageTable(const CreatePageTableArgs &     args,
     std::vector<std::pair<Constant *, bool>> Entries;
     for (auto *Obj : *args.Objects)
       Entries.push_back({Obj, false});
-    auto *FakePtr = ConstantPointerNull::get(
-        PointerType::getUnqual(args.M->getContext()));
+    Constant *FakePtr = pageTableFakeFill(args);
     for (unsigned I = 0; I < args.FakeEntries; ++I)
       Entries.push_back({FakePtr, true});
     std::shuffle(Entries.begin(), Entries.end(), re);

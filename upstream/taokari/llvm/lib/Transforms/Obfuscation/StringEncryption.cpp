@@ -685,7 +685,11 @@ GlobalVariable *StringEncryption::emitFakePool(Module &M,
 Value *StringEncryption::resolvePoolBase(IRBuilder<> &IRBInsert,
                                          unsigned PoolIndex) {
   GlobalVariable *GV = EncryptedStringTables[PoolIndex];
-  if (!UsePageTableAccess) {
+  Function *Host = IRBInsert.GetInsertBlock()
+                       ? IRBInsert.GetInsertBlock()->getParent()
+                       : nullptr;
+  if (!UsePageTableAccess ||
+      (Host && functionParticipatesInNonLocalJump(*Host))) {
     auto *GEP = IRBInsert.CreateInBoundsGEP(
         GV->getValueType(), GV, {IRBInsert.getInt32(0), IRBInsert.getInt32(0)});
     return GEP;
@@ -1260,10 +1264,13 @@ bool StringEncryption::processConstantStringUse(Function *F) {
   PointerType *PtrTy = PointerType::getUnqual(Ctx);
   // L3: delayed-decrypt forces every use onto a scratch buffer that is
   // scrubbed before the function returns, regardless of the cache path.
-  const bool UseHeap = opt.stringHeapDecrypt();
-  const bool UseStack = (opt.stringLocalStackDecrypt() && !UseHeap) ||
-                        UseDelayedDecrypt;
-  const bool ReencryptAfterUse = opt.stringReencryptAfterUse() || UseDelayedDecrypt;
+  const bool UnsafeNLJ = functionParticipatesInNonLocalJump(*F);
+  const bool UseHeap = opt.stringHeapDecrypt() && !UnsafeNLJ;
+  const bool UseStack =
+      !UnsafeNLJ &&
+      ((opt.stringLocalStackDecrypt() && !UseHeap) || UseDelayedDecrypt);
+  const bool ReencryptAfterUse =
+      !UnsafeNLJ && (opt.stringReencryptAfterUse() || UseDelayedDecrypt);
   FunctionCallee MallocFn;
   FunctionCallee FreeFn;
   SmallVector<Value *, 16> HeapAllocs;
@@ -1517,6 +1524,11 @@ bool StringEncryption::processConstantStringUse(Function *F) {
 Value *StringEncryption::resolveDecryptorCallee(IRBuilder<> &IRBInsert,
                                                 Function *DecFunc) {
   if (!UseDecryptorIndirectCall)
+    return DecFunc;
+  Function *Host = IRBInsert.GetInsertBlock()
+                       ? IRBInsert.GetInsertBlock()->getParent()
+                       : nullptr;
+  if (Host && functionParticipatesInNonLocalJump(*Host))
     return DecFunc;
   // indirect-call hardening is owned by the dedicated IndirectCall
   // pass downstream. Rather than duplicate its page-table machinery here

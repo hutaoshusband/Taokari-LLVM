@@ -120,15 +120,7 @@ struct ConstantIntEncryption : public FunctionPass {
     // longjmp returns -> wrong value (often a bad page-table index -> crash).
     // Functions that call a returnsTwice function (setjmp/getcontext) must use
     // a static seed instead.
-    bool CallsReturnsTwice = false;
-    for (Instruction &I : instructions(F)) {
-      if (auto *CB = dyn_cast<CallBase>(&I)) {
-        if (CB->hasFnAttr(Attribute::ReturnsTwice)) {
-          CallsReturnsTwice = true;
-          break;
-        }
-      }
-    }
+    const bool CallsReturnsTwice = functionParticipatesInNonLocalJump(F);
     const bool UseRuntimeSeed = opt.level() >= 2 && !CallsReturnsTwice;
     AllocaInst *SeedCache = UseRuntimeSeed
                                  ? createConstantSeedCache(F, RNG,
@@ -222,7 +214,8 @@ struct ConstantIntEncryption : public FunctionPass {
     }
 
     const bool UseIndirectRef =
-        PoolGV && (opt.constIndirectPoolRef() || opt.level() >= 3);
+        PoolGV && (opt.constIndirectPoolRef() || opt.level() >= 3) &&
+        !CallsReturnsTwice;
     GlobalVariable *PoolRefGV = nullptr;
     if (UseIndirectRef) {
       auto *PtrTy = PointerType::getUnqual(F.getContext());
