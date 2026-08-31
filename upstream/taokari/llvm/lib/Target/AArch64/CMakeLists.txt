@@ -114,6 +114,7 @@ add_llvm_target(AArch64CodeGen
   Scalar
   SelectionDAG
   Support
+  TaokariMachineObf
   Target
   TargetParser
   TransformUtils

@@ -32,6 +32,7 @@
 #include "llvm/CodeGen/MIRParser/MIParser.h"
 #include "llvm/CodeGen/MachineScheduler.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/CodeGen/TaokariMachineObf.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Attributes.h"
@@ -854,6 +855,10 @@ void AArch64PassConfig::addPreSched2() {
 }
 
 void AArch64PassConfig::addPreEmitPass() {
+  // Same pipeline slot as the X86 hook: post-RA, pre-emit. The pass
+  // self-gates per target and no-ops unless -taokari-mir=<passes> opts in.
+  addPass(createTaokariMachineObfLegacyPass());
+
   // Machine Block Placement might have created new opportunities when run
   // at O3, where the Tail Duplication Threshold is set to 4 instructions.
   // Run the load/store optimizer once more.

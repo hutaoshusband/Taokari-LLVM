@@ -188,6 +188,7 @@ RELEASE_GATES = [
     ReleaseGate("aarch64_indirect_ir", TESTING / "scripts" / "verify_aarch64_indirect_ir.py", skippable=True),
     ReleaseGate("max_preset_semantics", TESTING / "scripts" / "verify_max_preset_semantics.py"),
     ReleaseGate("perf_baseline", TESTING / "scripts" / "verify_perf_baseline.py", skippable=True),
+    ReleaseGate("machine_obf_aarch64_noop", TESTING / "scripts" / "verify_machine_obf_aarch64_noop.py", skippable=True),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
