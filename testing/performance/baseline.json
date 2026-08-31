@@ -1,0 +1,126 @@
+{
+  "linux": {
+    "arith_logic": {
+      "compile": 8.452192778552414,
+      "obf_size_kb": 162.8,
+      "runtime": 1.045346245486179,
+      "size": 10.367661691542288
+    },
+    "atomics": {
+      "compile": 1.6094792024005768,
+      "obf_size_kb": 30.9,
+      "runtime": 1.0364002478303516,
+      "size": 1.9691542288557213
+    },
+    "dynamic_memory": {
+      "compile": 1.7392057827016232,
+      "obf_size_kb": 75.1,
+      "runtime": 1.0788219812140274,
+      "size": 2.1187747906566767
+    },
+    "flattening_stress": {
+      "compile": 5.325949895093362,
+      "obf_size_kb": 125.5,
+      "runtime": 1.101136120042822,
+      "size": 8.018472291562656
+    },
+    "hashing": {
+      "compile": 2.429393516693949,
+      "obf_size_kb": 34.8,
+      "runtime": 1.2790182375997454,
+      "size": 2.2118349080059674
+    },
+    "math_heavy": {
+      "compile": 1.7965385923901611,
+      "obf_size_kb": 30.7,
+      "runtime": 0.9514991181653492,
+      "size": 1.9378084896347483
+    },
+    "mba_basic": {
+      "compile": 2.2143305385680523,
+      "obf_size_kb": 34.6,
+      "runtime": 0.9706668703681187,
+      "size": 2.2187187187187187
+    },
+    "multithreading": {
+      "compile": 1.9278127197940793,
+      "obf_size_kb": 248.9,
+      "runtime": 0.9321883088869536,
+      "size": 1.3606935428766656
+    },
+    "pointer_heavy": {
+      "compile": 1.8958703987270034,
+      "obf_size_kb": 27.7,
+      "runtime": 0.9619828550136551,
+      "size": 1.7417609444171176
+    },
+    "tiny_aes": {
+      "compile": 16.044358422981208,
+      "obf_size_kb": 187.1,
+      "runtime": 1.1397137014317071,
+      "size": 11.653041362530413
+    }
+  },
+  "windows": {
+    "arith_logic": {
+      "compile": 3.1533499548688537,
+      "obf_size_kb": 288.5,
+      "runtime": 0.9936737017464468,
+      "size": 2.083032490974729
+    },
+    "atomics": {
+      "compile": 1.5997978418334888,
+      "obf_size_kb": 172.5,
+      "runtime": 1.025180631591065,
+      "size": 1.25
+    },
+    "dynamic_memory": {
+      "compile": 1.3740782227613841,
+      "obf_size_kb": 206.5,
+      "runtime": 1.0277174527085295,
+      "size": 1.449122807017544
+    },
+    "flattening_stress": {
+      "compile": 3.0585484283701025,
+      "obf_size_kb": 249.5,
+      "runtime": 1.0649008407248264,
+      "size": 1.8014440433212997
+    },
+    "hashing": {
+      "compile": 1.6664195566458642,
+      "obf_size_kb": 172.5,
+      "runtime": 1.0281024828745444,
+      "size": 1.25
+    },
+    "math_heavy": {
+      "compile": 1.492443749253254,
+      "obf_size_kb": 171.0,
+      "runtime": 1.0325503388102395,
+      "size": 1.1875
+    },
+    "mba_basic": {
+      "compile": 1.403265279655396,
+      "obf_size_kb": 165.5,
+      "runtime": 0.998867267551239,
+      "size": 1.1992753623188406
+    },
+    "multithreading": {
+      "compile": 2.336213486789527,
+      "obf_size_kb": 586.0,
+      "runtime": 1.0904944260909073,
+      "size": 2.207156308851224
+    },
+    "pointer_heavy": {
+      "compile": 1.4399692295039026,
+      "obf_size_kb": 159.0,
+      "runtime": 1.0065701520118084,
+      "size": 1.148014440433213
+    },
+    "tiny_aes": {
+      "compile": 5.359672685079573,
+      "obf_size_kb": 304.0,
+      "runtime": 0.9513907974881219,
+      "size": 2.148409893992933
+    }
+  }
+}

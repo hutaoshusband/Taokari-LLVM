@@ -24,13 +24,11 @@ from run_performance_matrix import (
     CLANG,
     OUT,
     SRC,
-    VSDEVCMD,
     compile_preset as _compile_preset,
-    parse_timings,
     run_best,
-    run as run_cmd,
     source_with_iters,
 )
+import _taokari_portable as tp
 
 
 @dataclass(frozen=True)
@@ -87,7 +85,7 @@ def compile_flags(flags: tuple[str, ...], src: Path, out: Path) -> float:
 
 
 def build_and_run(label: str, flags: tuple[str, ...], src: Path, tmpdir: Path, rounds: int) -> tuple[float, int, dict[str, tuple[int, int]]]:
-    exe = tmpdir / f"{label}.exe"
+    exe = tmpdir / tp.exe_name(label)
     compile_s = compile_flags(flags, src, exe)
     timings = run_best(exe, rounds)
     size = exe.stat().st_size

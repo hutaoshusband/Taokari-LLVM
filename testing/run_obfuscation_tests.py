@@ -187,6 +187,7 @@ RELEASE_GATES = [
     ReleaseGate("setjmp_flatten_safety", TESTING / "scripts" / "verify_setjmp_flatten_safety.py"),
     ReleaseGate("aarch64_indirect_ir", TESTING / "scripts" / "verify_aarch64_indirect_ir.py", skippable=True),
     ReleaseGate("max_preset_semantics", TESTING / "scripts" / "verify_max_preset_semantics.py"),
+    ReleaseGate("perf_baseline", TESTING / "scripts" / "verify_perf_baseline.py", skippable=True),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
@@ -537,18 +538,19 @@ def compile_case(
             cpp_driver = clang.with_name(clang.name.removesuffix(EXE) + "++" + EXE)
             if cpp_driver.exists():
                 linker = cpp_driver
-    result = run([str(linker), *map(str, objects), *case.link_flags, *extra, "-o", str(exe)], use_vs_env=True)
+    link_flags = [f for f in case.link_flags if not (IS_WINDOWS and f == "-lm")] #no libm in Windows CRT, LNK1181
+    result = run([str(linker), *map(str, objects), *link_flags, *extra, "-o", str(exe)], use_vs_env=True)
     if result.returncode:
         try:
             exe.unlink(missing_ok=True)
         except OSError:
             pass
         time.sleep(0.2)
-        result = run([str(linker), *map(str, objects), *case.link_flags, *extra, "-o", str(exe)], use_vs_env=True)
+        result = run([str(linker), *map(str, objects), *link_flags, *extra, "-o", str(exe)], use_vs_env=True)
         if result.returncode:
             raise RuntimeError(f"link {case.name}\n{result.stdout}{result.stderr}")
     if not exe.exists():
-        result = run([str(linker), *map(str, objects), *case.link_flags, *extra, "-o", str(exe)], use_vs_env=True)
+        result = run([str(linker), *map(str, objects), *link_flags, *extra, "-o", str(exe)], use_vs_env=True)
         if result.returncode or not exe.exists():
             raise RuntimeError(f"link {case.name} did not create {exe}\n{result.stdout}{result.stderr}")
     return exe
@@ -568,17 +570,19 @@ def measure_runtime(exe: Path, rounds: int = 3) -> tuple[float, subprocess.Compl
 
 
 def run_release_gates(*, keep_going: bool) -> int:
-    failures = 0
+    failures = passed = skip_pre = skip_win = 0
     for gate in RELEASE_GATES:
         if gate.windows_only and not IS_WINDOWS:
+            skip_win += 1
             log("SKIP", f"{gate.name} (Windows-only gate)", "blue")
             continue
         log("GATE", gate.name, "yellow")
         result = run([sys.executable, str(gate.script)])
         if gate.skippable and result.returncode == 2:
+            skip_pre += 1
             if result.stdout:
                 sys.stdout.write(result.stdout)
-            log("SKIP", gate.name, "blue")
+            log("SKIP", f"{gate.name} (precondition)", "blue")
             continue
         if result.returncode:
             failures += 1
@@ -588,11 +592,15 @@ def run_release_gates(*, keep_going: bool) -> int:
                 sys.stderr.write(result.stderr)
             log("FAIL", gate.name, "red")
             if not keep_going:
-                return failures
+                break
             continue
+        passed += 1
         if result.stdout:
             sys.stdout.write(result.stdout)
         log("PASS", gate.name, "green")
+    log("GATES", f"pass={passed} fail={failures} skip-precondition={skip_pre} "
+                 f"skip-windows-only={skip_win}",
+        "green" if not failures else "red")
     return failures
 
 
@@ -613,32 +621,33 @@ def run_case_differential(
     rtti: bool,
     extra_flags: tuple[str, ...],
     max_preset: bool = False,
+    variants: int = 1,
+    runs: int = 1,
 ) -> None:
-    # True baseline-vs-obfuscated comparison: compile the same source twice
-    # (unobfuscated then obfuscated), run both, and fail on any divergence of
-    # stdout/stderr/exit. Unlike the hardcoded expected_stdout path, this
-    # catches subtle miscompilations where the expected output drifted.
     tag = f"{mode}/{case.name}"
     baseline = compile_case(driver, case, mode, obfuscate=False,
                             extra_flags=extra_flags)
-    obf = compile_case(driver, case, mode, level=level, rtti=rtti,
-                       extra_flags=extra_flags, max_preset=max_preset)
     base_run = run([str(baseline)])
-    obf_run = run([str(obf)])
     base_out = normalize_output(base_run.stdout)
-    obf_out = normalize_output(obf_run.stdout)
     base_err = normalize_output(base_run.stderr)
-    obf_err = normalize_output(obf_run.stderr)
-    if obf_run.returncode != base_run.returncode or obf_out != base_out or obf_err != base_err:
-        detail = [f"run {tag} DIFFERENTIAL MISMATCH"]
-        if obf_run.returncode != base_run.returncode:
-            detail.append(f"exit: obf={obf_run.returncode} baseline={base_run.returncode}")
-        if obf_out != base_out:
-            detail.append(f"stdout obf={obf_run.stdout!r}\n       base={base_run.stdout!r}")
-        if obf_err != base_err:
-            detail.append(f"stderr obf={obf_run.stderr!r}\n        base={base_run.stderr!r}")
-        raise RuntimeError("\n".join(detail))
-    log("PASS", f"{tag} (diff)", "green")
+    for v in range(variants):
+        obf = compile_case(driver, case, mode, level=level, rtti=rtti,
+                           extra_flags=extra_flags, max_preset=max_preset) #fresh compile = fresh RNG keys
+        for r in range(runs):
+            obf_run = run([str(obf)])
+            obf_out = normalize_output(obf_run.stdout)
+            obf_err = normalize_output(obf_run.stderr)
+            if obf_run.returncode != base_run.returncode or obf_out != base_out or obf_err != base_err:
+                detail = [f"run {tag} DIFFERENTIAL MISMATCH (variant {v + 1}/{variants}, exec {r + 1}/{runs})"]
+                if obf_run.returncode != base_run.returncode:
+                    detail.append(f"exit: obf={obf_run.returncode} baseline={base_run.returncode}")
+                if obf_out != base_out:
+                    detail.append(f"stdout obf={obf_run.stdout!r}\n       base={base_run.stdout!r}")
+                if obf_err != base_err:
+                    detail.append(f"stderr obf={obf_run.stderr!r}\n        base={base_run.stderr!r}")
+                raise RuntimeError("\n".join(detail))
+    note = "" if variants == runs == 1 else f" variants={variants} runs={runs}"
+    log("PASS", f"{tag} (diff{note})", "green")
 
 
 def run_diff_matrix(
@@ -654,6 +663,8 @@ def run_diff_matrix(
     sanitize: list[str] | None,
     keep_going: bool,
     max_preset: bool = False,
+    variants: int = 1,
+    runs: int = 1,
 ) -> int:
     import itertools
 
@@ -677,7 +688,7 @@ def run_diff_matrix(
     san_axis = sanitize or [None]
     drivers_seen: set[str] = set()
     failures = 0
-    runs = 0
+    total = 0
     for mode in modes:
         driver = MODE_DRIVER[mode]
         if not driver.exists():
@@ -700,37 +711,42 @@ def run_diff_matrix(
                                  else ("pie" if ("-pie" in link_flags or "-fPIE" in link_flags)
                                        else ("nopie" if "-no-pie" in link_flags else "default")))
                         tag = f"{mode}/{case.name}/{opt}/{style}{('/'+san) if san else ''}"
-                        runs += 1
+                        total += 1
                         try:
                             if shared:
                                 _diff_link_only(driver, case, mode, level, rtti,
-                                                tuple(extra), max_preset=max_preset)
+                                                tuple(extra), max_preset=max_preset,
+                                                variants=variants)
                             else:
                                 run_case_differential(driver, case, mode,
                                                       level=level, rtti=rtti,
                                                       extra_flags=tuple(extra),
-                                                      max_preset=max_preset)
+                                                      max_preset=max_preset,
+                                                      variants=variants, runs=runs)
                         except Exception as exc:
                             failures += 1
                             log("FAIL", f"{tag}: {exc}", "red")
                             if not keep_going:
                                 return 1
-    log("DIFF", f"{runs - failures}/{runs} differential variants matched", "green" if not failures else "yellow")
+    log("DIFF", f"{total - failures}/{total} differential variants matched", "green" if not failures else "yellow")
     return 1 if failures else 0
 
 
 def _diff_link_only(driver: Path, case: Case, mode: str, level: int,
                     rtti: bool, extra_flags: tuple[str, ...],
-                    max_preset: bool = False) -> None:
+                    max_preset: bool = False, variants: int = 1) -> None:
     # Compile-only differential for shared-object targets: verify the
     # obfuscated object links without error relative to the baseline object.
     tag = f"{mode}/{case.name}/shared"
     baseline = compile_case(driver, case, mode, obfuscate=False,
                             extra_flags=extra_flags)
-    obf = compile_case(driver, case, mode, level=level, rtti=rtti,
-                       extra_flags=extra_flags, max_preset=max_preset)
-    if not baseline.exists() or not obf.exists():
+    if not baseline.exists():
         raise RuntimeError(f"link-only {tag} did not produce objects")
+    for _ in range(variants):
+        obf = compile_case(driver, case, mode, level=level, rtti=rtti,
+                           extra_flags=extra_flags, max_preset=max_preset)
+        if not obf.exists():
+            raise RuntimeError(f"link-only {tag} did not produce objects")
 
 
 def main() -> int:
@@ -760,6 +776,13 @@ def main() -> int:
                              "baseline per case and compare obfuscated output "
                              "(stdout/stderr/exit) against it, instead of the "
                              "hardcoded expected_stdout/expected_exit")
+    parser.add_argument("--variants", type=int, default=1,
+                        help="with --diff: obfuscated compile count per matrix "
+                             "cell; each is a fresh compile with fresh RNG keys "
+                             "(default: 1)")
+    parser.add_argument("--runs", type=int, default=1,
+                        help="with --diff: executions per obfuscated variant; "
+                             "every run must match the baseline (default: 1)")
     parser.add_argument("--max", action="store_true",
                         help="use -taokari-max -taokari-max-no-vmp instead of "
                              "the default per-pass IR stack")
@@ -780,6 +803,9 @@ def main() -> int:
                         help="with --diff: link with -fsanitize=<mode>; repeatable. "
                              "applied to both baseline and obfuscated builds")
     args = parser.parse_args()
+    if args.variants < 1 or args.runs < 1:
+        print("--variants/--runs must be >= 1", file=sys.stderr)
+        return 2
 
     clang = args.clang.resolve()
     if clang not in (DEFAULT_CLANG.resolve(), DEFAULT_CLANG_CL.resolve()):
@@ -808,6 +834,8 @@ def main() -> int:
             sanitize=args.sanitize,
             keep_going=args.keep_going,
             max_preset=args.max,
+            variants=args.variants,
+            runs=args.runs,
         )
 
     benchmark_rows: list[dict[str, str | int | float]] = []

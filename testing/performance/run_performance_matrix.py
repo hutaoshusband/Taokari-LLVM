@@ -8,19 +8,19 @@ from __future__ import annotations
 import argparse
 import csv
 import statistics
-import subprocess
 import sys
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
-CLANG = ROOT / "build" / "taokari-local" / "bin" / "clang.exe"
+sys.path.insert(0, str(ROOT / "testing" / "scripts"))
+import _taokari_portable as tp
+
 SRC = ROOT / "testing" / "cases" / "vmp_benchmark" / "src" / "main.c"
 OUT = ROOT / "testing" / "performance" / "results"
-VSDEVCMD = Path(r"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat")
+CLANG = tp.CLANG
 
 
 @dataclass(frozen=True)
@@ -54,23 +54,6 @@ PRESETS: tuple[Preset, ...] = (
 )
 
 
-def run(cmd: list[str], *, use_vs_env: bool = False) -> subprocess.CompletedProcess[str]:
-    if use_vs_env and VSDEVCMD.exists():
-        with tempfile.NamedTemporaryFile("w", suffix=".cmd", delete=False, encoding="utf-8") as handle:
-            batch = Path(handle.name)
-            handle.write(
-                "@echo off\n"
-                f'call "{VSDEVCMD}" -arch=x64 -host_arch=x64 >nul\n'
-                f"{subprocess.list2cmdline(cmd)}\n"
-                "exit /b %ERRORLEVEL%\n"
-            )
-        try:
-            return subprocess.run(["cmd.exe", "/d", "/c", str(batch)], cwd=ROOT, text=True, capture_output=True)
-        finally:
-            batch.unlink(missing_ok=True)
-    return subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True)
-
-
 def source_with_iters(tmpdir: Path, iters: int) -> Path:
     if iters == 50_000_000:
         return SRC
@@ -86,7 +69,7 @@ def compile_preset(preset: Preset, src: Path, out: Path) -> float:
     attr = r'-DVMP_CASE_ATTRS=__attribute__((noinline,annotate("+vmp")))' if preset.vmp_attrs else r"-DVMP_CASE_ATTRS=__attribute__((noinline))"
     cmd = [str(CLANG), str(src), attr, "-O2", *preset.flags, "-o", str(out)]
     start = time.perf_counter()
-    res = run(cmd, use_vs_env=True)
+    res = tp.run(cmd, vs=True)
     seconds = time.perf_counter() - start
     if res.returncode:
         raise RuntimeError(res.stdout + res.stderr)
@@ -109,7 +92,7 @@ def parse_timings(stdout: str) -> dict[str, tuple[int, int]]:
 def run_best(exe: Path, rounds: int) -> dict[str, tuple[int, int]]:
     samples: dict[str, list[tuple[int, int]]] = {}
     for _ in range(rounds):
-        res = run([str(exe)])
+        res = tp.run([str(exe)])
         if res.returncode:
             raise RuntimeError(res.stdout + res.stderr)
         for case, timing in parse_timings(res.stdout).items():
@@ -189,7 +172,7 @@ def main() -> int:
         tmpdir = Path(tmp)
         src = source_with_iters(tmpdir, args.iters)
         for preset in chosen:
-            exe = tmpdir / f"{preset.name}.exe"
+            exe = tmpdir / tp.exe_name(preset.name)
             print(f"[BUILD] {preset.name}", flush=True)
             compile_s = compile_preset(preset, src, exe)
             print(f"[RUN] {preset.name}", flush=True)

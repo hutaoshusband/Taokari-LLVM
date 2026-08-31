@@ -40,6 +40,30 @@ python testing\run_obfuscation_tests.py --keep-going
 `--benchmark-out report.csv` compiles each case plain and obfuscated and records
 compile time, runtime and binary-size overhead.
 
+## Differential mode
+
+`--diff` compiles a fresh plain baseline per case and compares stdout/stderr/exit
+against the obfuscated build. `--variants N` does N fresh obfuscated compiles per
+matrix cell (fresh RNG keys each) and `--runs N` executes each variant N times;
+every run must match the baseline, closing the one-sample RNG blind spot:
+
+```powershell
+python testing\run_obfuscation_tests.py --diff --variants 2 --runs 2 --case exceptions_heavy
+```
+
+## Performance gate
+
+`testing/performance/run_perf_gate.py` compiles the 10 baseline-corpus cases
+plain vs obfuscated (default stack, level 4; median of 3 obfuscated builds for
+compile/size), correctness-gates every obfuscated run against the plain output,
+then checks compile/runtime/size ratios against
+`testing/performance/baseline.json` (tolerances: compile +40%, runtime +20%
+with a +0.25 absolute floor, size +10% — fitted to measured per-compile RNG and
+desktop-load jitter). Exit 0 pass / 1 regression / 2 skip. `--update-baseline`
+re-seeds the current platform's section; `--quick` runs a 3-case subset.
+Wrapped as the skippable `perf_baseline` release gate via
+`testing/scripts/verify_perf_baseline.py`.
+
 ## Release gates
 
 After the case matrix, the harness runs a set of standalone verifier scripts
