@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD="$HOME/taokari-build/bin"
-ROOT="/mnt/c/Users/hutao/Documents/GitHub/Taokari-LLVM"
 DEST="$ROOT/build/taokari-linux/bin"
 mkdir -p "$DEST"
 for t in clang clang++ opt lld ld.lld \
