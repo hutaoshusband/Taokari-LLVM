@@ -267,11 +267,11 @@ real-world fixture, and a whole-obfuscator **ImGui** stress case. See
 
 ---
 
-## Roadmap status: detailed in the todo.md!
+## Roadmap status
 
 Taokari ships a **tiered L1 → L2 → L3** progression per pass. `L3` here means "hardened
 enough that reversing is expensive, annoying, and slow for a serious analyst" — not
-mathematically impossible. The full living list is in [`todo.md`](todo.md).
+mathematically impossible.
 
 **Shipped:**
 
