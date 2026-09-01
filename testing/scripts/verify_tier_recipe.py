@@ -27,6 +27,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _taokari_portable as tp
 
 from verify_vmp_coverage import CLANG, run, ROOT, VSDEVCMD
