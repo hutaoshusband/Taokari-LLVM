@@ -21,6 +21,7 @@ or by `noobf`.
 | `-mllvm -taokari-max`             | Taokari Max Protection profile (all passes on, level 4). Budgeted: see "Max Protection + VMP budget". |
 | `-mllvm -taokari-max-no-vmp`      | Under `-taokari-max`: force VMP off, keep every other max-strength pass on. |
 | `-mllvm -taokari-max-no-<p>`      | Under `-taokari-max`: disable one pass family. `<p>` = `fla`, `mba`, `const`, `indirects`, `bcf-before`, `bcf-after`. |
+| `-mllvm -taokari-max-no-mir`      | Under `-taokari-max`: disable the Machine-IR (MIR) layer entirely; per-function `+mir` annotations still apply. |
 | `-mllvm -taokari-cfg=<path>`      | Load JSON config from `<path>`.                          |
 | `-mllvm -taokari-vmp`             | Enable code virtualisation (off by default).             |
 | `-mllvm -taokari-vmp-padding=N`   | Probability (0..100) of inserting pad opcodes in VM bytecode. |

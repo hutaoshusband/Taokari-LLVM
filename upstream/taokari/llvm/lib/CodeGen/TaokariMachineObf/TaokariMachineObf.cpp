@@ -95,6 +95,12 @@ static cl::opt<std::string> TaokariMirFlag(
              "Example: -taokari-mir=dirtybytes,junk,sub. Cheap on compile "
              "time (~0.2s typical); the biggest cost is binary size growth."));
 
+static cl::opt<bool> TaokariMaxNoMir(
+    "taokari-max-no-mir", cl::init(false), cl::NotHidden,
+    cl::desc("Under -taokari-max: disable the MIR layer entirely (companion "
+             "of the -taokari-max-no-* IR flags). Per-function +mir "
+             "annotations still apply."));
+
 static cl::opt<unsigned> TaokariMirDirtyProb(
     "taokari-mir-dirtybytes-prob", cl::init(100), cl::NotHidden,
     cl::desc("Percent of MIR-enabled functions receiving dirty bytes "
@@ -198,7 +204,8 @@ struct MirSubpasses {
 static MirSubpasses parseMirFlag() {
   MirSubpasses Passes;
   if (TaokariMaxProtection) {
-    Passes.enableMax();
+    if (!TaokariMaxNoMir)
+      Passes.enableMax();
     return Passes;
   }
   if (TaokariMirFlag.empty())
