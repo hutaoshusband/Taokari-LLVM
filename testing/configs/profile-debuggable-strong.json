@@ -4,7 +4,8 @@
     "enable": true,
     "level": 3,
     "maxInsts": 4000,
-    "maxBlocks": 200
+    "maxBlocks": 200,
+    "maxAllocas": 128
   },
   "bcf": {
     "enable": true,
