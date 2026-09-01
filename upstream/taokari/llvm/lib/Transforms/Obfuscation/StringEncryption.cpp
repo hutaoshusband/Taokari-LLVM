@@ -261,9 +261,6 @@ struct StringEncryption : public ModulePass {
   StringRef getPassName() const override { return {"StringEncryption"}; }
 
   bool runOnModule(Module &M) override;
-  static void
-  collectConstantStringUser(GlobalVariable *CString,
-                            SmallPtrSetImpl<GlobalVariable *> &Users);
   static bool isValidToEncrypt(GlobalVariable *GV);
   bool processConstantStringUse(Function *F);
   void deleteUnusedGlobalVariable();
@@ -1600,27 +1597,6 @@ void StringEncryption::flattenDecryptor(Function &F, uint32_t BuildNonce) {
     Switch->addCase(IRB.getInt32(Junk), Trap);
   }
   LoopBodyTerm->eraseFromParent();
-}
-
-void StringEncryption::collectConstantStringUser(
-    GlobalVariable *CString, SmallPtrSetImpl<GlobalVariable *> &Users) {
-  SmallPtrSet<Value *, 16> Visited;
-  SmallVector<Value *, 16> ToVisit;
-
-  ToVisit.push_back(CString);
-  while (!ToVisit.empty()) {
-    Value *V = ToVisit.pop_back_val();
-    if (Visited.count(V) > 0)
-      continue;
-    Visited.insert(V);
-    for (Value *User : V->users()) {
-      if (auto *GV = dyn_cast<GlobalVariable>(User)) {
-        Users.insert(GV);
-      } else {
-        ToVisit.push_back(User);
-      }
-    }
-  }
 }
 
 bool StringEncryption::isValidToEncrypt(GlobalVariable *GV) {

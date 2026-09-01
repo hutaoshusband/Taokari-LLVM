@@ -42,6 +42,7 @@ struct IndirectGlobalVariable : public FunctionPass {
   DenseMap<Constant *, uint64_t>   GVKeys;
   SmallVector<GlobalVariable *, 8> GVPageTable;
   GlobalVariable *                 GVObjectShareTable = nullptr;
+  SmallPtrSet<GlobalVariable *, 16> CseStringGVs;
 
   std::mt19937_64 RNG;
   uint64_t        PtrEncKey = 0;
@@ -112,6 +113,8 @@ struct IndirectGlobalVariable : public FunctionPass {
                   N.starts_with("_ZTS"))
                 continue;
             }
+            if (CseStringGVs.count(GV))
+              continue; //cse owns string globals; indgv decode would split identity
             // Sensitive-globals filter: skip globals smaller than the
             // configured threshold so the page-table cost lands on the larger
             // (more interesting) globals, not low-value single-byte flags.
@@ -140,6 +143,23 @@ struct IndirectGlobalVariable : public FunctionPass {
     FunctionGVs.clear();
     GlobalVariables.clear();
     GVKeys.clear();
+    CseStringGVs.clear();
+
+    if (ArgsOptions->cseOpt()->isEnabled()) {
+      for (GlobalVariable &GV : M.globals()) {
+        if (!GV.isConstant() || !GV.hasInitializer() ||
+            GV.hasDLLExportStorageClass() || GV.isDLLImportDependent()) {
+          continue;
+        }
+        auto *CDS = dyn_cast<ConstantDataSequential>(GV.getInitializer());
+        if (!CDS || !(CDS->isCString() ||
+                      CDS->getElementType()->isIntegerTy(16))) {
+          continue;
+        }
+        CseStringGVs.insert(&GV);
+        collectConstantStringUser(&GV, CseStringGVs);
+      }
+    }
 
     NumberGlobalVariable(M);
     if (GlobalVariables.empty()) {

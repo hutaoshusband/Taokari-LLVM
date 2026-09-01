@@ -6,6 +6,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <random>
@@ -55,6 +56,8 @@ bool valueEscapes(Instruction *Inst);
 void fixStack(Function *f);
 CallBase *fixEH(CallBase *CB);
 void LowerConstantExpr(Function &F);
+void collectConstantStringUser(GlobalVariable *CString,
+                               SmallPtrSetImpl<GlobalVariable *> &Users);
 bool expandConstantExpr(Function &F);
 AllocaInst *createConstantSeedCache(Function &F, std::mt19937_64 &rng,
                                     bool volatileSeed);

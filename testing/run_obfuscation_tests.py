@@ -139,6 +139,7 @@ RELEASE_GATES = [
     ReleaseGate("cie_page_table_ref", TESTING / "scripts" / "verify_cie_page_table_ref.py"),
     ReleaseGate("indbr_fake_recovery", TESTING / "scripts" / "verify_indbr_fake_recovery.py"),
     ReleaseGate("indgv_two_share", TESTING / "scripts" / "verify_indgv_two_share.py"),
+    ReleaseGate("indgv_derived_constant", TESTING / "scripts" / "verify_indgv_derived_constant.py"),
     # Section 10/12: the new opt-in passes and their full-stack compose.
     ReleaseGate("function_outlining", TESTING / "scripts" / "verify_function_outlining.py"),
     ReleaseGate("dynamic_protection", TESTING / "scripts" / "verify_dynamic_protection.py"),
@@ -448,6 +449,7 @@ def log(tag: str, message: str, color: str = "reset") -> None:
 
 def run(command: list[str], *, cwd: Path = ROOT, use_vs_env: bool = False) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
+    env["PYTHONPATH"] = str(TESTING / "scripts") + os.pathsep + env.get("PYTHONPATH", "")
     if use_vs_env and VSDEVCMD.exists():
         with tempfile.NamedTemporaryFile("w", suffix=".cmd", delete=False, encoding="utf-8") as handle:
             batch = Path(handle.name)
@@ -808,10 +810,14 @@ def main() -> int:
                         choices=["address", "undefined", "thread", "leak"],
                         help="with --diff: link with -fsanitize=<mode>; repeatable. "
                              "applied to both baseline and obfuscated builds")
+    parser.add_argument("--gates-only", action="store_true",
+                        help="run only the release-gate suite and exit")
     args = parser.parse_args()
     if args.variants < 1 or args.runs < 1:
         print("--variants/--runs must be >= 1", file=sys.stderr)
         return 2
+    if args.gates_only:
+        return 1 if run_release_gates(keep_going=args.keep_going) else 0
 
     clang = args.clang.resolve()
     if not clang.exists():
