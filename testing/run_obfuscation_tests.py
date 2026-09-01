@@ -190,6 +190,7 @@ RELEASE_GATES = [
     ReleaseGate("perf_baseline", TESTING / "scripts" / "verify_perf_baseline.py", skippable=True),
     ReleaseGate("machine_obf_aarch64_noop", TESTING / "scripts" / "verify_machine_obf_aarch64_noop.py", skippable=True),
     ReleaseGate("mir_redzone_safety", TESTING / "scripts" / "verify_mir_redzone_safety.py", skippable=True),
+    ReleaseGate("max_no_mir", TESTING / "scripts" / "verify_max_no_mir.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
@@ -753,7 +754,10 @@ def _diff_link_only(driver: Path, case: Case, mode: str, level: int,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compile and run Taokari obfuscation tests.")
-    parser.add_argument("--clang", type=Path, default=DEFAULT_CLANG)
+    parser.add_argument("--clang", type=Path, default=DEFAULT_CLANG,
+                        help="path to a Taokari-capable clang; non-default paths are "
+                             "probed with a -mllvm -taokari-max-no-vmp compile and the "
+                             "default/o2/lto modes are re-pointed at it")
     parser.add_argument("--mode", action="append", choices=list(MODE_FLAGS),
                         help="build mode(s); repeatable. default: all")
     parser.add_argument("--case", action="append",
@@ -810,18 +814,56 @@ def main() -> int:
         return 2
 
     clang = args.clang.resolve()
-    if clang not in (DEFAULT_CLANG.resolve(), DEFAULT_CLANG_CL.resolve()):
-        print(f"refusing non-local compiler: {clang}", file=sys.stderr)
-        print(f"expected: {DEFAULT_CLANG.resolve()}", file=sys.stderr)
-        return 2
     if not clang.exists():
         print(f"missing clang: {clang}", file=sys.stderr)
         return 2
+    if clang not in (DEFAULT_CLANG.resolve(), DEFAULT_CLANG_CL.resolve()):
+        # The probe mimics a harness compile (a .c file + -std=c17 + a Taokari
+        # -mllvm flag) and demands an object file: a rejected -mllvm flag
+        # aborts at LLVM option parsing ("Unknown command line argument" on
+        # stderr), a C++-only driver rejects -std=c17 on .c inputs, and a
+        # non-compiler either errors or produces no object.
+        fd, src_name = tempfile.mkstemp(suffix=".c")
+        os.close(fd)
+        probe_src = Path(src_name)
+        probe_src.write_text("int f(int a){return a+7;}\n", encoding="utf-8")
+        probe_obj = probe_src.with_suffix(".obj")
+        ok = False
+        try:
+            probe = subprocess.run(
+                [str(clang), "-std=c17", str(probe_src), "-c", "-o",
+                 str(probe_obj), "-mllvm", "-taokari-max-no-vmp"],
+                input="", text=True, capture_output=True, cwd=ROOT, timeout=120)
+            ok = probe.returncode == 0 and probe_obj.exists() \
+                and "Unknown command line argument" not in probe.stderr
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"refusing non-Taokari compiler: {clang}", file=sys.stderr)
+            print(f"probe failed to launch: {exc}", file=sys.stderr)
+            return 2
+        finally:
+            probe_src.unlink(missing_ok=True)
+            probe_obj.unlink(missing_ok=True)
+        if not ok:
+            print(f"refusing non-Taokari compiler: {clang}", file=sys.stderr)
+            print(f"probe rc={probe.returncode}", file=sys.stderr)
+            for line in probe.stderr.splitlines()[:5]:
+                print(f"  {line}", file=sys.stderr)
+            return 2
+        MODE_DRIVER["default"] = clang
+        MODE_DRIVER["o2"] = clang
+        MODE_DRIVER["lto"] = clang
+        clangcl = clang.with_name(clang.name.replace("clang", "clang-cl", 1))
+        if clangcl.exists():
+            MODE_DRIVER["clangcl"] = clangcl
+        log("CLANG", f"custom Taokari compiler accepted: {clang}", "yellow")
 
     modes = args.mode or list(MODE_FLAGS)
     if not IS_WINDOWS and "clangcl" in modes:
         modes = [m for m in modes if m != "clangcl"]
         log("MODE", "skipping clangcl (MSVC-ABI driver, Windows-only)", "yellow")
+    if "clangcl" in modes and not MODE_DRIVER["clangcl"].exists():
+        modes = [m for m in modes if m != "clangcl"]
+        log("MODE", "skipping clangcl (no clang-cl next to --clang)", "yellow")
 
     if args.diff:
         return run_diff_matrix(
