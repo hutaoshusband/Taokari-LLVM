@@ -6,8 +6,10 @@ stdout/stderr/exit before any measurement counts. Compile-time and size use
 the median of --samples obfuscated builds (per-compile RNG jitters binary
 size ~6%); runtime is best-of --rounds. Ratios are checked against
 testing/performance/baseline.json with per-metric relative tolerances
-(defaults: compile +40%, runtime +20%, size +10%) plus an absolute runtime
-floor (+0.25) so sub-1.0 ratios stay stable.
+(Windows: compile +40%, runtime +20%, size +10% plus an absolute runtime
+floor +0.25; Linux: compile +40%, runtime +75%, size +40%, no floor —
+calibrated to measured session-to-session size-median swings of up to
++28% on /mnt/c).
 
 Exit: 0 pass | 1 regression or correctness mismatch | 2 tooling/baseline missing.
 """
@@ -33,6 +35,8 @@ ALL_CASES = ("multithreading", "tiny_aes", "atomics", "flattening_stress",
 QUICK = ("mba_basic", "hashing", "arith_logic")
 TOLERANCES = {"compile": 0.40, "runtime": 0.20, "size": 0.10}
 FLOORS = {"compile": 0.0, "runtime": 0.25, "size": 0.0}
+LINUX_TOLERANCES = {"compile": 0.40, "runtime": 0.75, "size": 0.40}
+LINUX_FLOORS = {"compile": 0.0, "runtime": 0.0, "size": 0.0}
 ADDR = re.compile(r"0x[0-9a-fA-F]{6,}")
 
 
@@ -116,6 +120,7 @@ def self_test() -> int:
     assert within(1.22, 1.00, 0.20, 0.25) and not within(1.26, 1.00, 0.20, 0.25)
     assert within(2.08, 1.97, 0.10) and not within(2.20, 1.97, 0.10)
     assert set(QUICK) <= set(ALL_CASES)
+    assert set(LINUX_TOLERANCES) == set(LINUX_FLOORS) == set(TOLERANCES)
     data = json.loads(BASELINE.read_text(encoding="utf-8"))
     assert "linux" in data and "windows" in data
     win = data["windows"]
@@ -139,9 +144,12 @@ def main() -> int:
     ap.add_argument("--rounds", type=int, default=5, help="best-of-N executions")
     ap.add_argument("--samples", type=int, default=3,
                     help="obfuscated compile samples; median compile/size")
-    ap.add_argument("--compile-tol", type=float, default=TOLERANCES["compile"])
-    ap.add_argument("--runtime-tol", type=float, default=TOLERANCES["runtime"])
-    ap.add_argument("--size-tol", type=float, default=TOLERANCES["size"])
+    ap.add_argument("--compile-tol", type=float, default=None,
+                    help="default: per-platform (windows 0.40 / linux 0.40)")
+    ap.add_argument("--runtime-tol", type=float, default=None,
+                    help="default: per-platform (windows 0.20 / linux 0.75)")
+    ap.add_argument("--size-tol", type=float, default=None,
+                    help="default: per-platform (windows 0.10 / linux 0.40)")
     args = ap.parse_args()
 
     if args.self_test:
@@ -165,6 +173,11 @@ def main() -> int:
         return 2
 
     plat = platform_of(args.platform)
+    dtol = TOLERANCES if plat == "windows" else LINUX_TOLERANCES
+    floors = FLOORS if plat == "windows" else LINUX_FLOORS
+    tol = {k: dtol[k] if v is None else v for k, v in
+           {"compile": args.compile_tol, "runtime": args.runtime_tol,
+            "size": args.size_tol}.items()}
     base = json.loads(BASELINE.read_text(encoding="utf-8")).get(plat, {})
     if not args.update_baseline and not base:
         print(f"perf-gate: skip, no {plat} baseline (run --update-baseline)",
@@ -193,14 +206,12 @@ def main() -> int:
         print(f"[BASELINE] {plat} section updated with {len(results)} cases")
         return 1 if failures else 0
 
-    tol = {"compile": args.compile_tol, "runtime": args.runtime_tol,
-           "size": args.size_tol}
     for name, m in results.items():
         b = base.get(name)
         if not b:
             continue
         for key in ("compile", "runtime", "size"):
-            if not within(m[key], b[key], tol[key], FLOORS[key]):
+            if not within(m[key], b[key], tol[key], floors[key]):
                 failures.append(f"{name} {key} {m[key]:.2f}x > baseline "
                                 f"{b[key]:.2f}x + {tol[key]:.0%}")
     for f in failures:
@@ -209,7 +220,7 @@ def main() -> int:
     print(f"perf-gate: {'FAIL' if failures else 'ok'} "
           f"({compared} cases compared, tol compile +{tol['compile']:.0%} "
           f"runtime +{tol['runtime']:.0%} size +{tol['size']:.0%}, "
-          f"runtime floor +{FLOORS['runtime']:.0%}, {args.samples} samples)")
+          f"runtime floor +{floors['runtime']:.0%}, {args.samples} samples)")
     return 1 if failures else 0
 
 
