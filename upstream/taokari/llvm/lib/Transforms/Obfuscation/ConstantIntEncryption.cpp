@@ -194,11 +194,10 @@ struct ConstantIntEncryption : public FunctionPass {
         E.Offset = Offset;
         unsigned ByteCount = E.BitWidth / 8;
         auto *ByteTy = Type::getInt8Ty(F.getContext());
-        uint64_t Raw = cast<ConstantInt>(E.Enc)->getValue().getZExtValue();
-        for (unsigned B = 0; B < ByteCount; ++B) {
-          uint8_t Byte = static_cast<uint8_t>((Raw >> (8 * B)) & 0xFF);
-          PoolBytes.push_back(ConstantInt::get(ByteTy, Byte));
-        }
+        const APInt &V = cast<ConstantInt>(E.Enc)->getValue();
+        for (unsigned B = 0; B < ByteCount; ++B)
+          PoolBytes.push_back(ConstantInt::get(
+              ByteTy, (uint8_t)V.extractBitsAsZExtValue(8, 8 * B)));
         Offset += ByteCount;
       }
       if (!PoolBytes.empty()) {
