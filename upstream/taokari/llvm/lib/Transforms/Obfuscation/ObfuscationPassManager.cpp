@@ -605,6 +605,14 @@ struct ObfuscationPassManager : public ModulePass {
     add(llvm::createDynamicProtectionPass(Options.get()));
     bool Changed = run(M);
 
+    // Helpers can receive MIR stack-pushing guards; a real frame keeps their
+    // spills out of the SysV red zone the guards push over. COFF (Win64) has
+    // no red zone, so Windows codegen is untouched.
+    if (!Triple(M.getTargetTriple()).isOSBinFormatCOFF())
+      for (Function &F : M)
+        if (!F.isDeclaration() && isTaokariGeneratedHelper(F, true))
+          F.addFnAttr(Attribute::NoRedZone);
+
     return Changed;
   }
 };

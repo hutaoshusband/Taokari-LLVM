@@ -31,11 +31,13 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachinePassManager.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -173,6 +175,10 @@ struct MirSubpasses {
   bool any() const {
     return Marker || DirtyBytes || Junk || Substitution || Unmodelled ||
            FakeBounds || FunctionSplit || Sse;
+  }
+  bool pushesStack() const {
+    return DirtyBytes || Junk || Substitution || Unmodelled || FakeBounds ||
+           FunctionSplit || Sse;
   }
   void enableAll() {
     Marker = true;
@@ -475,10 +481,31 @@ static bool functionHasEhShape(const MachineFunction &MF) {
   return false;
 }
 
+// Post-PEI, non-fixed frame objects at negative offsets (and RSP-based memory
+// refs with negative displacement) only exist when the ABI red zone holds
+// live data below RSP; stack-pushing inline-asm guards clobber exactly that
+// area (getStackSize() is unsound: CSR pushes alone make it nonzero).
+static bool keepsLiveBelowRsp(const MachineFunction &MF) {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  for (int i = 0, e = MFI.getObjectIndexEnd(); i != e; ++i)
+    if (!MFI.isFixedObjectIndex(i) && MFI.getObjectOffset(i) < 0)
+      return true;
+  Register SP = MF.getSubtarget().getTargetLowering()
+                    ->getStackPointerRegisterToSaveRestore();
+  for (const MachineBasicBlock &MBB : MF)
+    for (const MachineInstr &MI : MBB)
+      for (unsigned i = 0; i + 3 < MI.getNumOperands(); ++i)
+        if (MI.getOperand(i).isReg() && MI.getOperand(i).getReg() == SP &&
+            MI.getOperand(i + 3).isImm() && MI.getOperand(i + 3).getImm() < 0)
+          return true;
+  return false;
+}
+
 static MirSafetyReport assessMirSafety(const MachineFunction &MF,
                                        const MirSubpasses &P) {
   MirSafetyReport Report;
-  if (!MF.getTarget().getTargetTriple().isX86_64())
+  const Triple &TT = MF.getTarget().getTargetTriple();
+  if (!TT.isX86_64())
     return {"unsupported target", "all", true};
   const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
   if (!TII)
@@ -491,6 +518,9 @@ static MirSafetyReport assessMirSafety(const MachineFunction &MF,
 
   if (P.FunctionSplit && MF.front().isEHPad())
     return {"entry is an EH pad", "split", true};
+
+  if (P.pushesStack() && !TT.isOSBinFormatCOFF() && keepsLiveBelowRsp(MF))
+    return {"live values below RSP (red zone)", "stack-push guards", true};
 
   return Report;
 }

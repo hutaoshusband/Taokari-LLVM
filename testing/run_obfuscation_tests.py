@@ -189,6 +189,7 @@ RELEASE_GATES = [
     ReleaseGate("max_preset_semantics", TESTING / "scripts" / "verify_max_preset_semantics.py"),
     ReleaseGate("perf_baseline", TESTING / "scripts" / "verify_perf_baseline.py", skippable=True),
     ReleaseGate("machine_obf_aarch64_noop", TESTING / "scripts" / "verify_machine_obf_aarch64_noop.py", skippable=True),
+    ReleaseGate("mir_redzone_safety", TESTING / "scripts" / "verify_mir_redzone_safety.py", skippable=True),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
