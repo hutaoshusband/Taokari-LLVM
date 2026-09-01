@@ -74,6 +74,10 @@ build\taokari-local\bin\opt.exe
 build\taokari-local\bin\llvm-config.exe
 ```
 
+Dev builds used for gate verification should also build the LLVM bin
+tools the release gates invoke: `ninja llvm-nm llvm-objdump
+llvm-readobj` (they land in the same `bin\`).
+
 ## Verifying the build
 
 Run the obfuscation test harness:
