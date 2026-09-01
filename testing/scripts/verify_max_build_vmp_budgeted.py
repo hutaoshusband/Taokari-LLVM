@@ -30,11 +30,14 @@ from verify_vmp_coverage import CLANG, run
 # The 20-function source + hot_loop_beast (>64 back edges) is heavier than
 # the plan's 120s "real product target" ceiling assumed; under bare
 # -taokari-max -taokari-vmp every function is a candidate, so the per-
-# function interpreter-clone + encryption work adds up. 150s absorbs the
-# observed machine variance while still catching a real regression (a
-# pre-Section-22 build of this source hung forever; 150s proves the caps
-# bound it).
+# function interpreter-clone + encryption work adds up. This is the FLOOR
+# of a machine-scaled budget: the real budget is max(this, VMP_SCALE *
+# ref), where ref is the wall time of the same source built with
+# -taokari-max -taokari-max-no-vmp. A pre-Section-22 build of this source
+# hung forever; a hang or a build well above the measured no-vmp
+# reference still fails.
 COMPILE_BUDGET_SECONDS = 150
+VMP_SCALE = 4.0
 
 # Same 20-function source as verify_max_build_no_vmp_hang.py: every
 # function is non-trivial so under bare -taokari-max -taokari-vmp every
@@ -110,6 +113,28 @@ def main() -> int:
         report = tmpdir / "report.txt"
         src.write_text(SOURCE, encoding="utf-8")
 
+        # Machine-scaled reference: the same source under -taokari-max
+        # -taokari-max-no-vmp (identical IR workload, no VMP layer). The
+        # absolute floor stays COMPILE_BUDGET_SECONDS; on slower machines
+        # the budget grows with the measured reference instead of
+        # flaking, while a hang or a regression beyond VMP_SCALE * ref
+        # still fails.
+        ref_exe = tmpdir / "ref.exe"
+        ref_flags = [
+            str(CLANG), "-O2", str(src), "-o", str(ref_exe),
+            "-mllvm", "-taokari-max",
+            "-mllvm", "-taokari-max-no-vmp",
+        ]
+        ref_start = time.monotonic()
+        ref_build = run(ref_flags, use_vs_env=True)
+        ref = time.monotonic() - ref_start
+        if ref_build.returncode:
+            sys.stderr.write(ref_build.stdout + ref_build.stderr)
+            print("max build vmp budgeted: FAIL (no-vmp reference build "
+                  "failed)", file=sys.stderr)
+            return 1
+        budget = max(COMPILE_BUDGET_SECONDS, VMP_SCALE * ref)
+
         # Bare -taokari-max -taokari-vmp: no escape hatch. The three
         # Phase 1 caps (back edges=64, expansion=32, words=2048) must
         # refuse the functions that would hang the build and let it
@@ -130,10 +155,11 @@ def main() -> int:
                   file=sys.stderr)
             return 1
 
-        if elapsed > COMPILE_BUDGET_SECONDS:
+        if elapsed > budget:
             print(
                 f"max build vmp budgeted: FAIL "
-                f"(compile {elapsed:.1f}s > {COMPILE_BUDGET_SECONDS}s budget)",
+                f"(compile {elapsed:.1f}s > {budget:.1f}s budget, "
+                f"no-vmp reference {ref:.1f}s)",
                 file=sys.stderr,
             )
             return 1
@@ -189,8 +215,10 @@ def main() -> int:
                   file=sys.stderr)
             return 1
 
-    print(f"max build vmp budgeted: ok (compile {elapsed:.1f}s, "
-          f"{virtualized} functions virtualized, hot_loop_beast refused)")
+    print(f"max build vmp budgeted: ok (compile {elapsed:.1f}s, budget "
+          f"{budget:.1f}s = max({COMPILE_BUDGET_SECONDS}, {VMP_SCALE} x "
+          f"ref {ref:.1f}s), {virtualized} functions virtualized, "
+          f"hot_loop_beast refused)")
     return 0
 
 

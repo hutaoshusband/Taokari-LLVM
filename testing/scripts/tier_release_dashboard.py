@@ -29,6 +29,7 @@ import tempfile
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from verify_vmp_coverage import CLANG, run, ROOT, VSDEVCMD
 from measure_ida_cfg_complexity import TIER_BARS, emit_ir, parse_functions
 from verify_tier_recipe import (

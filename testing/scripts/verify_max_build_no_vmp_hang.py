@@ -28,9 +28,15 @@ import _taokari_portable as tp
 
 from verify_vmp_coverage import CLANG, run, VSDEVCMD, ROOT
 
-# Budget from Section 22 Phase 4 (demo target ceiling). The 20-function
-# source below is the non-trivial source the plan calls for.
+# Budget from Section 22 Phase 4 (demo target ceiling). This is the FLOOR
+# of a machine-scaled budget: the real budget is max(this, NOVMP_SCALE *
+# ref), where ref is the wall time of the same source built with
+# -taokari-max -taokari-max-no-vmp -taokari-max-no-mir (same IR workload,
+# no machine-guard layer). Calibration: ref ~42s, full build ~52s, so
+# 1.5 x ref leaves ~20% headroom for per-compile RNG jitter while a
+# +30% regression or a hang still fails.
 COMPILE_BUDGET_SECONDS = 60
+NOVMP_SCALE = 1.5
 
 # 20 non-trivial functions: every one would become a VMP candidate under
 # bare -taokari-max (no +vmp/-vmp annotation, so toObfuscate falls through
@@ -84,6 +90,23 @@ def main() -> int:
         report = tmpdir / "report.txt"
         src.write_text(SOURCE, encoding="utf-8")
 
+        ref_exe = tmpdir / "ref.exe"
+        ref_flags = [
+            str(CLANG), "-O2", str(src), "-o", str(ref_exe),
+            "-mllvm", "-taokari-max",
+            "-mllvm", "-taokari-max-no-vmp",
+            "-mllvm", "-taokari-max-no-mir",
+        ]
+        ref_start = time.monotonic()
+        ref_build = run(ref_flags, use_vs_env=True)
+        ref = time.monotonic() - ref_start
+        if ref_build.returncode:
+            sys.stderr.write(ref_build.stdout + ref_build.stderr)
+            print("max build no-vmp hang: FAIL (no-mir reference build "
+                  "failed)", file=sys.stderr)
+            return 1
+        budget = max(COMPILE_BUDGET_SECONDS, NOVMP_SCALE * ref)
+
         flags = [
             str(CLANG), "-O2", str(src), "-o", str(exe),
             "-mllvm", "-taokari-max",
@@ -100,10 +123,11 @@ def main() -> int:
                   file=sys.stderr)
             return 1
 
-        if elapsed > COMPILE_BUDGET_SECONDS:
+        if elapsed > budget:
             print(
                 f"max build no-vmp hang: FAIL "
-                f"(compile {elapsed:.1f}s > {COMPILE_BUDGET_SECONDS}s budget)",
+                f"(compile {elapsed:.1f}s > {budget:.1f}s budget, "
+                f"no-mir reference {ref:.1f}s)",
                 file=sys.stderr,
             )
             return 1
@@ -137,8 +161,9 @@ def main() -> int:
             return 1
 
     print(
-        f"max build no-vmp hang: ok (compile {elapsed:.1f}s, "
-        f"0 virtualized rows)"
+        f"max build no-vmp hang: ok (compile {elapsed:.1f}s, budget "
+        f"{budget:.1f}s = max({COMPILE_BUDGET_SECONDS}, {NOVMP_SCALE} x "
+        f"ref {ref:.1f}s), 0 virtualized rows)"
     )
     return 0
 
