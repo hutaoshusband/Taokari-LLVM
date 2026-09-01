@@ -67,3 +67,14 @@ Required before checking off AArch64 implementation:
 - Do not port `split` in the first AArch64 step.
 - Do not use AArch64-only features for x86 parity.
 - Do not claim IDA/D810 parity until an AArch64 IDA snapshot exists.
+
+## Status (2026-08-31)
+
+- Step 3 (AArch64 `addPreEmitPass()` hook registration) is done
+  (commit `6fbf7db9c`): the pass is scheduled on AArch64 and the
+  pre-emission safety gate rejects every sub-pass on non-x86-64
+  targets, so the hook is a verified no-op there.
+- Steps 1-2 (target-neutral snippet split + AArch64 emission backend)
+  are open; no AArch64 byte emission exists.
+- Step 6 (execution test) is blocked: this environment has no AArch64
+  runtime or qemu user emulation.
