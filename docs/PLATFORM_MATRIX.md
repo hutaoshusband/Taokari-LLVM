@@ -40,7 +40,7 @@ target once the obfuscator is built for it.
 
 | Pass | Flag | Windows x64 | Linux x64 | AArch64 |
 | --- | --- | :---: | :---: | :---: |
-| MIR fortress (`dirtybytes`,`junk`,`sub`,`split`,`fakeprologue`) | `-taokari-mir=...` | ✅ | ⚠️ (best-effort; red-zone-gated) | ❌ (hook registered, emission x86-only; parity planned, see `MACHINE_IR_AARCH64_PARITY.md`) |
+| MIR fortress (`dirtybytes`,`junk`,`sub`,`split`,`fakeprologue`,`sse`,`unmodelled`) | `-taokari-mir=...` | ✅ | ⚠️ (best-effort; red-zone-gated) | ❌ (hook registered, emission x86-only; parity planned, see `MACHINE_IR_AARCH64_PARITY.md`) |
 | Native integrity (per-function hash, post-link `.text` patch) | (internal/`-taokari-max`) | ✅ | ⚠️ (ELF `.text` patch via `taokari_postlink_hash.py`) | ❌ |
 | Microsoft RTTI eraser | `-taokari-rtti` | ✅ (MSVC ABI) | ❌ (Itanium ABI; no MS RTTI) | ⚠️ (Windows-on-ARM MSVC only) |
 | Itanium RTTI eraser | `-taokari-rtti` | ❌ (no Itanium RTTI) | ✅ (rewrites `_ZTS` type-name strings) | ⚠️ (ELF on AArch64) |

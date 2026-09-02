@@ -11,7 +11,7 @@ floor +0.25; Linux: compile +40%, runtime +75%, size +40%, no floor —
 calibrated to measured session-to-session size-median swings of up to
 +28% on /mnt/c).
 
-Exit: 0 pass | 1 regression or correctness mismatch | 2 tooling/baseline missing.
+Exit: 0 pass | 1 regression, mismatch, or usage error | 2 tooling/baseline missing.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ import importlib.util
 import json
 import re
 import statistics
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -153,10 +154,14 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.self_test:
+        for flag in ("--rounds", "--samples"):
+            r = subprocess.run([sys.executable, __file__, flag, "0"],
+                               capture_output=True, text=True)
+            assert r.returncode == 1 and "must be >= 1" in r.stderr, (flag, r.returncode)
         return self_test()
     if args.rounds < 1 or args.samples < 1:
         print("--rounds/--samples must be >= 1", file=sys.stderr)
-        return 2
+        return 1
     clang = tp.CLANG
     if not clang.exists():
         print(f"perf-gate: skip, missing clang {clang}", file=sys.stderr)

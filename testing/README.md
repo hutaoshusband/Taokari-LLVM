@@ -57,10 +57,12 @@ python testing\run_obfuscation_tests.py --diff --variants 2 --runs 2 --case exce
 plain vs obfuscated (default stack, level 4; median of 3 obfuscated builds for
 compile/size), correctness-gates every obfuscated run against the plain output,
 then checks compile/runtime/size ratios against
-`testing/performance/baseline.json` (tolerances: compile +40%, runtime +20%
-with a +0.25 absolute floor, size +10% — fitted to measured per-compile RNG and
-desktop-load jitter). Exit 0 pass / 1 regression / 2 skip. `--update-baseline`
-re-seeds the current platform's section; `--quick` runs a 3-case subset.
+`testing/performance/baseline.json`. Windows tolerances: compile +40%, runtime
++20% with a +0.25 absolute floor, size +10%. Linux: compile +40%, runtime
++75%, size +40%, no floor (calibrated to measured per-compile RNG size swings
+and small-fixture runtime jitter). Exit 0 pass / 1 regression or usage error /
+2 skip. `--update-baseline` re-seeds the current platform's section; `--quick`
+runs a 3-case subset.
 Wrapped as the skippable `perf_baseline` release gate via
 `testing/scripts/verify_perf_baseline.py`.
 
@@ -82,8 +84,9 @@ hardening properties end-to-end. Each runs the locally built clang and exits
   `-taokari-max` builds do not hang (VMP budget caps).
 - `verify_vmp_full_virtualization.py` / `verify_vmp_dll_load.py` — VMP coverage.
 
-All gate scripts skip cleanly (exit 0) when their precondition is absent, so
-they sit harmlessly in CI until the toolchain is ready.
+Skippable gate scripts exit 2 when their precondition is absent, so they sit
+harmlessly in CI until the toolchain is ready; the runner treats that as a
+skip. `--gates-only` runs the gate suite without the case-matrix pass.
 
 ## MIR Budget
 

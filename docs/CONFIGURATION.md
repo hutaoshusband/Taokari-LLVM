@@ -25,7 +25,7 @@ or by `noobf`.
 | `-mllvm -taokari-cfg=<path>`      | Load JSON config from `<path>`.                          |
 | `-mllvm -taokari-vmp`             | Enable code virtualisation (off by default).             |
 | `-mllvm -taokari-vmp-padding=N`   | Probability (0..100) of inserting pad opcodes in VM bytecode. |
-| `-mllvm -taokari-mir=<passes>`    | Comma-list of MIR passes (`dirtybytes,junk,sub,...`).    |
+| `-mllvm -taokari-mir=<passes>`    | Comma-list of MIR passes (`dirtybytes,junk,sub,...`). Only consulted without `-taokari-max`; under `-taokari-max` the MIR layer is all-on (opt out entirely with `-taokari-max-no-mir`, or per sub-pass with `-taokari-mir-<p>-prob=0`). |
 | `-mllvm -taokari-mir-<p>-prob=N`  | Per-MIR-sub-pass probability (0..100). `<p>` is `dirtybytes`, `junk`, `sub`, `sse`, `split`, `fakeprologue`. |
 | `-mllvm -taokari-mir-verbose`     | Emit skip/fallback diagnostics (default off).            |
 | `-mllvm -taokari-mir-release-verify` | Run the MachineVerifier after MIR transform (default on). |
