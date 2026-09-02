@@ -187,14 +187,15 @@ public:
   bool randomizeSections(Module &M) {
     bool Changed = false;
     for (Function &F : M) {
-      if (!F.hasLocalLinkage() || F.isDeclaration() || F.hasComdat())
+      if (!F.hasLocalLinkage() || F.isDeclaration() || F.hasComdat() ||
+          F.hasSection())
         continue;
       F.setSection(sectionFor(M, F));
       Changed = true;
     }
     for (GlobalVariable &GV : M.globals()) {
       if (!GV.hasLocalLinkage() || GV.isDeclaration() || GV.hasComdat() ||
-          GV.isThreadLocal())
+          GV.isThreadLocal() || GV.hasSection())
         continue;
       GV.setSection(sectionFor(M, GV));
       Changed = true;
