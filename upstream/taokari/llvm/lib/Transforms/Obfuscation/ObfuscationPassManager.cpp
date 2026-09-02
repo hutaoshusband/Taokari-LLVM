@@ -593,16 +593,14 @@ struct ObfuscationPassManager : public ModulePass {
       else
         add(llvm::createItaniumRttiEraserPass(Options.get()));
     }
+    // NativeIntegrity and DynamicProtection read per-function annotations,
+    // so they must run before MetadataHygiene erases them. Their helpers are
+    // still created before hygiene, keeping rename/randomize coverage.
+    add(llvm::createNativeIntegrityPass(Options.get()));
+    add(llvm::createDynamicProtectionPass(Options.get()));
     if (EnableMetadataHygiene || Options->metaOpt()->isEnabled()) {
       add(llvm::createMetadataHygienePass(Options.get()));
     }
-    // Native per-function integrity prototype. Opt-in via the
-    // `+nativeint` annotation; the pass is cheap on non-annotated
-    // functions (one annotation lookup and return).
-    add(llvm::createNativeIntegrityPass(Options.get()));
-    // Dynamic anti-reversing checks (debugger / timing / PEB). Off by default;
-    // opt-in per function via the `dyn` annotation or -taokari-dyn.
-    add(llvm::createDynamicProtectionPass(Options.get()));
     bool Changed = run(M);
 
     // Helpers can receive MIR stack-pushing guards; a real frame keeps their

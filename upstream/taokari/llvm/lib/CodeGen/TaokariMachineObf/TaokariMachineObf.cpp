@@ -428,7 +428,18 @@ static MirSubpasses resolveSubpasses(const Function &F) {
 
   bool EnableAll = false;
   bool DisableAll = false;
-  for (const std::string &Raw : readMirAnnotations(&F)) {
+  // MetadataHygiene snapshots the mir tokens into this attribute before
+  // stripping llvm.global.annotations (max / releaseStrip builds); the raw
+  // annotations are only present when nothing stripped them.
+  SmallVector<std::string, 1> Annos;
+  if (F.hasFnAttribute("taokari-mir")) {
+    Attribute MirAttr = F.getFnAttribute("taokari-mir");
+    if (MirAttr.isStringAttribute())
+      Annos.emplace_back(MirAttr.getValueAsString());
+  } else {
+    Annos = readMirAnnotations(&F);
+  }
+  for (const std::string &Raw : Annos) {
     StringRef A(Raw);
     if (annotationHas(A, "+mir") && !annotationHas(A, "+mir:"))
       EnableAll = true;

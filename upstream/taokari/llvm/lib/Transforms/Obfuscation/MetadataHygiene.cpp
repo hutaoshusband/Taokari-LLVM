@@ -1,7 +1,9 @@
 #include "llvm/Transforms/Obfuscation/MetadataHygiene.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationPassManager.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/GlobalObject.h"
 #include "llvm/IR/IRBuilder.h"
@@ -56,6 +58,46 @@ public:
     return Changed;
   }
 
+  // MIR sub-pass tokens ride on a function attribute so -taokari-mir keeps
+  // working after the annotations are stripped; the pre-emit pass reads the
+  // attribute. Function attributes are core IR and never reach the object.
+  static void preserveMirAnnotations(GlobalVariable *Annotations) {
+    const Constant *C = dyn_cast<Constant>(Annotations);
+    if (!C || C->getNumOperands() != 1)
+      return;
+    C = dyn_cast<Constant>(C->getOperand(0));
+    if (!C)
+      return;
+    DenseMap<Function *, SmallVector<StringRef, 4>> Tokens;
+    for (unsigned I = 0, E = C->getNumOperands(); I != E; ++I) {
+      const ConstantStruct *CS = dyn_cast<ConstantStruct>(C->getOperand(I));
+      if (!CS || CS->getNumOperands() < 2)
+        continue;
+      auto *F = dyn_cast<Function>(CS->getOperand(0)->stripPointerCasts());
+      const auto *StrGV = dyn_cast<GlobalValue>(CS->getOperand(1)->stripPointerCasts());
+      if (!F || !StrGV)
+        continue;
+      const auto *StrData = dyn_cast<ConstantDataSequential>(StrGV->getOperand(0));
+      if (!StrData)
+        continue;
+      SmallVector<StringRef, 8> Words;
+      llvm::SplitString(StrData->getAsString(), Words, " ,\"\t");
+      for (StringRef W : Words)
+        if ((W.front() == '+' || W.front() == '-') &&
+            W.substr(1).starts_with("mir"))
+          Tokens[F].push_back(W);
+    }
+    for (auto &KV : Tokens) {
+      SmallVector<char, 32> Joined;
+      for (StringRef T : KV.second) {
+        if (!Joined.empty())
+          Joined.push_back(' ');
+        Joined.append(T.begin(), T.end());
+      }
+      KV.first->addFnAttr("taokari-mir", std::string(Joined.begin(), Joined.end()));
+    }
+  }
+
   bool stripMetadata(Module &M, const ObfOpt &Opt) {
     bool Changed = StripDebugInfo(M);
     for (StringRef Name : {"llvm.ident", "llvm.commandline"}) {
@@ -66,6 +108,7 @@ public:
     }
     if (TaokariMaxProtection || Opt.releaseStrip()) {
       if (auto *Annotations = M.getGlobalVariable("llvm.global.annotations")) {
+        preserveMirAnnotations(Annotations);
         Annotations->eraseFromParent();
         Changed = true;
       }

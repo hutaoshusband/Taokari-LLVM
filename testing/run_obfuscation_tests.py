@@ -140,6 +140,7 @@ RELEASE_GATES = [
     ReleaseGate("indbr_fake_recovery", TESTING / "scripts" / "verify_indbr_fake_recovery.py"),
     ReleaseGate("indgv_two_share", TESTING / "scripts" / "verify_indgv_two_share.py"),
     ReleaseGate("indgv_derived_constant", TESTING / "scripts" / "verify_indgv_derived_constant.py"),
+    ReleaseGate("nativeint_annotation_order", TESTING / "scripts" / "verify_nativeint_annotation_order.py"),
     # Section 10/12: the new opt-in passes and their full-stack compose.
     ReleaseGate("function_outlining", TESTING / "scripts" / "verify_function_outlining.py"),
     ReleaseGate("dynamic_protection", TESTING / "scripts" / "verify_dynamic_protection.py"),
