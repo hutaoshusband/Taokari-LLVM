@@ -193,7 +193,8 @@ public:
       Changed = true;
     }
     for (GlobalVariable &GV : M.globals()) {
-      if (!GV.hasLocalLinkage() || GV.isDeclaration() || GV.hasComdat())
+      if (!GV.hasLocalLinkage() || GV.isDeclaration() || GV.hasComdat() ||
+          GV.isThreadLocal())
         continue;
       GV.setSection(sectionFor(M, GV));
       Changed = true;
