@@ -192,12 +192,13 @@ struct ConstantIntEncryption : public FunctionPass {
       for (auto &KV : Pool) {
         PoolEntry &E = KV.second;
         E.Offset = Offset;
-        unsigned ByteCount = E.BitWidth / 8;
+        unsigned ByteCount = (E.BitWidth + 7) / 8;
         auto *ByteTy = Type::getInt8Ty(F.getContext());
         const APInt &V = cast<ConstantInt>(E.Enc)->getValue();
+        APInt VBytes = V.zext(ByteCount * 8);
         for (unsigned B = 0; B < ByteCount; ++B)
           PoolBytes.push_back(ConstantInt::get(
-              ByteTy, (uint8_t)V.extractBitsAsZExtValue(8, 8 * B)));
+              ByteTy, (uint8_t)VBytes.extractBitsAsZExtValue(8, 8 * B)));
         Offset += ByteCount;
       }
       if (!PoolBytes.empty()) {

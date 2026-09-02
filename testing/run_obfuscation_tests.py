@@ -196,6 +196,7 @@ RELEASE_GATES = [
     ReleaseGate("fla_limit_pin_determinism", TESTING / "scripts" / "verify_fla_limit_pin_determinism.py"),
     ReleaseGate("tls_section_randomization", TESTING / "scripts" / "verify_tls_section_randomization.py"),
     ReleaseGate("meta_section_preservation", TESTING / "scripts" / "verify_meta_section_preservation.py"),
+    ReleaseGate("cie_bitint_odd_width", TESTING / "scripts" / "verify_cie_bitint_odd_width.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
