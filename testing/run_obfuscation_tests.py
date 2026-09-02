@@ -192,6 +192,9 @@ RELEASE_GATES = [
     ReleaseGate("machine_obf_aarch64_noop", TESTING / "scripts" / "verify_machine_obf_aarch64_noop.py", skippable=True),
     ReleaseGate("mir_redzone_safety", TESTING / "scripts" / "verify_mir_redzone_safety.py", skippable=True),
     ReleaseGate("max_no_mir", TESTING / "scripts" / "verify_max_no_mir.py"),
+    ReleaseGate("ocnst_wide_constant", TESTING / "scripts" / "verify_ocnst_wide_constant.py"),
+    ReleaseGate("fla_limit_pin_determinism", TESTING / "scripts" / "verify_fla_limit_pin_determinism.py"),
+    ReleaseGate("tls_section_randomization", TESTING / "scripts" / "verify_tls_section_randomization.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
@@ -614,6 +617,12 @@ def normalize_output(text: str) -> str:
     # Addresses/pointers printed by a test are not part of its contract.
     import re
     text = re.sub(r"0x[0-9a-fA-F]{6,}", "0xADDR", text)
+    if "ERROR: LeakSanitizer" in text:
+        # Leak reports embed frame lists that legitimately differ between
+        # differently-outlined binaries; the counts are the contract.
+        text = re.sub(r"(?s)(Direct leak[^\n]*\n)((?:    #[^\n]*\n?)+)", r"\1    #[frames]\n", text)
+        text = re.sub(r"==\d+==", "==PID==", text)
+        text = re.sub(r"\(BuildId: [0-9a-fA-F]+\)", "(BuildId)", text)
     return text
 
 
