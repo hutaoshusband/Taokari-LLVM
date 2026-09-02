@@ -97,9 +97,16 @@ struct Flattening : public FunctionPass {
     }
 
     RNG = std::mt19937_64(seed);
-    BuildMaxInsts = varyDefaultLimit(RNG, DefaultMaxInsts);
-    BuildMaxBlocks = varyDefaultLimit(RNG, DefaultMaxBlocks);
-    BuildMaxAllocas = varyDefaultLimit(RNG, DefaultMaxAllocas);
+    const uint32_t MI = varyDefaultLimit(RNG, DefaultMaxInsts);
+    const uint32_t MB = varyDefaultLimit(RNG, DefaultMaxBlocks);
+    const uint32_t MA = varyDefaultLimit(RNG, DefaultMaxAllocas);
+    if (!ArgsOptions->flaOpt()->maxInsts() &&
+        !ArgsOptions->flaOpt()->maxBlocks() &&
+        !ArgsOptions->flaOpt()->maxAllocas()) {
+      BuildMaxInsts = MI;
+      BuildMaxBlocks = MB;
+      BuildMaxAllocas = MA;
+    }
   }
 
   bool runOnFunction(Function &F) override;
