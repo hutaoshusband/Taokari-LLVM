@@ -115,6 +115,8 @@ struct OpaqueConstant : public FunctionPass {
             continue;
           if (CI->getBitWidth() < MinBits)
             continue;
+          if (CI->getBitWidth() > 64)
+            continue;
           if ((FuncRNG() % 100) >= Probability)
             continue;
           Sites.emplace_back(&I, Op);
