@@ -37,7 +37,10 @@ from verify_vmp_coverage import CLANG, run
 # hung forever; a hang or a build well above the measured no-vmp
 # reference still fails.
 COMPILE_BUDGET_SECONDS = 150
-VMP_SCALE = 4.0
+# 5.0: measured vmp/no-vmp compile ratio spans 3.4x-4.45x across
+# machine-load states on the reference host; 5x absorbs that while a
+# hang or a further ~15% ratio regression still fails.
+VMP_SCALE = 5.0
 
 # Same 20-function source as verify_max_build_no_vmp_hang.py: every
 # function is non-trivial so under bare -taokari-max -taokari-vmp every

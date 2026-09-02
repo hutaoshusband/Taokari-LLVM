@@ -155,10 +155,10 @@ def main() -> int:
         return 2
     if args.rounds < 1:
         print("--rounds must be >= 1", file=sys.stderr)
-        return 2
+        return 1
     if args.iters < 1:
         print("--iters must be >= 1", file=sys.stderr)
-        return 2
+        return 1
 
     requested = set(args.preset or ())
     if requested and "native" not in requested:

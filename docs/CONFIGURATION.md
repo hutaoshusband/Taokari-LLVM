@@ -54,16 +54,16 @@ single string.
 | `+icall`       | Force-enable indirect-call page-table indirection.                 |
 | `+indbr`       | Force-enable indirect-branch page-table indirection.               |
 | `+indgv`       | Force-enable indirect-global-variable page-table indirection.     |
-| `+strenc` / `+cse` | Force-enable string encryption.                                |
-| `+constenc` / `+cie` | Force-enable integer-constant encryption.                    |
+| `+cse`         | Force-enable string encryption.                                    |
+| `+cie`         | Force-enable integer-constant encryption (`+constenc` is not a recognized token). |
 | `+vmp`         | Force-enable code virtualisation.                                  |
 | `vmp-budget=N` | Per-function VMP bytecode-words ceiling. Overrides the global `-taokari-vmp-max-bytecode-words` cap for this one function. Use on an explicitly tuned `+vmp` function only. |
 | `+outline`     | Force-enable function outlining (callout obfuscation).             |
 | `+dyn`         | Force-enable dynamic anti-reversing checks.                        |
 | `+nativeint`   | Force-enable the per-function native integrity prototype.         |
 | `-nativeint`   | Force-disable the native integrity prototype (overrides Max mode).|
-| `+mir` / `+mir:dirtybytes` | Opt into specific MIR sub-passes.                       |
-| `noobf`        | Skip ALL IR obfuscation passes on this function.                   |
+| `+mir` / `+mir:dirtybytes` | Opt into specific MIR sub-passes. Works under `-taokari-max` (tokens are snapshotted onto the function before annotation stripping). |
+| `-mir` / `-mir:dirtybytes` | Opt a function out of the MIR layer / one sub-pass.                |
 
 Every pass accepts the matching `+`/`-`/`^=N` forms.
 

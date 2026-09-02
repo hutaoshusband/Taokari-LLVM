@@ -175,7 +175,7 @@ def main() -> int:
     unknown = [n for n in names if n not in cases]
     if unknown:
         print(f"perf-gate: unknown cases {unknown}", file=sys.stderr)
-        return 2
+        return 1
 
     plat = platform_of(args.platform)
     dtol = TOLERANCES if plat == "windows" else LINUX_TOLERANCES
