@@ -37,6 +37,7 @@ or by `noobf`.
 | `-mllvm -taokari-outline`         | Enable function outlining (callout obfuscation).         |
 | `-mllvm -taokari-ocnst`           | Enable opaque-constant substitution. Rewrites plain integer constants as opaque XOR-of-runtime-values expressions (distinct from `-taokari-cie`, which encrypts via a global pool). The XOR nonce is derived per function from the function identity mixed with a per-build seed, so an identical constant encrypts differently across functions. |
 | `-mllvm -taokari-dyn`             | Enable dynamic anti-reversing checks (off by default; NOT part of `-taokari-max`). |
+| `-mllvm -taokari-ra-basic`        | Swap the optimized-codegen register allocator from greedy to basic (priority-based). Big compile-time win on protection-heavy builds (mba_basic 67s→25s, arith_logic DNF→84s), outputs unchanged, +3..18% binary size, no runtime regression observed (single-run samples, worst +4ms). An explicit `-regalloc=<ra>` override still takes precedence over this flag. |
 
 ## Per-function annotations
 

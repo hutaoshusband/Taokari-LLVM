@@ -63,6 +63,11 @@ static cl::opt<bool>
                      cl::desc("Enable the tile register allocation pass"),
                      cl::init(true), cl::Hidden);
 
+static cl::opt<bool> TaokariRABasic(
+    "taokari-ra-basic",
+    cl::desc("Use the basic register allocator for optimized codegen"),
+    cl::init(false), cl::Hidden);
+
 extern "C" LLVM_C_ABI void LLVMInitializeX86Target() {
   // Register the target.
   RegisterTargetMachine<X86TargetMachine> X(getTheX86_32Target());
@@ -386,6 +391,7 @@ public:
   void addPreEmitPass2() override;
   void addPreSched2() override;
   bool addRegAssignAndRewriteOptimized() override;
+  FunctionPass *createTargetRegisterAllocator(bool Optimized) override;
 
   std::unique_ptr<CSEConfigBase> getCSEConfig() const override;
 };
@@ -666,4 +672,10 @@ bool X86PassConfig::addRegAssignAndRewriteOptimized() {
     addPass(createX86TileConfigLegacyPass());
   }
   return TargetPassConfig::addRegAssignAndRewriteOptimized();
+}
+
+FunctionPass *X86PassConfig::createTargetRegisterAllocator(bool Optimized) {
+  if (Optimized && TaokariRABasic)
+    return createBasicRegisterAllocator();
+  return TargetPassConfig::createTargetRegisterAllocator(Optimized);
 }
