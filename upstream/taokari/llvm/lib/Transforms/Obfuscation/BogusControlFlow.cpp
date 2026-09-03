@@ -281,7 +281,11 @@ struct BogusControlFlow : public FunctionPass {
 
   static AllocaInst *createEntrySlot(Function &F, Type *Ty) {
     IRBuilder<> IRB(&*F.getEntryBlock().getFirstInsertionPt());
-    return IRB.CreateAlloca(Ty, nullptr, "bcf.dead.slot");
+    auto *Slot = IRB.CreateAlloca(Ty, nullptr, "bcf.dead.slot");
+    // Name-independent marker: -O2 discards instruction names, and
+    // Flattening's alloca gate must exempt these slots in every build.
+    Slot->setMetadata("taokari.bcf.slot", MDNode::get(F.getContext(), {}));
+    return Slot;
   }
 
   void emitFakeExceptionRegion(Function &F, BasicBlock *&Entry,

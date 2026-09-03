@@ -199,6 +199,8 @@ RELEASE_GATES = [
     ReleaseGate("tls_section_randomization", TESTING / "scripts" / "verify_tls_section_randomization.py"),
     ReleaseGate("meta_section_preservation", TESTING / "scripts" / "verify_meta_section_preservation.py"),
     ReleaseGate("cie_bitint_odd_width", TESTING / "scripts" / "verify_cie_bitint_odd_width.py"),
+    ReleaseGate("mir_redzone_recovery", TESTING / "scripts" / "verify_mir_redzone_recovery.py"),
+    ReleaseGate("fla_bcf_noise_exemption", TESTING / "scripts" / "verify_fla_bcf_noise_exemption.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
@@ -489,8 +491,11 @@ def compile_case(
     max_preset: bool = False,
 ) -> Path:
     case_root = case_path(case.name)
-    build = case_root / "build"
-    obj = case_root / "obj"
+    # Per-invocation dirs: concurrent harness runs (e.g. the perf gate) share
+    # case roots, and a sibling rmtree deleting obj/ mid-compile turns clang's
+    # obj.tmp rename into ENOENT.
+    build = case_root / f"build_{os.getpid()}"
+    obj = case_root / f"obj_{os.getpid()}"
     shutil.rmtree(build, ignore_errors=True)
     shutil.rmtree(obj, ignore_errors=True)
     build.mkdir(parents=True, exist_ok=True)
@@ -533,6 +538,11 @@ def compile_case(
         cmd += extra
         cmd += ["-o", str(out)]
         result = run(cmd, use_vs_env=True)
+        if result.returncode and "unable to rename temporary" in result.stderr:
+            # Defender/indexing transiently holds the fresh directory; one
+            # retry covers it without masking genuine errors.
+            time.sleep(0.2)
+            result = run(cmd, use_vs_env=True)
         if result.returncode:
             raise RuntimeError(f"compile {source}\n{result.stdout}{result.stderr}")
         if not out.exists():

@@ -3,8 +3,8 @@ build-logs/
 artifacts/
 *.rar
 TODO.md
-testing/cases/*/build/
-testing/cases/*/obj/
+testing/cases/*/build*/
+testing/cases/*/obj*/
 testing/_with_vs_env.cmd
 testing/__pycache__/
 testing/**/__pycache__/

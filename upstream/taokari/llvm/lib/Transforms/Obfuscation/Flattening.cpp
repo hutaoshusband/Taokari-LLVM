@@ -153,15 +153,29 @@ bool Flattening::flatten(Function *f) {
   const uint32_t flaLevel = flaOpt->level();
   const bool fortressMode = flaLevel >= 3;
 
-  if (f->getInstructionCount() > maxInsts || f->size() > maxBlocks ||
-      f->hasPersonalityFn() || functionIsStdOrEhRuntime(*f) ||
-      functionParticipatesInNonLocalJump(*f)) {
+  // Budgets bound user-code complexity; BCF noise allocas (bcf.* names,
+  // taokari.bcf.slot metadata) inflate them, so noise-carrying functions
+  // get x16 budgets. The EH/NLJ/std hard skips never scale.
+  bool bcfNoise = false;
+  for (Instruction &I : instructions(f))
+    if (isa<AllocaInst>(&I) && (I.getName().starts_with("bcf.") ||
+                                I.getMetadata("taokari.bcf.slot"))) {
+      bcfNoise = true;
+      break;
+    }
+  const uint32_t Scale = bcfNoise ? 16 : 1;
+
+  if (f->getInstructionCount() > maxInsts * Scale ||
+      f->size() > maxBlocks * Scale || f->hasPersonalityFn() ||
+      functionIsStdOrEhRuntime(*f) || functionParticipatesInNonLocalJump(*f)) {
     return false;
   }
 
   uint32_t allocaCount = 0;
   for (Instruction &I : instructions(f)) {
-    if (isa<AllocaInst>(&I) && ++allocaCount > maxAllocas) {
+    if (isa<AllocaInst>(&I) && !I.getName().starts_with("bcf.") &&
+        !I.getMetadata("taokari.bcf.slot") &&
+        ++allocaCount > maxAllocas * Scale) {
       return false;
     }
     if (isa<InvokeInst>(&I) || isa<CleanupPadInst>(&I) ||
