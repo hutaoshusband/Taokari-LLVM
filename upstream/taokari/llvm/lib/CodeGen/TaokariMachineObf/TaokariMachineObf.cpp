@@ -499,14 +499,22 @@ static bool functionHasEhShape(const MachineFunction &MF) {
   return false;
 }
 
-// Post-PEI, non-fixed frame objects at negative offsets (and RSP-based memory
-// refs with negative displacement) only exist when the ABI red zone holds
-// live data below RSP; stack-pushing inline-asm guards clobber exactly that
-// area (getStackSize() is unsound: CSR pushes alone make it nonzero).
+// Post-PEI, an object is live below the final RSP iff its physical base
+// (incoming-SP-relative offset minus the local-area offset, i.e. the
+// return slot) plus the allocated stack size is still negative; variable-
+// sized objects carry PEI sentinel offsets, not addresses, and are
+// excluded. RSP-based memory refs with negative displacement flag the
+// same condition directly. Stack-pushing inline-asm guards clobber
+// exactly that area (getStackSize() is unsound on its own: CSR pushes
+// alone make it nonzero).
 static bool keepsLiveBelowRsp(const MachineFunction &MF) {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
+  const int64_t LocalAreaOff =
+      MF.getSubtarget().getFrameLowering()->getOffsetOfLocalArea();
+  const int64_t StackSize = static_cast<int64_t>(MFI.getStackSize());
   for (int i = 0, e = MFI.getObjectIndexEnd(); i != e; ++i)
-    if (!MFI.isFixedObjectIndex(i) && MFI.getObjectOffset(i) < 0)
+    if (!MFI.isFixedObjectIndex(i) && !MFI.isVariableSizedObjectIndex(i) &&
+        MFI.getObjectOffset(i) - LocalAreaOff + StackSize < 0)
       return true;
   Register SP = MF.getSubtarget().getTargetLowering()
                     ->getStackPointerRegisterToSaveRestore();
