@@ -115,6 +115,21 @@ def mllvm(flags: list[str]) -> list[str]:
     return out
 
 
+def split_functions(text: str) -> list[tuple[str, str]]:
+    """Yield (define line, full text) pairs for every defined function."""
+    out: list[tuple[str, str]] = []
+    cur: list[str] | None = None
+    for line in text.splitlines():
+        if line.startswith("define "):
+            cur = [line]
+        elif cur is not None:
+            cur.append(line)
+            if line.strip() == "}":
+                out.append((cur[0], "\n".join(cur)))
+                cur = None
+    return out
+
+
 def main() -> int:
     if not CLANG.exists():
         print(f"missing clang: {CLANG}", file=sys.stderr)
@@ -125,13 +140,19 @@ def main() -> int:
         src = tmp / "bcf_exh.c"
         src.write_text(SOURCE, encoding="utf-8")
 
-        l3 = tmp / "l3.ll"
-        if not must(run([str(CLANG), str(src), "-O2", "-fno-discard-value-names",
-                         *mllvm(["-taokari", "-taokari-bcf", "-taokari-level-bcf=3",
-                                 "-taokari-bcf-prob=100", "-taokari-bcf-loops=1"]),
-                         "-S", "-emit-llvm", "-o", str(l3)]), "L3 emit-llvm"):
-            return 1
-        l3_text = l3.read_text(encoding="utf-8", errors="ignore")
+        # The fake-EH region fires per selected block on an RNG coin flip,
+        # so a single compile can legitimately miss it; retry until seen.
+        l3_text = ""
+        for _ in range(8):
+            l3 = tmp / "l3.ll"
+            if not must(run([str(CLANG), str(src), "-O2", "-fno-discard-value-names",
+                             *mllvm(["-taokari", "-taokari-bcf", "-taokari-level-bcf=3",
+                                     "-taokari-bcf-prob=100", "-taokari-bcf-loops=1"]),
+                             "-S", "-emit-llvm", "-o", str(l3)]), "L3 emit-llvm"):
+                return 1
+            l3_text = l3.read_text(encoding="utf-8", errors="ignore")
+            if ".bcf.exh" in l3_text:
+                break
 
         l2 = tmp / "l2.ll"
         if not must(run([str(CLANG), str(src), "-O2", "-fno-discard-value-names",
@@ -141,8 +162,9 @@ def main() -> int:
             return 1
         l2_text = l2.read_text(encoding="utf-8", errors="ignore")
 
-        if l3_text.count(".bcf.exh") == 0:
-            print("FAIL: L3 IR has no .bcf.exh region", file=sys.stderr)
+        if ".bcf.exh" not in l3_text:
+            print("FAIL: L3 IR has no .bcf.exh region after 8 attempts",
+                  file=sys.stderr)
             return 1
         if l3_text.count("bcf.exh.gate") == 0 or l3_text.count("bcf.exh.opaque") == 0:
             print("FAIL: L3 IR has no .bcf.exh.gate / opaque predicate",
@@ -193,10 +215,15 @@ def main() -> int:
             print("FAIL: EH source did not actually carry a personality "
                   "(test fixture broken)", file=sys.stderr)
             return 1
-        if ".bcf.exh" in eh_text:
-            print("FAIL: fake-EH region fired inside an EH function (safety "
-                  "gate broken)", file=sys.stderr)
-            return 1
+        # A bare throw lowers to a plain call (no personality), so BCF may
+        # legally process such functions; the safety contract is that no
+        # function carrying a personality ever gets a fake-EH region.
+        for define_line, body in split_functions(eh_text):
+            if "personality" in define_line and ".bcf.exh" in body:
+                print("FAIL: fake-EH region fired inside an EH function "
+                      f"(safety gate broken): {define_line[:80]}",
+                      file=sys.stderr)
+                return 1
 
     print(f"bcf fake-exception regions: ok (L3 markers present, gated by "
           f"opaque-false, no personality leak, L2 clean, EH fn skipped, "

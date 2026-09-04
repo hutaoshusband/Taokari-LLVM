@@ -403,7 +403,6 @@ struct BogusControlFlow : public FunctionPass {
       auto *JunkFn = getOrCreateJunkFunction(*Fake.getModule(), FuncRNG);
       V = IRB.CreateCall(JunkFn, {V}, "bcf.fake.call");
     }
-    IRB.CreateStore(V, &JunkSlot);
     IRB.CreateAlignedStore(V, &JunkSlot, Align(8), true);
     IRB.CreateBr(BranchTarget);
   }
@@ -420,12 +419,22 @@ struct BogusControlFlow : public FunctionPass {
         Twine(Fake.getParent()->getName()) + ".bcf.fake.bound");
     BoundGV->setAlignment(Align(4));
 
+    // The loop slots must live in the entry block: after FLA the fake block
+    // and bcf.fake.loop.* become dispatcher siblings, so an alloca there no
+    // longer dominates its loop-block users.
+    IRBuilder<> SlotIRB(
+        &*Fake.getParent()->getEntryBlock().getFirstInsertionPt());
+    auto *CounterSlot = SlotIRB.CreateAlloca(Int32, nullptr, "bcf.fake.i");
+    auto *AccSlot = SlotIRB.CreateAlloca(Int64, nullptr, "bcf.fake.acc");
+    CounterSlot->setMetadata("taokari.bcf.slot",
+                             MDNode::get(Fake.getContext(), {}));
+    AccSlot->setMetadata("taokari.bcf.slot",
+                         MDNode::get(Fake.getContext(), {}));
+
     IRBuilder<> Entry(&Fake);
     Value *V =
         Entry.CreateAlignedLoad(Int64, &Nonce, Align(8), true, "bcf.fake.nonce");
-    auto *CounterSlot = Entry.CreateAlloca(Int32, nullptr, "bcf.fake.i");
     Entry.CreateStore(ConstantInt::get(Int32, 0), CounterSlot);
-    auto *AccSlot = Entry.CreateAlloca(Int64, nullptr, "bcf.fake.acc");
     Entry.CreateStore(V, AccSlot);
 
     BasicBlock *LoopHdr =
@@ -460,7 +469,6 @@ struct BogusControlFlow : public FunctionPass {
 
     IRBuilder<> Exit(LoopExit);
     Value *FinalAcc = Exit.CreateLoad(Int64, AccSlot, "bcf.fake.final");
-    Exit.CreateStore(FinalAcc, &JunkSlot);
     Exit.CreateAlignedStore(FinalAcc, &JunkSlot, Align(8), true);
     Exit.CreateBr(BranchTarget);
   }

@@ -201,6 +201,7 @@ RELEASE_GATES = [
     ReleaseGate("cie_bitint_odd_width", TESTING / "scripts" / "verify_cie_bitint_odd_width.py"),
     ReleaseGate("mir_redzone_recovery", TESTING / "scripts" / "verify_mir_redzone_recovery.py"),
     ReleaseGate("fla_bcf_noise_exemption", TESTING / "scripts" / "verify_fla_bcf_noise_exemption.py"),
+    ReleaseGate("bcf_junk_dominance", TESTING / "scripts" / "verify_bcf_junk_dominance.py"),
     ReleaseGate("ra_basic_flag", TESTING / "scripts" / "verify_ra_basic_flag.py"),
 ]
 
