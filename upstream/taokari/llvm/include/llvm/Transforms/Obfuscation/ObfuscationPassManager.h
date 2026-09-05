@@ -25,6 +25,8 @@ void        initializeObfuscationPassManagerPass(PassRegistry &Registry);
 
 std::shared_ptr<ObfuscationOptions> getTaokariObfuscationOptions();
 
+bool taokariObfuscationRequested();
+
 class ObfuscationPassManagerPass
     : public PassInfoMixin<ObfuscationPassManagerPass> {
 public:

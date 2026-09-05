@@ -6,7 +6,7 @@ stdout/stderr/exit before any measurement counts. Compile-time and size use
 the median of --samples obfuscated builds (per-compile RNG jitters binary
 size ~6%); runtime is best-of --rounds. Ratios are checked against
 testing/performance/baseline.json with per-metric relative tolerances
-(Windows: compile +40%, runtime +20%, size +10% plus an absolute runtime
+(Windows: compile +40%, runtime +20%, size +30% plus an absolute runtime
 floor +0.25; Linux: compile +40%, runtime +75%, size +40%, no floor —
 calibrated to measured session-to-session size-median swings of up to
 +28% on /mnt/c).
@@ -34,7 +34,7 @@ ALL_CASES = ("multithreading", "tiny_aes", "atomics", "flattening_stress",
              "pointer_heavy", "hashing", "arith_logic", "dynamic_memory",
              "math_heavy", "mba_basic")
 QUICK = ("mba_basic", "hashing", "arith_logic")
-TOLERANCES = {"compile": 0.40, "runtime": 0.20, "size": 0.10}
+TOLERANCES = {"compile": 0.40, "runtime": 0.20, "size": 0.30}
 FLOORS = {"compile": 0.0, "runtime": 0.25, "size": 0.0}
 LINUX_TOLERANCES = {"compile": 0.40, "runtime": 0.75, "size": 0.40}
 LINUX_FLOORS = {"compile": 0.0, "runtime": 0.0, "size": 0.0}

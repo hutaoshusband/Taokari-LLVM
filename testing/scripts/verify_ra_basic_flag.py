@@ -45,6 +45,9 @@ OBF = ["-mllvm", "-taokari", "-mllvm", "-taokari-fla", "-mllvm", "-taokari-bcf",
        "-mllvm", "-taokari-level-fla=4", "-mllvm", "-taokari-level-bcf=4",
        "-mllvm", "-taokari-level-mba=4", "-mllvm", "-taokari-level-indbr=4"]
 
+OFF = ["-mllvm", "-taokari-ra-basic=0"]
+GREEDY = ["-mllvm", "-regalloc=greedy"]
+
 
 def run(command: list[str], **kw) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, text=True, capture_output=True, **kw)
@@ -64,6 +67,14 @@ def content_digest(obj: Path) -> str:
     return hashlib.sha256(bytes(blob)).hexdigest()
 
 
+def backend_obj(clang_args: list[str], frozen: Path, tag: str, tmp: Path) -> Path:
+    obj = tmp / f"ra_basic_{tag}{tp.OBJ}"
+    built = run([str(CLANG), str(frozen), "-O2", "-Xclang",
+                 "-disable-llvm-passes", *clang_args, "-c", "-o", str(obj)])
+    must(built, f"compile {tag}")
+    return obj
+
+
 def main() -> int:
     if not CLANG.exists():
         print(f"missing tool: {CLANG}", file=sys.stderr)
@@ -77,34 +88,34 @@ def main() -> int:
         must(run([str(CLANG), str(src), "-O2", "-std=c17", *OBF,
                   "-S", "-emit-llvm", "-o", str(frozen)]), "frozen IR emit")
 
-        # Contract: with -taokari-ra-basic absent the optimized-codegen register
-        # allocator (greedy) must be untouched; present, it must switch to
-        # RABasic; an explicit -regalloc= still wins over the new flag. Frozen
-        # IR keeps every compile backend-identical up to the allocator.
+        # Contract: with obfuscation active the optimized-codegen allocator
+        # defaults to RABasic; -taokari-ra-basic=0 restores greedy; an explicit
+        # -regalloc= still wins; plain non-obfuscated codegen is untouched by
+        # the default. Frozen IR keeps every compile backend-identical up to
+        # the allocator.
         objs = {}
-        for tag, extra in (("off1", []), ("off2", []),
-                           ("on", ["-mllvm", "-taokari-ra-basic"])):
-            obj = tmp / f"ra_basic_{tag}{tp.OBJ}"
-            built = run([str(CLANG), str(frozen), "-O2", "-Xclang",
-                         "-disable-llvm-passes", *extra, "-c", "-o", str(obj)])
-            must(built, f"compile {tag}")
-            objs[tag] = obj
+        for tag, extra in (("obf_def1", OBF), ("obf_def2", OBF),
+                           ("obf_off", [*OBF, *OFF]),
+                           ("obf_greedy", [*OBF, *GREEDY]),
+                           ("plain_def", []), ("plain_off", OFF),
+                           ("plain_on", ["-mllvm", "-taokari-ra-basic"])):
+            objs[tag] = backend_obj(extra, frozen, tag, tmp)
 
-        if content_digest(objs["off1"]) != content_digest(objs["off2"]):
-            raise SystemExit("backend not self-consistent (flag-off objects differ)")
-        if content_digest(objs["off1"]) == content_digest(objs["on"]):
-            raise SystemExit("flag-on object identical to flag-off (allocator unchanged?)")
-        must(run([str(CLANG), str(frozen), "-O2", "-Xclang",
-                  "-disable-llvm-passes", "-mllvm", "-taokari-ra-basic",
-                  "-mllvm", "-regalloc=greedy", "-c",
-                  "-o", str(tmp / f"ra_basic_override{tp.OBJ}")]),
-             "-regalloc= override over the flag")
+        for a, b, must_differ, why in (
+            ("obf_def1", "obf_def2", False, "backend not self-consistent (default objects differ)"),
+            ("obf_def1", "obf_off", True, "obfuscated default object identical to ra-basic=0 (allocator unchanged?)"),
+            ("obf_off", "obf_greedy", False, "-regalloc=greedy object differs from ra-basic=0 (override lost?)"),
+            ("plain_def", "plain_off", False, "plain default object differs from plain ra-basic=0"),
+            ("plain_def", "plain_on", False, "plain default object differs from plain ra-basic=1"),
+        ):
+            da, db = content_digest(objs[a]), content_digest(objs[b])
+            if (da == db) == must_differ:
+                raise SystemExit(why)
 
-        exe_plain = tmp / tp.exe_name("ra_basic_plain")
         must(run([str(CLANG), str(src), "-O2", "-std=c17",
-                  "-o", str(exe_plain)]), "build plain")
+                  "-o", str(tmp / tp.exe_name("ra_basic_plain"))]), "build plain")
         plain = ""
-        for tag in ("off1", "on"):
+        for tag in ("obf_def1", "obf_off"):
             exe = tmp / tp.exe_name(f"ra_basic_{tag}")
             must(run([str(CLANG), str(objs[tag]), "-o", str(exe)]), f"link {tag}")
             ran = run([str(exe)])
@@ -112,7 +123,7 @@ def main() -> int:
             if plain and ran.stdout != plain:
                 raise SystemExit(f"output mismatch: {tag} {ran.stdout!r} != {plain!r}")
             plain = ran.stdout
-        ran = run([str(exe_plain)])
+        ran = run([str(tmp / tp.exe_name("ra_basic_plain"))])
         must(ran, "run plain")
         if ran.stdout != plain:
             raise SystemExit(f"obfuscated output mismatch vs plain: {plain!r}")

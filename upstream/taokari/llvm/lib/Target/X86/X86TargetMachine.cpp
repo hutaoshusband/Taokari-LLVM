@@ -63,10 +63,15 @@ static cl::opt<bool>
                      cl::desc("Enable the tile register allocation pass"),
                      cl::init(true), cl::Hidden);
 
+namespace llvm {
+bool taokariObfuscationRequested();
+}
+
 static cl::opt<bool> TaokariRABasic(
     "taokari-ra-basic",
-    cl::desc("Use the basic register allocator for optimized codegen"),
-    cl::init(false), cl::Hidden);
+    cl::desc("Use the basic register allocator for optimized codegen when "
+             "Taokari obfuscation is active (default on, =0 restores greedy)"),
+    cl::init(true), cl::Hidden);
 
 extern "C" LLVM_C_ABI void LLVMInitializeX86Target() {
   // Register the target.
@@ -675,7 +680,7 @@ bool X86PassConfig::addRegAssignAndRewriteOptimized() {
 }
 
 FunctionPass *X86PassConfig::createTargetRegisterAllocator(bool Optimized) {
-  if (Optimized && TaokariRABasic)
+  if (Optimized && TaokariRABasic && taokariObfuscationRequested())
     return createBasicRegisterAllocator();
   return TargetPassConfig::createTargetRegisterAllocator(Optimized);
 }

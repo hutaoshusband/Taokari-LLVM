@@ -58,7 +58,7 @@ plain vs obfuscated (default stack, level 4; median of 3 obfuscated builds for
 compile/size), correctness-gates every obfuscated run against the plain output,
 then checks compile/runtime/size ratios against
 `testing/performance/baseline.json`. Windows tolerances: compile +40%, runtime
-+20% with a +0.25 absolute floor, size +10%. Linux: compile +40%, runtime
++20% with a +0.25 absolute floor, size +30% (calibrated: arith_logic obfuscated-build sizes span 676-861KB across sessions, max/min 1.27 around the 7-sample anchor, same methodology as the linux calibration). Linux: compile +40%, runtime
 +75%, size +40%, no floor (calibrated to measured per-compile RNG size swings
 and small-fixture runtime jitter). Exit 0 pass / 1 regression or usage error /
 2 skip. `--update-baseline` re-seeds the current platform's section; `--quick`

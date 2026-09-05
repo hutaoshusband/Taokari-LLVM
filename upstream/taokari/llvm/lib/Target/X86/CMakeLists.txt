@@ -105,6 +105,7 @@ add_llvm_target(X86CodeGen ${sources}
   IRPrinter
   Instrumentation
   MC
+  Obfuscation
   ObjCARC
   ProfileData
   Scalar

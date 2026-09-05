@@ -362,6 +362,16 @@ static bool isTaokariHelper(const Function &F) {
   return isTaokariGeneratedHelper(F, true);
 }
 
+bool taokariObfuscationRequested() {
+  return EnableIndirectBr || EnableIndirectCall || EnableIndirectGV ||
+         EnableIRFlattening || EnableIRStringEncryption ||
+         EnableIRConstantIntEncryption || EnableIRConstantFPEncryption ||
+         EnableBogusControlFlow || EnableMBA || EnableOutline || EnableDyn ||
+         EnableRttiEraser || EnableMetadataHygiene || EnableVMP ||
+         TaokariMaxProtection || EnableOpaqueConstant ||
+         !TaokariConfigPath.empty() || !ArkariConfigPath.empty();
+}
+
 struct ObfuscationPassManager : public ModulePass {
   static char ID; // Pass identification
   SmallVector<Pass *, 8> Passes;
@@ -518,14 +528,7 @@ struct ObfuscationPassManager : public ModulePass {
 
   bool runOnModule(Module &M) override {
 
-    if (EnableIndirectBr || EnableIndirectCall || EnableIndirectGV ||
-        EnableIRFlattening || EnableIRStringEncryption ||
-        EnableIRConstantIntEncryption || EnableIRConstantFPEncryption ||
-        EnableBogusControlFlow || EnableMBA || EnableOutline || EnableDyn ||
-        EnableRttiEraser ||
-        EnableMetadataHygiene || EnableVMP || TaokariMaxProtection ||
-        EnableOpaqueConstant ||
-        !TaokariConfigPath.empty() || !ArkariConfigPath.empty()) {
+    if (taokariObfuscationRequested()) {
       EnableIRObfuscation = true;
     }
 
