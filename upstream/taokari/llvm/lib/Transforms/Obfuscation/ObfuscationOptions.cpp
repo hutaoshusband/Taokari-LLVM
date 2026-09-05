@@ -176,6 +176,12 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
                             obfOpt->attributeName() +
                                 ".maxInsts must be non-negative integer");
         }
+        if (*maxInsts > 268435455) {
+          reportConfigError(FileName,
+                            obfOpt->attributeName() +
+                                ".maxInsts must be <= 268435455 (uint32 budget "
+                                "* 16 must not overflow)");
+        }
         obfOpt->setMaxInsts(static_cast<uint32_t>(*maxInsts));
       }
       if (const auto *maxBlocksValue = optObj->get("maxBlocks")) {
@@ -185,6 +191,12 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
                             obfOpt->attributeName() +
                                 ".maxBlocks must be non-negative integer");
         }
+        if (*maxBlocks > 268435455) {
+          reportConfigError(FileName,
+                            obfOpt->attributeName() +
+                                ".maxBlocks must be <= 268435455 (uint32 budget "
+                                "* 16 must not overflow)");
+        }
         obfOpt->setMaxBlocks(static_cast<uint32_t>(*maxBlocks));
       }
       if (const auto *maxAllocasValue = optObj->get("maxAllocas")) {
@@ -193,6 +205,12 @@ ObfuscationOptions::readConfigFile(const Twine &FileName) {
           reportConfigError(FileName,
                             obfOpt->attributeName() +
                                 ".maxAllocas must be non-negative integer");
+        }
+        if (*maxAllocas > 268435455) {
+          reportConfigError(FileName,
+                            obfOpt->attributeName() +
+                                ".maxAllocas must be <= 268435455 (uint32 budget "
+                                "* 16 must not overflow)");
         }
         obfOpt->setMaxAllocas(static_cast<uint32_t>(*maxAllocas));
       }
