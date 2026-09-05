@@ -135,7 +135,7 @@ bool Flattening::runOnFunction(Function &F) {
   }
   if (flatten(tmp)) {
     ++Flattened;
-    F.addFnAttr("taokari-flattened");
+    F.addFnAttr("taokari-flattened"); //verifier tripwire only; no pass reads it
     result = true;
   }
 
