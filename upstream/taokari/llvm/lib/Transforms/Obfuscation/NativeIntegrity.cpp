@@ -162,8 +162,6 @@ struct NativeIntegrity : public FunctionPass {
     // into every caller, blowing up code size, so skip them too.
     if (F.hasFnAttribute(Attribute::AlwaysInline))
       return false;
-    if (F.hasFnAttribute("taokari-flattened"))
-      return false;
     if (F.hasPersonalityFn() || isTaokariGeneratedHelper(F))
       return false;
 

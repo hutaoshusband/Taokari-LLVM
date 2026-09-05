@@ -370,8 +370,6 @@ struct DynamicProtection : public FunctionPass {
       return false;
     if (F.hasFnAttribute(Attribute::AlwaysInline))
       return false;
-    if (F.hasFnAttribute("taokari-flattened"))
-      return false;
 
     Module &M = *F.getParent();
     Triple T(M.getTargetTriple());
