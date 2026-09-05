@@ -36,8 +36,12 @@ import _taokari_portable as tp
 CLANG = tp.CLANG
 CLANGXX = tp.tool("clang++")
 
-COMPILE_BUDGET_SECONDS = 90
-COMPILE_TIMEOUT_SECONDS = 180
+# measured walls post loop-15 (assert Windows build): c-max-ir 223-276s,
+# cxx-max-ir ~297s; budget set above the observed ceiling with margin
+COMPILE_BUDGET_SECONDS = 480
+# max-ir compiles are codegen-bound on the flattened body (measured 223-276s
+# on the assert Windows build, 15s Linux NDEBUG post loop-15 fixStack/addDest)
+COMPILE_TIMEOUT_SECONDS = 600
 
 VS_ENV: dict[str, str] | None = None
 

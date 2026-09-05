@@ -28,6 +28,7 @@
 #include "llvm/Transforms/Utils/ValueMapper.h"
 
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include <algorithm>
 #include <memory>
 #include <random>
@@ -694,8 +695,9 @@ bool Flattening::flatten(Function *f) {
       [&](const SmallVectorImpl<std::pair<ConstantInt *, BasicBlock *>>
               &Cases) {
         SmallVector<BasicBlock *, 64> Dests;
+        SmallPtrSet<BasicBlock *, 32> DestSet;
         auto addDest = [&](BasicBlock *BB) {
-          if (std::find(Dests.begin(), Dests.end(), BB) == Dests.end()) {
+          if (DestSet.insert(BB).second) {
             Dests.push_back(BB);
           }
         };

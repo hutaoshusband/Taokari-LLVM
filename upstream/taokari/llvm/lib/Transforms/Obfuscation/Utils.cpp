@@ -9,6 +9,8 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAArch64.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
@@ -238,39 +240,74 @@ bool valueEscapes(Instruction *Inst) {
 
 void fixStack(Function *f) {
   // Try to remove phi node and demote reg to stack
-  SmallVector<PHINode *, 16>     tmpPhi;
-  SmallVector<Instruction *, 16> tmpReg;
   BasicBlock *                   bbEntry = &*f->begin();
+  SmallPtrSet<Instruction *, 32> Visited;
+  SmallVector<Instruction *, 16> Wave;
 
-  do {
-    tmpPhi.clear();
-    tmpReg.clear();
+  auto isCandidate = [&](Instruction *I) {
+    if (isa<PHINode>(I))
+      return true;
+    return !(isa<AllocaInst>(I) && I->getParent() == bbEntry) &&
+           (valueEscapes(I) || I->isUsedOutsideOfBlock(I->getParent()));
+  };
+  auto consider = [&](Instruction *I) {
+    if (Visited.insert(I).second && isCandidate(I))
+      Wave.push_back(I);
+  };
 
-    for (Function::iterator i = f->begin(); i != f->end(); ++i) {
+  for (BasicBlock &BB : *f)
+    for (Instruction &I : BB)
+      consider(&I);
 
-      for (BasicBlock::iterator j = i->begin(); j != i->end(); ++j) {
+  while (!Wave.empty()) {
+    SmallVector<Instruction *, 16> Curr;
+    Curr.swap(Wave);
 
-        if (isa<PHINode>(j)) {
-          PHINode *phi = cast<PHINode>(j);
-          tmpPhi.push_back(phi);
-          continue;
-        }
-        if (!(isa<AllocaInst>(j) && j->getParent() == bbEntry) &&
-            (valueEscapes(&*j) || j->isUsedOutsideOfBlock(&*i))) {
-          tmpReg.push_back(&*j);
-          continue;
-        }
+    SmallVector<Instruction *, 16> Regs;
+    SmallVector<PHINode *, 16>     Phis;
+    for (Instruction *I : Curr) {
+      if (auto *P = dyn_cast<PHINode>(I))
+        Phis.push_back(P);
+      else
+        Regs.push_back(I);
+    }
+
+    SmallPtrSet<BasicBlock *, 16> Touched;
+
+    for (Instruction *I : Regs) {
+      if (I->use_empty()) {
+        Visited.erase(I);
+        DemoteRegToStack(*I);
+        continue;
       }
+      Touched.insert(I->getParent());
+      for (User *U : I->users())
+        if (auto *UI = dyn_cast<Instruction>(U))
+          Touched.insert(UI->getParent());
+      if (I->isTerminator())
+        for (BasicBlock *Succ : successors(I))
+          Touched.insert(Succ);
+      DemoteRegToStack(*I);
     }
-    for (unsigned int i = 0; i != tmpReg.size(); ++i) {
-      DemoteRegToStack(*tmpReg[i]);
+    for (PHINode *P : Phis) {
+      if (P->use_empty()) {
+        Visited.erase(P);
+        DemotePHIToStack(P);
+        continue;
+      }
+      Touched.insert(P->getParent());
+      for (User *U : P->users())
+        if (auto *UI = dyn_cast<Instruction>(U))
+          Touched.insert(UI->getParent());
+      for (BasicBlock *Pred : P->blocks())
+        Touched.insert(Pred);
+      DemotePHIToStack(P);
     }
 
-    for (unsigned int i = 0; i != tmpPhi.size(); ++i) {
-      DemotePHIToStack(tmpPhi[i]);
-    }
-
-  } while (tmpReg.size() != 0 || tmpPhi.size() != 0);
+    for (BasicBlock *BB : Touched)
+      for (Instruction &I : *BB)
+        consider(&I);
+  }
 }
 
 CallBase *fixEH(CallBase *CB) {
