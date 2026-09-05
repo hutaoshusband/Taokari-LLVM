@@ -34,15 +34,16 @@ echo "== syncing Taokari sources: $SRC -> $DST =="
 # wholesale directories are mirrored with --delete so files removed from the
 # repo do not linger in the build tree.
 mirror_dir() {
-  local d="$1"
+  local src_root="$1"; shift
+  local d="$1"; shift
   mkdir -p "$DST/$d"
   if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete "$SRC/$d/" "$DST/$d/"
+    rsync -a --delete "$@" "$src_root/$d/" "$DST/$d/"
   else
-    cp -af "$SRC/$d/." "$DST/$d/"
+    cp -af "$src_root/$d/." "$DST/$d/"
     # best-effort prune: remove files in DST that no longer exist in SRC
     if [ -d "$DST/$d" ]; then
-      ( cd "$SRC/$d" && find . -type f -print ) | sort > /tmp/.taokari_src_list.$$
+      ( cd "$src_root/$d" && find . -type f -print ) | sort > /tmp/.taokari_src_list.$$
       ( cd "$DST/$d" && find . -type f -print ) | sort > /tmp/.taokari_dst_list.$$
       comm -13 /tmp/.taokari_src_list.$$ /tmp/.taokari_dst_list.$$ | \
         while read -r stale; do rm -f "$DST/$d/$stale"; done
@@ -58,7 +59,7 @@ for d in \
   llvm/include/llvm/Transforms/Obfuscation \
   llvm/unittests/Transforms/Obfuscation
 do
-  mirror_dir "$d"
+  mirror_dir "$SRC" "$d"
 done
 
 # --- Single modified-upstream LLVM files (paths relative to taokari/) --------
@@ -93,6 +94,26 @@ done
 echo "== synced =="
 ls -la "$DST/llvm/lib/Transforms/Obfuscation/ObfuscationPassManager.cpp" \
        "$DST/llvm/lib/CodeGen/TaokariMachineObf/TaokariMachineObf.cpp"
+
+# --- Testing harness (lets the gates run fully on ext4) ----------------------
+# The harness and perf gate are __file__-relative, so mirroring testing/ into
+# the ext4 tree is enough; build/taokari-linux/bin points at the built tools.
+# The repo copy of testing/performance/baseline.json stays the source of truth.
+mirror_dir "$REPO_ROOT" testing \
+  --exclude='__pycache__' \
+  --exclude='cases/*/build_*' \
+  --exclude='cases/*/obj_*'
+# cp fallback has no exclude support; prune the excluded artifacts directly.
+find "$DST/testing" -type d -name '__pycache__' -prune -exec rm -rf {} +
+find "$DST/testing/cases" -maxdepth 2 \( -name 'build_*' -o -name 'obj_*' \) -exec rm -rf {} +
+mkdir -p "$DST/build/taokari-linux"
+ln -sfn "$HOME/taokari-build/bin" "$DST/build/taokari-linux/bin"
+
+# Gates also read repo-root files outside testing/ (config wizard, doc gates,
+# todo.md DoD check, upstream obfuscation sources). Link them read-only.
+for link in scripts docs todo.md upstream; do
+  [ -L "$DST/$link" ] || ln -sfn "$REPO_ROOT/$link" "$DST/$link"
+done
 
 # --- Optional rebuild --------------------------------------------------------
 if [ "${1:-}" = "--rebuild" ]; then

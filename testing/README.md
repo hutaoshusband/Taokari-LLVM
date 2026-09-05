@@ -35,6 +35,27 @@ Example: strongest practical sweep of the sensitive cases:
 python testing\run_obfuscation_tests.py --keep-going
 ```
 
+## Running the Linux gates from ext4
+
+`scripts/sync-to-wsl.sh` also mirrors `testing/` into `~/taokari-src/taokari/testing/`
+and points `~/taokari-src/taokari/build/taokari-linux/bin` at `~/taokari-build/bin`,
+so the gates can run entirely on ext4 (no 9P compile-time noise). From Git Bash:
+`MSYS_NO_PATHCONV=1 wsl.exe bash /mnt/c/.../scripts/sync-to-wsl.sh` (run after
+every source edit), then inside WSL:
+
+```bash
+cd ~/taokari-src/taokari
+python3 testing/run_obfuscation_tests.py --gates-only
+python3 testing/performance/run_perf_gate.py --quick
+```
+
+The ext4 copy of `testing/performance/baseline.json` is re-copied from the repo on every sync (the repo copy stays the source of truth); the repo
+copy stays the source of truth unless deliberately copied back. The `build/taokari-linux/bin`
+symlink is recreated on every sync. The sync also links `scripts/`, `docs/`,
+`todo.md` and `upstream/` from the repo (some gates read them); those links are
+read-only views of the repo. Note: `arith_logic`'s compile multiplier sits near
+the +40% tolerance edge; if `--quick` flakes on it, re-run with `--samples 5`.
+
 ## Benchmark
 
 `--benchmark-out report.csv` compiles each case plain and obfuscated and records
