@@ -87,11 +87,13 @@ struct BogusControlFlow : public FunctionPass {
     }
 
     std::mt19937_64 FuncRNG(RNG());
+    auto *JunkSlot = createEntrySlot(F, Type::getInt64Ty(F.getContext()));
     bool Changed = false;
     for (BasicBlock *BB : Blocks) {
       if ((FuncRNG() % 100) >= Probability)
         continue;
-      Changed |= obfuscateBlock(F, *BB, Opt.level(), Loops, FuncRNG);
+      Changed |= obfuscateBlock(F, *BB, Opt.level(), Loops, FuncRNG,
+                                *JunkSlot);
     }
     return Changed;
   }
@@ -114,7 +116,8 @@ struct BogusControlFlow : public FunctionPass {
   }
 
   bool obfuscateBlock(Function &F, BasicBlock &BB, uint32_t Level,
-                      uint32_t Loops, std::mt19937_64 &FuncRNG) {
+                      uint32_t Loops, std::mt19937_64 &FuncRNG,
+                      AllocaInst &JunkSlot) {
     auto *Pred = BB.getSinglePredecessor();
     if (!Pred)
       return false;
@@ -123,7 +126,6 @@ struct BogusControlFlow : public FunctionPass {
     auto &M = *F.getParent();
     auto *Int64 = Type::getInt64Ty(Ctx);
     auto *Nonce = getOrCreateNonce(M, Int64);
-    auto *JunkSlot = createEntrySlot(F, Int64);
 
     ValueToValueMapTy VMap;
     BasicBlock *Fake = CloneBasicBlock(&BB, VMap, ".bcf.fake", &F);
@@ -177,12 +179,12 @@ struct BogusControlFlow : public FunctionPass {
 
       BasicBlock *InnerFake = Fake;
       if (Layer == 1) {
-        addJunk(*Fake, CurrentTarget, *Nonce, *JunkSlot, Loops, Level, FuncRNG);
+        addJunk(*Fake, CurrentTarget, *Nonce, JunkSlot, Loops, Level, FuncRNG);
       } else {
         InnerFake = BasicBlock::Create(
             Ctx, BB.getName() + ".bcf.fake.layer" + Twine(Layer), &F,
             CurrentTarget);
-        addJunk(*InnerFake, CurrentTarget, *Nonce, *JunkSlot, Loops, Level,
+        addJunk(*InnerFake, CurrentTarget, *Nonce, JunkSlot, Loops, Level,
                 FuncRNG);
       }
 
