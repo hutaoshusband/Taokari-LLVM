@@ -284,9 +284,34 @@ struct ConstantIntEncryption : public FunctionPass {
       return PoolGV;
     };
 
+    // Every pool-base decode chain here derives from one input tuple, so emit
+    // it once at entry; shards take the resolved base as an argument.
+    Value *PoolBaseSlot = nullptr;
+    if (UsePageTableRef && !PoolPageTable.empty()) {
+      auto *BaseTy = PointerType::getUnqual(F.getContext());
+      auto &EntryBB = F.getEntryBlock();
+      IRBuilder<NoFolder> AIB(&*EntryBB.begin());
+      PoolBaseSlot = AIB.CreateAlloca(BaseTy, nullptr);
+      Instruction *DecryptPt = nullptr;
+      for (auto &I : EntryBB) {
+        if (!isa<AllocaInst>(&I)) {
+          DecryptPt = &I;
+          break;
+        }
+      }
+      if (!DecryptPt)
+        DecryptPt = EntryBB.getTerminator();
+      IRBuilder<NoFolder> IRB(DecryptPt);
+      Value *Base = resolvePoolBase(IRB, &F, DecryptPt);
+      IRB.CreateAlignedStore(Base, PoolBaseSlot, Align{1}, true);
+    }
+
     if (UseShards && PoolGV) {
       auto *I64 = Type::getInt64Ty(F.getContext());
-      auto *ShardFTy = FunctionType::get(I64, false);
+      auto *BaseTy = PointerType::getUnqual(F.getContext());
+      auto *ShardFTy = PoolBaseSlot
+                           ? FunctionType::get(I64, {BaseTy}, false)
+                           : FunctionType::get(I64, false);
       unsigned ShardIdx = 0;
       for (auto &KV : Pool) {
         PoolEntry &E = KV.second;
@@ -301,7 +326,8 @@ struct ConstantIntEncryption : public FunctionPass {
         Instruction *Ret = BB->getTerminator();
 
         IRBuilder<NoFolder> B(Ret);
-        Value *PoolBase = resolvePoolBase(B, Shard, Ret);
+        Value *PoolBase = PoolBaseSlot ? &*Shard->arg_begin()
+                                       : resolvePoolBase(B, Shard, Ret);
         auto *I8 = Type::getInt8Ty(F.getContext());
         Value *BytePtr = B.CreateInBoundsGEP(
             ArrayType::get(I8, 1), PoolBase,
@@ -423,7 +449,15 @@ struct ConstantIntEncryption : public FunctionPass {
             auto *IntTy = cast<IntegerType>(CTI->getType());
             IRBuilder<NoFolder> IRB(InsertPoint);
             if (Entry.Shard) {
-              auto *Call = IRB.CreateCall(Entry.Shard, {}, "cie.shard.call");
+              Value *BaseLd = nullptr;
+              if (PoolBaseSlot)
+                BaseLd = IRB.CreateAlignedLoad(
+                    PointerType::getUnqual(F.getContext()), PoolBaseSlot,
+                    Align{1}, true);
+              auto *Call = IRB.CreateCall(
+                  Entry.Shard,
+                  BaseLd ? ArrayRef<Value *>{BaseLd} : ArrayRef<Value *>{},
+                  "cie.shard.call");
               if (IntTy->getBitWidth() < 64) {
                 CipherConstant =
                     IRB.CreateTrunc(Call, IntTy, "cie.shard.trunc");
@@ -435,7 +469,11 @@ struct ConstantIntEncryption : public FunctionPass {
               }
             } else {
             auto *I8 = Type::getInt8Ty(F.getContext());
-            Value *PoolBase = resolvePoolBase(IRB, &F, InsertPoint);
+            Value *PoolBase =
+                PoolBaseSlot
+                    ? IRB.CreateAlignedLoad(PointerType::getUnqual(F.getContext()),
+                                            PoolBaseSlot, Align{1}, true)
+                    : resolvePoolBase(IRB, &F, InsertPoint);
             Value *BytePtr = IRB.CreateInBoundsGEP(
                 ArrayType::get(I8, 1), PoolBase,
                 {ConstantInt::get(Type::getInt32Ty(F.getContext()), 0),
