@@ -57,6 +57,11 @@ int main() {
   const char *a = guard ? "unused-a" : ascii_secret;
   const char16_t *u = guard ? u"unused-u" : utf16_secret;
   const wchar_t *w = guard ? L"unused-w" : wide_secret;
+  volatile int u16p = 0;
+  if (guard) {
+    u16p = utf16_secret[guard % 4];
+    u16p = *static_cast<volatile const char16_t *>(utf16_secret);
+  }
   std::printf("strenc:%d:%d:%d:%s:%s\n",
               score8(a),
               score16(u),
