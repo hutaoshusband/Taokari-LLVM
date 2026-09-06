@@ -1,54 +1,64 @@
 {
   "linux": {
     "arith_logic": {
-      "compile": 81.8511,
-      "runtime": 1.2592,
-      "size": 37.798
+      "compile": 69.35428186571154,
+      "obf_size_kb": 594.4,
+      "runtime": 1.2383030726192663,
+      "size": 37.855223880597016
     },
     "atomics": {
-      "compile": 12.6837,
-      "runtime": 1.0768,
-      "size": 6.5627
+      "compile": 9.705235382372786,
+      "obf_size_kb": 115.1,
+      "runtime": 0.860753190161634,
+      "size": 7.33134328358209
     },
     "dynamic_memory": {
-      "compile": 4.7759,
-      "runtime": 0.9175,
-      "size": 5.1692
+      "compile": 2.745957406204073,
+      "obf_size_kb": 158.9,
+      "runtime": 0.8688037583271775,
+      "size": 4.4825914499779635
     },
     "flattening_stress": {
-      "compile": 17.3921,
-      "runtime": 0.9851,
-      "size": 15.4408
+      "compile": 19.6460094639722,
+      "obf_size_kb": 298.3,
+      "runtime": 0.9703646861007231,
+      "size": 19.064902646030955
     },
     "hashing": {
-      "compile": 18.4447,
-      "runtime": 1.0004,
-      "size": 8.0811
+      "compile": 16.600497277722123,
+      "obf_size_kb": 143.4,
+      "runtime": 1.04632675440147,
+      "size": 9.125310790651417
     },
     "math_heavy": {
-      "compile": 9.3362,
-      "runtime": 0.9949,
-      "size": 7.2493
+      "compile": 10.460215686710812,
+      "obf_size_kb": 122.9,
+      "runtime": 0.9815726366274428,
+      "size": 7.763573543928924
     },
     "mba_basic": {
-      "compile": 12.1814,
-      "runtime": 0.9908,
-      "size": 6.5686
+      "compile": 13.349888808797996,
+      "obf_size_kb": 122.9,
+      "runtime": 0.9288377874518898,
+      "size": 7.876376376376377
     },
     "multithreading": {
-      "compile": 5.4268,
-      "runtime": 1.2248,
-      "size": 2.4615
+      "compile": 3.5930809006706554,
+      "obf_size_kb": 407.4,
+      "runtime": 1.0217706821506514,
+      "size": 2.2269815510761872
     },
     "pointer_heavy": {
-      "compile": 2.1289,
-      "runtime": 1.0165,
-      "size": 1.9739
+      "compile": 2.263172546974024,
+      "obf_size_kb": 27.6,
+      "runtime": 1.1999590387790569,
+      "size": 1.7373339891785538
     },
     "tiny_aes": {
-      "compile": 10.6429,
-      "runtime": 1.0214,
-      "size": 11.1314
+      "compile": 14.544386883832878,
+      "obf_size_kb": 223.1,
+      "runtime": 1.2932877672737033,
+      "size": 13.898783454987834
     }
   },
   "windows": {
