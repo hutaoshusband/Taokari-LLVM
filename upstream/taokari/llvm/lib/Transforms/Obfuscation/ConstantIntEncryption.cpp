@@ -287,7 +287,7 @@ struct ConstantIntEncryption : public FunctionPass {
     // Every pool-base decode chain here derives from one input tuple, so emit
     // it once at entry; shards take the resolved base as an argument.
     Value *PoolBaseSlot = nullptr;
-    if (UsePageTableRef && !PoolPageTable.empty()) {
+    if (UsePageTableRef && !PoolPageTable.empty() && !CIENoDedup) {
       auto *BaseTy = PointerType::getUnqual(F.getContext());
       auto &EntryBB = F.getEntryBlock();
       IRBuilder<NoFolder> AIB(&*EntryBB.begin());

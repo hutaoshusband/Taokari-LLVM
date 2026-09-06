@@ -13,6 +13,7 @@ Exit: 0 ok | 1 contract failure | 2 missing clang.
 """
 from __future__ import annotations
 
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -95,6 +96,55 @@ def main() -> int:
         orun = tp.run([str(obf)])
         if orun.returncode or orun.stdout != nrun.stdout:
             print(f"FAIL L4 rc={orun.returncode} out={orun.stdout!r} "
+                  f"want={nrun.stdout!r}", file=sys.stderr)
+            return 1
+        nd = tmp / "l4_nodedup.ll"
+        r = tp.run([str(CLANG), str(src), "-O2", "-fno-discard-value-names",
+                    *mllvm(["-taokari", "-taokari-cie", "-taokari-level-cie=4",
+                            "-taokari-cie-no-dedup"]),
+                    "-S", "-emit-llvm", "-o", str(nd)])
+        if r.returncode:
+            print("FAIL no-dedup emit\n", r.stderr[:400], file=sys.stderr)
+            return 1
+        ndt = nd.read_text(encoding="utf-8", errors="ignore")
+        shard_defs = re.findall(
+            r'define internal i64 @"?[^"]*cie\.shard\.\d+"?\(([^)]*)\)', ndt)
+        if not shard_defs:
+            print("FAIL no-dedup IR has no cie shards", file=sys.stderr)
+            return 1
+        if any(params.strip() for params in shard_defs):
+            print("FAIL no-dedup shards still take a pool-base argument",
+                  file=sys.stderr)
+            return 1
+        calls = re.findall(
+            r'cie\.shard\.call\w* = call i64 @"?[^"]+"?\(([^)]*)\)', ndt)
+        if not calls:
+            print("FAIL no-dedup IR has no cie shard calls", file=sys.stderr)
+            return 1
+        if any(args.strip() for args in calls):
+            print("FAIL no-dedup shard calls still receive a shared "
+                  "pool-base slot value", file=sys.stderr)
+            return 1
+        shard_bodies = re.findall(
+            r'define internal i64 @"?[^"]*cie\.shard\.\d+"?\(\)[\s\S]*?\n}',
+            ndt)
+        chains = sum(1 for body in shard_bodies
+                     if "cie.pt_page_table_" in body)
+        if chains != len(shard_bodies) or not chains:
+            print(f"FAIL no-dedup shards lack per-use page-table decode "
+                  f"chains ({chains}/{len(shard_bodies)})", file=sys.stderr)
+            return 1
+        ndbin = tmp / "l4_nodedup"
+        r = tp.run([str(CLANG), str(src), "-O2",
+                    *mllvm(["-taokari", "-taokari-cie", "-taokari-level-cie=4",
+                            "-taokari-cie-no-dedup"]),
+                    "-o", str(ndbin)])
+        if r.returncode:
+            print("FAIL no-dedup build\n", r.stderr[:400], file=sys.stderr)
+            return 1
+        ndrun = tp.run([str(ndbin)])
+        if ndrun.returncode or ndrun.stdout != nrun.stdout:
+            print(f"FAIL no-dedup rc={ndrun.returncode} out={ndrun.stdout!r} "
                   f"want={nrun.stdout!r}", file=sys.stderr)
             return 1
     print("cie page-table pool ref: ok")
