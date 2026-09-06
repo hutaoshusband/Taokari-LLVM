@@ -11,7 +11,6 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/Support/RandomNumberGenerator.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/TargetParser/Triple.h"
 
 #include <random>
 
@@ -304,7 +303,6 @@ struct IndirectGlobalVariable : public FunctionPass {
       }
       if (!DecryptPt)
         DecryptPt = EntryBB.getTerminator();
-      Triple T(M.getTargetTriple());
       for (auto &KV : GVDedupCache) {
         auto *           GV = KV.first;
         BuildDecryptArgs buildDecrypt;
@@ -371,7 +369,6 @@ struct IndirectGlobalVariable : public FunctionPass {
             buildDecrypt.FuncKey = FuncKeys[GV];
             buildDecrypt.PtrEncKey = PtrEncKey;
             buildDecrypt.ObjectShareTable = GVObjectShareTable;
-            Triple T(M.getTargetTriple());
             buildDecrypt.PtrAuthKey = targetHasPAuth(Fn) ? 2 : -1;
             buildDecrypt.PtrAuthDisc = pacDiscriminator(Fn, GV);
             GVPtr = buildPageTableDecryptIR(buildDecrypt);
