@@ -310,7 +310,8 @@ void fixStack(Function *f) {
   }
 }
 
-CallBase *fixEH(CallBase *CB) {
+CallBase *fixEH(CallBase *CB,
+                const DenseMap<BasicBlock *, ColorVector> *Precolored) {
   const auto BB = CB->getParent();
   if (!BB) {
     return CB;
@@ -321,7 +322,11 @@ CallBase *fixEH(CallBase *CB) {
           classifyEHPersonality(Fn->getPersonalityFn()))) {
     return CB;
   }
-  const auto BlockColors = colorEHFunclets(*Fn);
+  DenseMap<BasicBlock *, ColorVector> OwnColors;
+  if (!Precolored)
+    OwnColors = colorEHFunclets(*Fn);
+  const DenseMap<BasicBlock *, ColorVector> &BlockColors =
+      Precolored ? *Precolored : OwnColors;
   const auto BBColor = BlockColors.find(BB);
   if (BBColor == BlockColors.end()) {
     return CB;

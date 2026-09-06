@@ -3,6 +3,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
@@ -18,6 +19,7 @@
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <set>
 #include <utility>
 
@@ -291,8 +293,9 @@ struct StringEncryption : public ModulePass {
   void emitShardedPools(Module &M);
   GlobalVariable *emitFakePool(Module &M, ArrayRef<uint8_t> Bytes,
                                const Twine &Name);
-  Value *resolvePoolBase(IRBuilder<> &IRB, unsigned PoolIndex);
-  Value *resolveDecryptorCallee(IRBuilder<> &IRB, Function *DecFunc);
+  Value *resolvePoolBase(IRBuilder<> &IRB, unsigned PoolIndex, bool UnsafeNLJ);
+  Value *resolveDecryptorCallee(IRBuilder<> &IRB, Function *DecFunc,
+                                bool UnsafeNLJ);
   // Convert the decryptor's natural CFG into a switch dispatcher. The body is
   // tiny and acyclic (one loop), so the rewrite is local and safe.
   static void flattenDecryptor(Function &F, uint32_t BuildNonce);
@@ -680,13 +683,9 @@ GlobalVariable *StringEncryption::emitFakePool(Module &M,
 }
 
 Value *StringEncryption::resolvePoolBase(IRBuilder<> &IRBInsert,
-                                         unsigned PoolIndex) {
+                                         unsigned PoolIndex, bool UnsafeNLJ) {
   GlobalVariable *GV = EncryptedStringTables[PoolIndex];
-  Function *Host = IRBInsert.GetInsertBlock()
-                       ? IRBInsert.GetInsertBlock()->getParent()
-                       : nullptr;
-  if (!UsePageTableAccess ||
-      (Host && functionParticipatesInNonLocalJump(*Host))) {
+  if (!UsePageTableAccess || UnsafeNLJ) {
     auto *GEP = IRBInsert.CreateInBoundsGEP(
         GV->getValueType(), GV, {IRBInsert.getInt32(0), IRBInsert.getInt32(0)});
     return GEP;
@@ -1262,6 +1261,11 @@ bool StringEncryption::processConstantStringUse(Function *F) {
   // L3: delayed-decrypt forces every use onto a scratch buffer that is
   // scrubbed before the function returns, regardless of the cache path.
   const bool UnsafeNLJ = functionParticipatesInNonLocalJump(*F);
+  std::optional<DenseMap<BasicBlock *, ColorVector>> EHColors;
+  if (F->hasPersonalityFn() && isScopedEHPersonality(
+          classifyEHPersonality(F->getPersonalityFn())))
+    EHColors.emplace(colorEHFunclets(*F));
+  const auto *EHColorMap = EHColors ? &*EHColors : nullptr;
   const bool UseHeap = opt.stringHeapDecrypt() && !UnsafeNLJ;
   const bool UseStack =
       !UnsafeNLJ &&
@@ -1283,7 +1287,7 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                          bool Temporary) -> Value * {
     // L3: pool base may be resolved through a page table; otherwise use the
     // direct global GEP. The per-entry offset indexes into the chosen shard.
-    Value *PoolBase = resolvePoolBase(IRB, Entry->PoolIndex);
+    Value *PoolBase = resolvePoolBase(IRB, Entry->PoolIndex, UnsafeNLJ);
     Data = IRB.CreateInBoundsGEP(
         IRB.getInt8Ty(), PoolBase, IRB.getInt32(Entry->Offset));
     Function *DecFunc = Entry->IsUTF16 ? SharedDecFuncI16 : SharedDecFuncI8;
@@ -1307,14 +1311,15 @@ bool StringEncryption::processConstantStringUse(Function *F) {
         OutBuf = IRB.CreateAlloca(Entry->DecGV->getValueType());
       }
     }
-    Value *Callee = resolveDecryptorCallee(IRB, DecFunc);
+    Value *Callee = resolveDecryptorCallee(IRB, DecFunc, UnsafeNLJ);
     fixEH(createDecryptorCall(IRB, Callee, DecFunc,
                               {OutBuf, Data, IRB.getInt32(KeyElemSize),
                                IRB.getInt32(DataSize),
                                IRB.getInt32(Entry->EncGapBytes), StatusPtr,
                                IRB.getInt32(Entry->DoneStatus),
                                IRB.getInt32(Entry->ID),
-                               IRB.getInt32(BuildNonce)}));
+                               IRB.getInt32(BuildNonce)}),
+          EHColorMap);
     return OutBuf;
   };
 
@@ -1344,7 +1349,8 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                          {OutBuf, Data, IRB.getInt32(KeyElemSize),
                           IRB.getInt32(DataSize),
                           IRB.getInt32(Entry->EncGapBytes), StatusPtr,
-                          IRB.getInt32(Entry->PendingStatus)}));
+                          IRB.getInt32(Entry->PendingStatus)}),
+          EHColorMap);
   };
 
   auto emitAfterUse = [&](Instruction &Inst, CSPEntry *Entry, Value *OutBuf,
@@ -1401,7 +1407,8 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                 Instruction *InsertPoint =
                     PHI->getIncomingBlock(i)->getTerminator();
                 IRBuilder<> IRB(InsertPoint);
-                fixEH(IRB.CreateCall(User->InitFunc, {User->DecGV}));
+                fixEH(IRB.CreateCall(User->InitFunc, {User->DecGV}),
+                      EHColorMap);
                 Inst.replaceUsesOfWith(GV, User->DecGV);
                 MaybeDeadGlobalVars.insert(GV);
                 DecryptedGV.insert(GV);
@@ -1418,7 +1425,7 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                 IRBuilder<> IRB(InsertPoint);
 
                 Value *OutBuf = Entry->DecGV;
-                Value *PoolBase = resolvePoolBase(IRB, Entry->PoolIndex);
+                Value *PoolBase = resolvePoolBase(IRB, Entry->PoolIndex, UnsafeNLJ);
                 Value *Data = IRB.CreateInBoundsGEP(
                     IRB.getInt8Ty(), PoolBase, IRB.getInt32(Entry->Offset));
                 Function *DecFunc =
@@ -1430,14 +1437,15 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                 uint32_t DataSize =
                     Entry->IsUTF16 ? static_cast<uint32_t>(Entry->Data16.size())
                                    : static_cast<uint32_t>(Entry->Data.size());
-                Value *Callee = resolveDecryptorCallee(IRB, DecFunc);
+                Value *Callee = resolveDecryptorCallee(IRB, DecFunc, UnsafeNLJ);
                 fixEH(createDecryptorCall(
-                    IRB, Callee, DecFunc,
-                    {OutBuf, Data, IRB.getInt32(KeyElemSize),
-                     IRB.getInt32(DataSize), IRB.getInt32(Entry->EncGapBytes),
-                     Entry->DecStatus,
-                     IRB.getInt32(Entry->DoneStatus), IRB.getInt32(Entry->ID),
-                     IRB.getInt32(BuildNonce)}));
+                          IRB, Callee, DecFunc,
+                          {OutBuf, Data, IRB.getInt32(KeyElemSize),
+                           IRB.getInt32(DataSize), IRB.getInt32(Entry->EncGapBytes),
+                           Entry->DecStatus,
+                           IRB.getInt32(Entry->DoneStatus), IRB.getInt32(Entry->ID),
+                           IRB.getInt32(BuildNonce)}),
+                      EHColorMap);
 
                 Inst.replaceUsesOfWith(GV, Entry->DecGV);
                 MaybeDeadGlobalVars.insert(GV);
@@ -1463,7 +1471,8 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                                                        ->getPrevNode()
                                                        ->getFirstInsertionPt()
                                                : &Inst);
-                fixEH(IRB.CreateCall(User->InitFunc, {User->DecGV}));
+                fixEH(IRB.CreateCall(User->InitFunc, {User->DecGV}),
+                      EHColorMap);
                 Inst.replaceUsesOfWith(GV, User->DecGV);
                 MaybeDeadGlobalVars.insert(GV);
                 DecryptedGV.insert(GV);
@@ -1519,13 +1528,9 @@ bool StringEncryption::processConstantStringUse(Function *F) {
 }
 
 Value *StringEncryption::resolveDecryptorCallee(IRBuilder<> &IRBInsert,
-                                                Function *DecFunc) {
-  if (!UseDecryptorIndirectCall)
-    return DecFunc;
-  Function *Host = IRBInsert.GetInsertBlock()
-                       ? IRBInsert.GetInsertBlock()->getParent()
-                       : nullptr;
-  if (Host && functionParticipatesInNonLocalJump(*Host))
+                                                Function *DecFunc,
+                                                bool UnsafeNLJ) {
+  if (!UseDecryptorIndirectCall || UnsafeNLJ)
     return DecFunc;
   // indirect-call hardening is owned by the dedicated IndirectCall
   // pass downstream. Rather than duplicate its page-table machinery here

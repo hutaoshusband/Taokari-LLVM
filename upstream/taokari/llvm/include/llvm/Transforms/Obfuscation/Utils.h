@@ -2,6 +2,7 @@
 #define __UTILS_OBF__
 
 #include "llvm/IR/Function.h"
+#include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -54,7 +55,8 @@ struct BuildDecryptArgs {
 IntegerType *getPageTableIntTy(Module &M);
 bool valueEscapes(Instruction *Inst);
 void fixStack(Function *f);
-CallBase *fixEH(CallBase *CB);
+CallBase *fixEH(CallBase *CB,
+                const DenseMap<BasicBlock *, ColorVector> *Precolored = nullptr);
 void LowerConstantExpr(Function &F);
 void collectConstantStringUser(GlobalVariable *CString,
                                SmallPtrSetImpl<GlobalVariable *> &Users);
