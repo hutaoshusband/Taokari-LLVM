@@ -320,6 +320,21 @@ overhead is predictable on large inputs:
 | `-taokari-opaq-family=<f>`            | Opaque predicate identity family: algebraic (foldable L1), unfoldable (L2), nested (L3 two-level chain). Drives passes that use the predicate registry. |
 | `-taokari-vmp-max-bytecode-words=N`   | Refuse VMP candidates whose bytecode exceeds N words. |
 | `-taokari-vmp-max-back-edges=N`       | Refuse VMP candidates with more than N loop back-edges. |
+| `-taokari-bcf-prob=N`                 | BCF block selection probability, 0..100 (default 35). |
+| `-taokari-bcf-loops=N`                | Fake-block junk loop count per BCF-wrapped block (default 0). |
+| `-taokari-bcf-max-insts=N`            | Skip functions larger than N instructions (default 5000; matches the flattening guard so BCF cannot blow up on functions FLA already expanded into a giant dispatcher). |
+| `-taokari-bcf-max-blocks=N`           | Skip functions with more than N basic blocks (default 200). |
+| `-taokari-fla-indirectbr-dispatch`    | Use an indirectbr-backed level-4 flattening dispatcher (off by default). |
+| `-taokari-indgv-no-dedup`             | Per-use global decrypt: skips the entry-block dedup cache so every access to a global gets its own decrypt sequence. More resilient (no shared slot to patch) at the cost of larger code (off by default). |
+| `-taokari-cie-no-dedup`               | Per-use constant decrypt: skips the entry-block dedup cache AND the shared pool-base slot, so every constant use emits its own decrypt sequence and page-table chain. No shared slot to patch; heavier compile and larger code (off by default). |
+| `-taokari-outline-prob=N`             | Function outlining block selection probability, 0..100 (default 35). |
+| `-taokari-outline-min-size=N`         | Minimum instruction count for a block to be worth outlining (default 3). |
+| `-taokari-outline-fakes=N`            | L2 decoy shard functions emitted per real shard to pollute the static call graph; 0 disables (default 1). |
+| `-taokari-outline-scramble=N`         | L2 XOR-scramble of integer shard arguments and the return value with a per-call key; 0 disables (default 1). |
+| `-taokari-ocnst-prob=N`               | Opaque-constant substitution probability, 0..100 (default 35). |
+| `-taokari-ocnst-min-bits=N`           | Minimum integer constant bit-width to substitute (default 16). |
+| `-taokari-const-volatile-seed`        | Use volatile runtime seed loads in constant decryptors (on by default; `=0` disables). |
+| `-taokari-const-decryptor-mba`        | Use MBA for the final constant decryptor add (off by default). |
 
 ### Compile-time-expensive (avoid in tight loops)
 
