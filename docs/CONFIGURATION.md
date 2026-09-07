@@ -321,7 +321,7 @@ overhead is predictable on large inputs:
 | `-taokari-vmp-max-bytecode-words=N`   | Refuse VMP candidates whose bytecode exceeds N words. |
 | `-taokari-vmp-max-back-edges=N`       | Refuse VMP candidates with more than N loop back-edges. |
 | `-taokari-bcf-prob=N`                 | BCF block selection probability, 0..100 (default 35). |
-| `-taokari-bcf-loops=N`                | Fake-block junk loop count per BCF-wrapped block (default 0). |
+| `-taokari-bcf-loops=N`                | Fake-block junk loop count per BCF-wrapped block (default 0 = derive from level: max(1, level+1) when neither this flag nor a per-function loop count is set). |
 | `-taokari-bcf-max-insts=N`            | Skip functions larger than N instructions (default 5000; matches the flattening guard so BCF cannot blow up on functions FLA already expanded into a giant dispatcher). |
 | `-taokari-bcf-max-blocks=N`           | Skip functions with more than N basic blocks (default 200). |
 | `-taokari-fla-indirectbr-dispatch`    | Use an indirectbr-backed level-4 flattening dispatcher (off by default). |
