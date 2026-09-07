@@ -199,7 +199,7 @@ def check_module(module: str) -> tuple[int, list[str]]:
 
 
 def bcf_slot_allocas(fn_text: str) -> list[str]:
-    entry, blocks = parse_blocks(fn_text)
+    _, blocks = parse_blocks(fn_text)
     hits = []
     for _, body in blocks.items():
         for l in body:
