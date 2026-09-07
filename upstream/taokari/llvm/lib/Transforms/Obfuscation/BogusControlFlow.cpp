@@ -87,11 +87,13 @@ struct BogusControlFlow : public FunctionPass {
     }
 
     std::mt19937_64 FuncRNG(RNG());
-    auto *JunkSlot = createEntrySlot(F, Type::getInt64Ty(F.getContext()));
+    AllocaInst *JunkSlot = nullptr;
     bool Changed = false;
     for (BasicBlock *BB : Blocks) {
       if ((FuncRNG() % 100) >= Probability)
         continue;
+      if (!JunkSlot)
+        JunkSlot = createEntrySlot(F, Type::getInt64Ty(F.getContext()));
       Changed |= obfuscateBlock(F, *BB, Opt.level(), Loops, FuncRNG,
                                 *JunkSlot);
     }
