@@ -98,14 +98,14 @@ def main() -> int:
     shutil.rmtree(tmp, ignore_errors=True)
 
   counts = [len(params) for params in samples]
-  gate(all(14 <= count <= 17 for count in counts),
+  gate(all(15 <= count <= 18 for count in counts),
        f"interpreter arity includes 1..4 dummy args: {counts}")
   dummy_positions: list[tuple[int, ...]] = []
   real_orders: list[tuple[str, ...]] = []
   old_order = (
       "bc.a", "bc.b", "bc.split", "bclen", "pc.map", "ptr.table",
       "ptr.count", "args", "arg.len", "tamper", "bytecode.tag",
-      "opcode.map", "bytecode.key")
+      "opcode.map", "vmp.xstate", "bytecode.key")
   for params in samples:
     names = tuple(param_name(param) for param in params)
     positions = tuple(
@@ -116,8 +116,9 @@ def main() -> int:
     gate("bc" not in names, "old single bytecode pointer name is absent")
     for split_name in ("bc.a", "bc.b", "bc.split"):
       gate(split_name in names, f"{split_name} is present in interpreter ABI")
+    gate("vmp.xstate" in names, "vmp.xstate is present in interpreter ABI")
     gate(positions, f"dummy arg present at position(s) {positions}")
-    gate(len(positions) == len(params) - 13,
+    gate(len(positions) == len(params) - 14,
          f"dummy count matches arity delta for {len(params)} args")
     gate(real_order != old_order,
          f"real interpreter parameter order differs from old ABI: {real_order}")
