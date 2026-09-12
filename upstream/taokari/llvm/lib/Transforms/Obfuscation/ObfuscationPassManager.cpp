@@ -420,8 +420,16 @@ struct ObfuscationPassManager : public ModulePass {
     for (Function &F : M)
       Snapshot.push_back(&F);
     for (Function *F : Snapshot) {
-      if (F->isDeclaration() || isTaokariHelper(*F))
+      if (F->isDeclaration())
         continue;
+      if (isTaokariHelper(*F)) {
+        // Only IndirectCall may touch the VMP interpreters: their direct
+        // helper calls must be routed like any other call site.
+        bool IcallRoutesInterp = P->getPassName() == "IndirectCall" &&
+                                 F->getName().starts_with("__taokari_vmp_interp_");
+        if (!IcallRoutesInterp)
+          continue;
+      }
       Changed |= P->runOnFunction(*F);
     }
     return Changed;
