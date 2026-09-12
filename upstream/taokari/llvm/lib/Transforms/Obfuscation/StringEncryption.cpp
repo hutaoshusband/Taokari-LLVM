@@ -305,6 +305,32 @@ struct StringEncryption : public ModulePass {
 
 char StringEncryption::ID = 0;
 
+// isCString() rejects arrays with interior NULs, which silently leaves
+// NUL-padded fixed-size char arrays (strncpy expansion, char a[N] = "str")
+// plaintext. The encrypt/decrypt round-trip is byte-exact, so the padding
+// needs no special treatment.
+static bool isNulPaddedCharArray(const ConstantDataSequential *CDS) {
+  if (!CDS->getType()->isArrayTy() || !CDS->getElementType()->isIntegerTy(8))
+    return false;
+  const unsigned N = CDS->getNumElements();
+  if (N < 2 || CDS->getElementAsInteger(N - 1) != 0)
+    return false;
+  unsigned FirstNul = N;
+  for (unsigned I = 0; I < N; ++I) {
+    if (CDS->getElementAsInteger(I) == 0) {
+      FirstNul = I;
+      break;
+    }
+  }
+  if (FirstNul >= N - 1)
+    return false;
+  for (unsigned I = FirstNul; I < N; ++I) {
+    if (CDS->getElementAsInteger(I) != 0)
+      return false;
+  }
+  return true;
+}
+
 bool StringEncryption::runOnModule(Module &M) {
   SmallPtrSet<GlobalVariable *, 16> ConstantStringUsers;
 
@@ -335,7 +361,7 @@ bool StringEncryption::runOnModule(Module &M) {
     if (Init == nullptr)
       continue;
     if (ConstantDataSequential *CDS = dyn_cast<ConstantDataSequential>(Init)) {
-      if (CDS->isCString()) {
+      if (CDS->isCString() || isNulPaddedCharArray(CDS)) {
         StringRef Data = CDS->getRawDataValues();
         std::vector<uint8_t> PlainData;
         PlainData.reserve(Data.size());
@@ -725,8 +751,14 @@ Value *StringEncryption::resolvePoolBase(IRBuilder<> &IRBInsert,
   return Base;
 }
 
+// Length up to the first NUL so NUL-padded arrays compare against
+// minStringLength / skipStrings like their effective string content.
 static unsigned getPlainLength(ArrayRef<uint8_t> Data) {
-  return !Data.empty() && Data.back() == 0 ? Data.size() - 1 : Data.size();
+  for (unsigned I = 0, E = Data.size(); I < E; ++I) {
+    if (Data[I] == 0)
+      return I;
+  }
+  return Data.size();
 }
 
 static unsigned getPlainLength(ArrayRef<uint16_t> Data) {
