@@ -484,6 +484,8 @@ struct ObfuscationPassManager : public ModulePass {
         O->setProbability(100);
         O->setFunctionProbability(100);
       }
+      Opt->ocnstOpt()->setProbability(25);
+      // prob 100 would move CIE's whole >=16-bit share to ocnst's light XOR.
       Opt->bcfOpt()->setLoopCount(3);
       Opt->cseOpt()->setMinStringLength(1);
       Opt->cseOpt()->setStringLocalStackDecrypt(true);
@@ -560,6 +562,7 @@ struct ObfuscationPassManager : public ModulePass {
       PrintOpt("indgv", Options->indGvOpt());
       PrintOpt("fla", Options->flaOpt());
       PrintOpt("cse", Options->cseOpt());
+      PrintOpt("ocnst", Options->ocnstOpt());
       PrintOpt("cie", Options->cieOpt());
       PrintOpt("cfe", Options->cfeOpt());
       PrintOpt("bcf", Options->bcfOpt());
@@ -578,8 +581,8 @@ struct ObfuscationPassManager : public ModulePass {
     // (single successor, no PHI) is only stable this early in the pipeline.
     add(llvm::createFunctionOutliningPass(Options.get()));
 
-    add(llvm::createConstantIntEncryptionPass(Options.get()));
     add(llvm::createOpaqueConstantPass(Options.get()));
+    add(llvm::createConstantIntEncryptionPass(Options.get()));
 
     add(llvm::createIndirectGlobalVariablePass(Options.get()));
 
