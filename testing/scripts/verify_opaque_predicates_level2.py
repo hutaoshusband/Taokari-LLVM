@@ -68,7 +68,9 @@ static int emit(const char *Name, taokari::OpaqueSeedKind Kind, bool Unfoldable)
                                  GlobalValue::ExternalLinkage, Name, M);
   BasicBlock *BB = BasicBlock::Create(Ctx, "entry", F);
   IRBuilder<> IRB(BB);
-  std::mt19937_64 RNG(99);
+  // 102: draw order lands makeTruePredicate on an even-low-bit xor variant,
+  // whose fold is the vacuity control below.
+  std::mt19937_64 RNG(102);
   Value *Seed = taokari::makeContextSeed(*F, IRB, I32, RNG, Kind, "seed");
   Value *P = Unfoldable
       ? taokari::makeUnfoldableTruePredicate(IRB, Seed, RNG, "p")
@@ -213,7 +215,7 @@ def compile_harness(src: Path, exe: Path) -> subprocess.CompletedProcess[str]:
     system_libs = [
         lib for lib in words(run([str(LLVM_CONFIG), "--system-libs"]).stdout)
         if lib.lower() not in {"zlib.lib", "xml2.lib"}
-    ]
+    ] + ["ntdll.lib"]  # llvm-config omits it; ErrorHandling needs RtlGetLastNtStatus
     cmd = [
         str(CLANG_CL), "/nologo", "/std:c++17", "/EHsc", "/GR-", "/MT",
         f"/I{BUILD / 'include'}",

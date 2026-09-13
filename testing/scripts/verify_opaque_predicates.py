@@ -138,7 +138,7 @@ def main() -> int:
   system_libs = [
       lib for lib in words(run([str(LLVM_CONFIG), "--system-libs"]).stdout)
       if lib.lower() not in {"zlib.lib", "xml2.lib"}
-  ]
+  ] + ["ntdll.lib"]  # llvm-config omits it; ErrorHandling needs RtlGetLastNtStatus
 
   with tempfile.TemporaryDirectory(prefix="taokari-opaque-") as tmp_name:
     tmp = Path(tmp_name)
