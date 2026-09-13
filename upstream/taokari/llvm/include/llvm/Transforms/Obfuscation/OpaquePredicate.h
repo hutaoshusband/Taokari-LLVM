@@ -73,15 +73,23 @@ Value *makeFalsePredicate(IRBuilder<> &IRB, Value *Seed, std::mt19937_64 &RNG,
 ///
 /// Uses identities that hold for every integer x but have no InstCombine
 /// simplification rule (e.g. `x*(x+1)` is always even, including under
-/// overflow, because parity is preserved modulo 2^k). Combined with a
-/// non-constant context seed, neither constant folding nor InstCombine can
-/// evaluate the result away.
+/// overflow, because parity is preserved modulo 2^k). The identity shape is
+/// drawn from \c RNG per call site so no single solver rule or binary pattern
+/// covers all guards. Combined with a non-constant context seed, neither
+/// constant folding nor InstCombine can evaluate the result away.
 Value *makeUnfoldableTruePredicate(IRBuilder<> &IRB, Value *Seed,
                                    std::mt19937_64 &RNG,
                                    const Twine &Name = "tao.opq.utrue");
 Value *makeUnfoldableFalsePredicate(IRBuilder<> &IRB, Value *Seed,
                                     std::mt19937_64 &RNG,
                                     const Twine &Name = "tao.opq.ufalse");
+
+/// RNG-selected always-zero expression over \c Seed (the value form of the
+/// unfoldable identity family, for callers that need the integer itself, e.g.
+/// a switch condition that must always take case 0).
+Value *makeUnfoldableEvenValue(IRBuilder<> &IRB, Value *Seed,
+                               std::mt19937_64 &RNG,
+                               const Twine &Name = "tao.opq.ueven");
 
 /// Nested unfoldable predicates (Level 3). Compose two unfoldable identities
 /// through a shared seed so the result is a two-level chain: a single

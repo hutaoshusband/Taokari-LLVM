@@ -22,6 +22,7 @@
 #include "llvm/Support/RandomNumberGenerator.h"
 #include "llvm/Transforms/Obfuscation/LegacyLowerSwitch.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
+#include "llvm/Transforms/Obfuscation/OpaquePredicate.h"
 #include "llvm/Transforms/Obfuscation/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -288,21 +289,19 @@ bool Flattening::flatten(Function *f) {
   auto buildOpaqueEven = [&](IRBuilder<> &Builder,
                              const Twine &Name) -> Value * {
     Value *seed = Builder.CreateLoad(IntTy, switchXorVar, true, Name + ".seed");
-    Value *pair =
-        Builder.CreateAdd(Builder.CreateMul(seed, seed), seed, Name + ".pair");
-    return Builder.CreateAnd(pair, ConstantInt::get(IntTy, 1), Name + ".bit");
+    return taokari::makeUnfoldableEvenValue(Builder, seed, RNG, Name);
   };
 
   auto buildOpaqueTrue = [&](IRBuilder<> &Builder,
                              const Twine &Name) -> Value * {
-    return Builder.CreateICmpEQ(buildOpaqueEven(Builder, Name),
-                                ConstantInt::get(IntTy, 0), Name + ".true");
+    Value *seed = Builder.CreateLoad(IntTy, switchXorVar, true, Name + ".seed");
+    return taokari::makeUnfoldableTruePredicate(Builder, seed, RNG, Name);
   };
 
   auto buildOpaqueFalse = [&](IRBuilder<> &Builder,
                               const Twine &Name) -> Value * {
-    return Builder.CreateICmpNE(buildOpaqueEven(Builder, Name),
-                                ConstantInt::get(IntTy, 0), Name + ".false");
+    Value *seed = Builder.CreateLoad(IntTy, switchXorVar, true, Name + ".seed");
+    return taokari::makeUnfoldableFalsePredicate(Builder, seed, RNG, Name);
   };
 
   auto buildXorExpr = [&](IRBuilder<> &Builder, Value *LHS, Value *RHS,

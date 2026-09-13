@@ -298,68 +298,98 @@ Value *taokari::makeFalsePredicate(IRBuilder<> &IRB, Value *Seed,
   return IRB.CreateICmpNE(makePartition(IRB, Seed, Mask, Name), Mask, Name);
 }
 
+Value *taokari::makeUnfoldableEvenValue(IRBuilder<> &IRB, Value *Seed,
+                                        std::mt19937_64 &RNG,
+                                        const Twine &Name) {
+  auto *IntTy = cast<IntegerType>(Seed->getType());
+  auto *One = ConstantInt::get(IntTy, 1);
+  switch (RNG() % 5) {
+  case 1: {
+    // x*(x-1) is always even: consecutive integers, one is even.
+    Value *Prev = IRB.CreateSub(Seed, One, Name + ".prev");
+    return IRB.CreateAnd(IRB.CreateMul(Seed, Prev, Name + ".prodp"), One,
+                         Name + ".lowp");
+  }
+  case 2:
+  case 3:
+  case 4: {
+    // x*(x+1)*(x+2)*(x+3) is always a multiple of 8: four consecutive
+    // integers contain a multiple of 4 and another even number.
+    Value *Inc = IRB.CreateAdd(Seed, One, Name + ".inc");
+    Value *P1 = IRB.CreateMul(Seed, Inc, Name + ".p1");
+    Value *P2 = IRB.CreateMul(
+        P1, IRB.CreateAdd(Seed, ConstantInt::get(IntTy, 2), Name + ".inc2"),
+        Name + ".p2");
+    Value *P3 = IRB.CreateMul(
+        P2, IRB.CreateAdd(Seed, ConstantInt::get(IntTy, 3), Name + ".inc3"),
+        Name + ".p3");
+    switch (RNG() % 3) {
+    case 0:
+      return IRB.CreateAnd(P3, ConstantInt::get(IntTy, 7), Name + ".lowq");
+    case 1: {
+      Value *Shr = IRB.CreateAShr(P3, 1, Name + ".shr");
+      return IRB.CreateAnd(Shr, ConstantInt::get(IntTy, 3), Name + ".lows");
+    }
+    default: {
+      Value *Shr = IRB.CreateAShr(P3, 2, Name + ".shr2");
+      return IRB.CreateAnd(Shr, One, Name + ".lowt");
+    }
+    }
+  }
+  default:
+    break;
+  }
+  // x*(x+1) is always even: consecutive integers, one is even.
+  Value *Inc = IRB.CreateAdd(Seed, One, Name + ".inc");
+  Value *Prod = IRB.CreateMul(Seed, Inc, Name + ".prod");
+  return IRB.CreateAnd(Prod, One, Name + ".low");
+}
+
 Value *taokari::makeUnfoldableTruePredicate(IRBuilder<> &IRB, Value *Seed,
                                             std::mt19937_64 &RNG,
                                             const Twine &Name) {
-  // x*(x+1) is always even: among two consecutive integers one is even, so the
-  // product is even, including under unsigned wraparound (parity is preserved
-  // modulo 2^k). There is no InstCombine rule that proves this, so the only
-  // way the optimizer can simplify the comparison is to fold the seed first.
-  // Level-2 seeds are runtime values, so the predicate stays.
-  auto *IntTy = cast<IntegerType>(Seed->getType());
-  Value *Inc = IRB.CreateAdd(Seed, ConstantInt::get(IntTy, 1), Name + ".inc");
-  Value *Prod = IRB.CreateMul(Seed, Inc, Name + ".prod");
-  Value *Low = IRB.CreateAnd(Prod, ConstantInt::get(IntTy, 1), Name + ".low");
-  return IRB.CreateICmpEQ(Low, ConstantInt::get(IntTy, 0), Name);
+  // The family members hold for every x and have no InstCombine rule that
+  // proves them, so the only way the optimizer can simplify the comparison is
+  // to fold the seed first. Level-2 seeds are runtime values, so the predicate
+  // stays.
+  Value *Even = makeUnfoldableEvenValue(IRB, Seed, RNG, Name);
+  return IRB.CreateICmpEQ(Even, ConstantInt::get(Even->getType(), 0), Name);
 }
 
 Value *taokari::makeUnfoldableFalsePredicate(IRBuilder<> &IRB, Value *Seed,
                                              std::mt19937_64 &RNG,
                                              const Twine &Name) {
-  // x*(x+1) is always even, so the low bit is always 0; comparing it equal to
-  // 1 is therefore always false (the complement of makeUnfoldableTruePredicate,
-  // which compares it equal to 0). Same non-foldable identity.
-  auto *IntTy = cast<IntegerType>(Seed->getType());
-  Value *Inc = IRB.CreateAdd(Seed, ConstantInt::get(IntTy, 1), Name + ".inc");
-  Value *Prod = IRB.CreateMul(Seed, Inc, Name + ".prod");
-  Value *Low = IRB.CreateAnd(Prod, ConstantInt::get(IntTy, 1), Name + ".low");
-  return IRB.CreateICmpEQ(Low, ConstantInt::get(IntTy, 1), Name);
+  // The even value is always 0, so both comparison forms below are always
+  // false for every member of the family.
+  Value *Even = makeUnfoldableEvenValue(IRB, Seed, RNG, Name);
+  auto *IntTy = cast<IntegerType>(Even->getType());
+  if (RNG() & 1)
+    return IRB.CreateICmpNE(Even, ConstantInt::get(IntTy, 0), Name);
+  return IRB.CreateICmpEQ(Even, ConstantInt::get(IntTy, 1), Name);
 }
-
-namespace {
-// Build the always-even neighbour product x*(x+1) and return its low bit,
-// which is always 0. Shared core for the nested predicates.
-Value *neighbourProductLow(IRBuilder<> &IRB, Value *X, const Twine &Name) {
-  auto *IntTy = cast<IntegerType>(X->getType());
-  Value *Inc = IRB.CreateAdd(X, ConstantInt::get(IntTy, 1), Name + ".inc");
-  Value *Prod = IRB.CreateMul(X, Inc, Name + ".prod");
-  return IRB.CreateAnd(Prod, ConstantInt::get(IntTy, 1), Name + ".low");
-}
-} // namespace
 
 Value *taokari::makeNestedTruePredicate(IRBuilder<> &IRB, Value *Seed,
                                         std::mt19937_64 &RNG,
                                         const Twine &Name) {
-  // Two-level chain: inner low bit (always 0) is folded back into the seed,
-  // then the neighbour-product identity is applied again. At runtime the inner
-  // low bit is 0 so Derived == Seed, and the outer low bit is again 0; the
-  // equality to 0 is true. No single simplification step resolves it because
-  // the inner identity must be proved before the add can be evaluated.
-  Value *InnerLow = neighbourProductLow(IRB, Seed, Name + ".i");
-  Value *Derived = IRB.CreateAdd(Seed, InnerLow, Name + ".drv");
-  Value *OuterLow = neighbourProductLow(IRB, Derived, Name + ".o");
-  auto *IntTy = cast<IntegerType>(Seed->getType());
-  return IRB.CreateICmpEQ(OuterLow, ConstantInt::get(IntTy, 0), Name);
+  // Two-level chain: the inner always-zero family value is folded back into
+  // the seed, then a second family member is applied to the derived seed. At
+  // runtime the inner value is 0 so Derived == Seed, and the outer value is
+  // again 0; the equality to 0 is true. No single simplification step resolves
+  // it because the inner identity must be proved before the add can be
+  // evaluated.
+  Value *Inner = makeUnfoldableEvenValue(IRB, Seed, RNG, Name + ".i");
+  Value *Derived = IRB.CreateAdd(Seed, Inner, Name + ".drv");
+  Value *Outer = makeUnfoldableEvenValue(IRB, Derived, RNG, Name + ".o");
+  return IRB.CreateICmpEQ(Outer, ConstantInt::get(Outer->getType(), 0), Name);
 }
 
 Value *taokari::makeNestedFalsePredicate(IRBuilder<> &IRB, Value *Seed,
                                          std::mt19937_64 &RNG,
                                          const Twine &Name) {
   // Complement of the nested true predicate: same chain, compared equal to 1.
-  // The outer low bit is always 0, so the comparison is always false.
-  Value *InnerLow = neighbourProductLow(IRB, Seed, Name + ".i");
-  Value *Derived = IRB.CreateAdd(Seed, InnerLow, Name + ".drv");
-  Value *OuterLow = neighbourProductLow(IRB, Derived, Name + ".o");
-  auto *IntTy = cast<IntegerType>(Seed->getType());
-  return IRB.CreateICmpEQ(OuterLow, ConstantInt::get(IntTy, 1), Name);
+  // The outer value is always 0, so the comparison is always false.
+  Value *Inner = makeUnfoldableEvenValue(IRB, Seed, RNG, Name + ".i");
+  Value *Derived = IRB.CreateAdd(Seed, Inner, Name + ".drv");
+  Value *Outer = makeUnfoldableEvenValue(IRB, Derived, RNG, Name + ".o");
+  return IRB.CreateICmpEQ(Outer, ConstantInt::get(Outer->getType(), 1), Name);
 }

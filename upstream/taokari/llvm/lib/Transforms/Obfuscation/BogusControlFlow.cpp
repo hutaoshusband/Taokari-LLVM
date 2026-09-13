@@ -127,7 +127,7 @@ struct BogusControlFlow : public FunctionPass {
     LLVMContext &Ctx = F.getContext();
     auto &M = *F.getParent();
     auto *Int64 = Type::getInt64Ty(Ctx);
-    auto *Nonce = getOrCreateNonce(M, Int64);
+    auto *Nonce = getOrCreateNonce(M, Int64, FuncRNG);
 
     ValueToValueMapTy VMap;
     BasicBlock *Fake = CloneBasicBlock(&BB, VMap, ".bcf.fake", &F);
@@ -171,12 +171,8 @@ struct BogusControlFlow : public FunctionPass {
       } else {
         auto *Load = GuardIR.CreateAlignedLoad(Int64, Nonce, Align(8), true,
                                                "bcf.nonce");
-        Value *A = GuardIR.CreateMul(
-            Load, GuardIR.CreateAdd(Load, ConstantInt::get(Int64, 1)),
-            "bcf.opaque.mul");
-        Opaque = GuardIR.CreateICmpEQ(
-            GuardIR.CreateAnd(A, ConstantInt::get(Int64, 1), "bcf.opaque.bit"),
-            ConstantInt::get(Int64, 0), "bcf.opaque");
+        Opaque = taokari::makeUnfoldableTruePredicate(GuardIR, Load, FuncRNG,
+                                                      "bcf.opaque");
       }
 
       BasicBlock *InnerFake = Fake;
@@ -229,10 +225,11 @@ struct BogusControlFlow : public FunctionPass {
     return true;
   }
 
-  static GlobalVariable *getOrCreateNonce(Module &M, IntegerType *IntTy) {
+  static GlobalVariable *getOrCreateNonce(Module &M, IntegerType *IntTy,
+                                          std::mt19937_64 &FuncRNG) {
     if (auto *GV = M.getGlobalVariable("__taokari_bcf_nonce", true))
       return GV;
-    auto *Init = ConstantInt::get(IntTy, 0x9e3779b97f4a7c15ull);
+    auto *Init = ConstantInt::get(IntTy, FuncRNG());
     auto *GV = new GlobalVariable(M, IntTy, false, GlobalValue::PrivateLinkage,
                                   Init, "__taokari_bcf_nonce");
     GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
