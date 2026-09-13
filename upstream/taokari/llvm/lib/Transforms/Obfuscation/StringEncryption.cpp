@@ -168,7 +168,8 @@ struct StringEncryption : public ModulePass {
   struct CSPEntry {
     CSPEntry()
         : ID(0), Offset(0), EncGapBytes(0), DecGV(nullptr), DecStatus(nullptr),
-          PendingStatus(0), DoneStatus(0), IsUTF16(false), PoolIndex(0) {}
+          PendingStatus(0), DoneStatus(0), IsUTF16(false), PoolIndex(0),
+          SrcGV(nullptr), AncGV(nullptr), AncStatus(nullptr) {}
 
     unsigned ID;
     unsigned Offset;
@@ -186,6 +187,11 @@ struct StringEncryption : public ModulePass {
     std::vector<uint16_t> EncKey16;
     // L3: which shard pool this entry was emitted into.
     unsigned PoolIndex;
+    GlobalVariable *SrcGV;
+    // Stable always-plaintext image other globals' initializers point at;
+    // decrypted once by the module ctor, independent of DecGV scrubbing.
+    GlobalVariable *AncGV;
+    GlobalVariable *AncStatus;
   };
 
   struct CSUser {
@@ -222,6 +228,9 @@ struct StringEncryption : public ModulePass {
   Function *SharedScrubFuncI8 = nullptr;
   Function *SharedScrubFuncI16 = nullptr;
   std::set<GlobalVariable *> MaybeDeadGlobalVars;
+  // Anchored entries whose image global some other global's initializer now
+  // references; all are decrypted by the module ctor.
+  SmallVector<CSPEntry *, 4> AnchorImages;
   uint32_t BuildNonce = 0;
   // L3 fortress knobs resolved once per module (cse level >= 3).
   bool UseDecryptorMBA = false;
@@ -257,6 +266,7 @@ struct StringEncryption : public ModulePass {
     CSPEntryMap.clear();
     CSUserMap.clear();
     MaybeDeadGlobalVars.clear();
+    AnchorImages.clear();
     return false;
   }
 
@@ -299,6 +309,12 @@ struct StringEncryption : public ModulePass {
   // Convert the decryptor's natural CFG into a switch dispatcher. The body is
   // tiny and acyclic (one loop), so the rewrite is local and safe.
   static void flattenDecryptor(Function &F, uint32_t BuildNonce);
+  // Anchored-plaintext rewriting: point surviving anchors' initializers at
+  // per-entry image globals and decrypt those images from a module ctor.
+  Constant *rewriteAnchorConstant(Constant *C, Module &M);
+  bool rewriteAnchoredGlobals(Module &M,
+                              SmallPtrSetImpl<GlobalVariable *> &Anchors);
+  void emitAnchorInitCtor(Module &M);
 };
 
 } // anonymous namespace
@@ -392,6 +408,7 @@ bool StringEncryption::runOnModule(Module &M) {
         DecGV->setAlignment(GV.getAlign());
         Entry->DecGV = DecGV;
         Entry->DecStatus = DecStatus;
+        Entry->SrcGV = &GV;
         ConstantStringPool.push_back(Entry);
         CSPEntryMap[&GV] = Entry;
         collectConstantStringUser(&GV, ConstantStringUsers);
@@ -431,6 +448,7 @@ bool StringEncryption::runOnModule(Module &M) {
           DecGV->setAlignment(GV.getAlign());
           Entry->DecGV = DecGV;
           Entry->DecStatus = DecStatus;
+          Entry->SrcGV = &GV;
           ConstantStringPool.push_back(Entry);
           CSPEntryMap[&GV] = Entry;
           collectConstantStringUser(&GV, ConstantStringUsers);
@@ -581,6 +599,11 @@ bool StringEncryption::runOnModule(Module &M) {
     if (!Used.empty())
       appendToCompilerUsed(M, Used);
   }
+
+  // Anchors that survive deletion (extern tables, tables still loaded
+  // directly) would otherwise ship the plaintext strings they point at.
+  Changed |= rewriteAnchoredGlobals(M, ConstantStringUsers);
+  emitAnchorInitCtor(M);
 
   // delete unused global variables
   deleteUnusedGlobalVariable();
@@ -1634,6 +1657,149 @@ void StringEncryption::flattenDecryptor(Function &F, uint32_t BuildNonce) {
     Switch->addCase(IRB.getInt32(Junk), Trap);
   }
   LoopBodyTerm->eraseFromParent();
+}
+
+// Depth-first rewrite of an anchor initializer. Only pooled string globals are
+// substituted (their image); references to any other global stop the descent,
+// which also keeps cyclic anchor graphs from recursing forever. The image has
+// the same type as the source string, so GEP/bitcast expressions over it keep
+// their indices and type.
+Constant *StringEncryption::rewriteAnchorConstant(Constant *C, Module &M) {
+  if (auto *GV = dyn_cast<GlobalVariable>(C)) {
+    if (GV->getName().starts_with("llvm."))
+      return C;
+    auto Iter = CSPEntryMap.find(GV);
+    if (Iter == CSPEntryMap.end())
+      return C;
+    CSPEntry *Entry = Iter->second;
+    if (!Entry->AncGV) {
+      LLVMContext &Ctx = M.getContext();
+      Entry->AncGV = new GlobalVariable(
+          M, GV->getValueType(), false, GlobalValue::PrivateLinkage,
+          Constant::getNullValue(GV->getValueType()),
+          "anc" + Twine::utohexstr(Entry->ID) + GV->getName());
+      Entry->AncGV->setAlignment(GV->getAlign());
+      Entry->AncGV->addMetadata("noobf", *MDNode::get(Ctx, {}));
+      Entry->AncStatus = new GlobalVariable(
+          M, Type::getInt32Ty(Ctx), false, GlobalValue::PrivateLinkage,
+          ConstantInt::get(Type::getInt32Ty(Ctx), Entry->PendingStatus),
+          "anc_status_" + Twine::utohexstr(Entry->ID) + GV->getName());
+      AnchorImages.push_back(Entry);
+    }
+    return Entry->AncGV;
+  }
+  if (auto *CE = dyn_cast<ConstantExpr>(C)) {
+    SmallVector<Constant *, 4> Ops;
+    bool Changed = false;
+    for (unsigned I = 0, E = CE->getNumOperands(); I != E; ++I) {
+      Constant *New = rewriteAnchorConstant(CE->getOperand(I), M);
+      Changed |= New != CE->getOperand(I);
+      Ops.push_back(New);
+    }
+    return Changed ? CE->getWithOperands(Ops) : C;
+  }
+  if (auto *CA = dyn_cast<ConstantArray>(C)) {
+    SmallVector<Constant *, 8> Ops;
+    bool Changed = false;
+    for (unsigned I = 0, E = CA->getNumOperands(); I != E; ++I) {
+      Constant *New = rewriteAnchorConstant(CA->getOperand(I), M);
+      Changed |= New != CA->getOperand(I);
+      Ops.push_back(New);
+    }
+    return Changed ? ConstantArray::get(CA->getType(), Ops) : C;
+  }
+  if (auto *CS = dyn_cast<ConstantStruct>(C)) {
+    SmallVector<Constant *, 8> Ops;
+    bool Changed = false;
+    for (unsigned I = 0, E = CS->getNumOperands(); I != E; ++I) {
+      Constant *New = rewriteAnchorConstant(CS->getOperand(I), M);
+      Changed |= New != CS->getOperand(I);
+      Ops.push_back(New);
+    }
+    return Changed ? ConstantStruct::get(CS->getType(), Ops) : C;
+  }
+  if (auto *CV = dyn_cast<ConstantVector>(C)) {
+    SmallVector<Constant *, 8> Ops;
+    bool Changed = false;
+    for (unsigned I = 0, E = CV->getNumOperands(); I != E; ++I) {
+      Constant *New = rewriteAnchorConstant(CV->getOperand(I), M);
+      Changed |= New != CV->getOperand(I);
+      Ops.push_back(New);
+    }
+    return Changed ? ConstantVector::get(Ops) : C;
+  }
+  return C;
+}
+
+// An anchor whose function uses were all replaced gets erased together with
+// its initializer (constant-string-user path covers its readers), so only
+// surviving anchors need the rewrite. Rewritten local strings become deletable
+// once their last anchor stops referencing them; external-linkage strings stay
+// plaintext by definition (their symbol content is a cross-TU ABI).
+bool StringEncryption::rewriteAnchoredGlobals(
+    Module &M, SmallPtrSetImpl<GlobalVariable *> &Anchors) {
+  bool Changed = false;
+  for (GlobalVariable *GV : Anchors) {
+    if (!GV->hasInitializer())
+      continue;
+    // llvm.* globals (llvm.global.annotations et al) feed compile-time pass
+    // reads that run before any ctor; their initializers must stay untouched.
+    if (GV->getName().starts_with("llvm."))
+      continue;
+    if (MaybeDeadGlobalVars.count(GV) && GV->hasLocalLinkage())
+      continue;
+    Constant *NewInit = rewriteAnchorConstant(GV->getInitializer(), M);
+    if (NewInit == GV->getInitializer())
+      continue;
+    GV->setInitializer(NewInit);
+    Changed = true;
+  }
+  for (CSPEntry *Entry : AnchorImages) {
+    if (Entry->SrcGV->hasLocalLinkage())
+      MaybeDeadGlobalVars.insert(Entry->SrcGV);
+  }
+  return Changed;
+}
+
+// Rewritten initializers hand out image addresses that readers the pass never
+// touches may dereference (foreign TUs through extern tables, loads from
+// mutable tables). Decrypt every image in a priority-0 module ctor so those
+// reads observe plaintext from the earliest legal point. The images use their
+// own status globals: lazy decryption at normal use sites stays independent.
+void StringEncryption::emitAnchorInitCtor(Module &M) {
+  if (AnchorImages.empty())
+    return;
+  LLVMContext &Ctx = M.getContext();
+  IRBuilder<> IRB(Ctx);
+  Function *Ctor = Function::Create(
+      FunctionType::get(Type::getVoidTy(Ctx), {}, false),
+      GlobalValue::PrivateLinkage, "__taokari_strenc_anchor_init", &M);
+  Ctor->addMetadata("noobf", *MDNode::get(Ctx, {}));
+  BasicBlock *Enter = BasicBlock::Create(Ctx, "Enter", Ctor);
+  IRB.SetInsertPoint(Enter);
+  IRB.CreateRetVoid();
+  for (CSPEntry *Entry : AnchorImages) {
+    IRB.SetInsertPoint(Ctor->getEntryBlock().getTerminator());
+    Value *PoolBase = resolvePoolBase(IRB, Entry->PoolIndex, false);
+    Value *Data =
+        IRB.CreateInBoundsGEP(IRB.getInt8Ty(), PoolBase,
+                              IRB.getInt32(Entry->Offset));
+    Function *DecFunc = Entry->IsUTF16 ? SharedDecFuncI16 : SharedDecFuncI8;
+    uint32_t KeyElemSize = Entry->IsUTF16
+                               ? static_cast<uint32_t>(Entry->EncKey16.size())
+                               : static_cast<uint32_t>(Entry->EncKey.size());
+    uint32_t DataSize = Entry->IsUTF16
+                            ? static_cast<uint32_t>(Entry->Data16.size())
+                            : static_cast<uint32_t>(Entry->Data.size());
+    Value *Callee = resolveDecryptorCallee(IRB, DecFunc, false);
+    IRB.CreateCall(DecFunc->getFunctionType(), Callee,
+                   {Entry->AncGV, Data, IRB.getInt32(KeyElemSize),
+                    IRB.getInt32(DataSize),
+                    IRB.getInt32(Entry->EncGapBytes), Entry->AncStatus,
+                    IRB.getInt32(Entry->DoneStatus), IRB.getInt32(Entry->ID),
+                    IRB.getInt32(BuildNonce)});
+  }
+  appendToGlobalCtors(M, Ctor, 0);
 }
 
 bool StringEncryption::isValidToEncrypt(GlobalVariable *GV) {

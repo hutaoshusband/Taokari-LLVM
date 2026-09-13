@@ -164,6 +164,7 @@ bool isTaokariGeneratedHelper(const Function &F, bool IncludeOutlinedShards) {
       N.starts_with("__mhf_") ||
       N.starts_with("goron_scrub_string_") ||
       N.starts_with("goron_decrypt_string_") ||
+      N.starts_with("__taokari_strenc_anchor_init") ||
       N.starts_with("__global_variable_initializer_") ||
       N.contains(".cie.shard."))
     return true;
