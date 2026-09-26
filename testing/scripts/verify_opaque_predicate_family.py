@@ -225,7 +225,7 @@ def main() -> int:
 
         ir2 = tmp / "obf-O2.ll"
         must(run_vs([str(clang), str(src), "-O2", "-S", "-emit-llvm",
-                     *OBF_FLAGS, "-o", str(ir2)]),
+                     "-fno-discard-value-names", *OBF_FLAGS, "-o", str(ir2)]),
              "obf -O2 IR build")
         ir2_text = ir2.read_text(encoding="utf-8", errors="ignore")
         sig2 = member_signature_counts(ir2_text)
