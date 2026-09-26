@@ -113,8 +113,8 @@ few passes without copying the whole file.
 | `maxInsts`           | int     | pass-specific | Skip functions larger than this instruction count. |
 | `maxBlocks`          | int     | pass-specific | Skip functions with more basic blocks than this.   |
 | `maxAllocas`         | int     | pass-specific | Skip functions with more allocas than this.        |
-| `probability`        | int 0..100 | `100` | Per-call-site probability.                           |
-| `functionProbability`| int 0..100 | `100` | Per-function probability.                            |
+| `probability`        | int 0..100 | pass default | Per-call-site probability. Unset means the pass default (BCF 35, MBA 40, outline 35, ocnst 35). |
+| `functionProbability`| int 0..100 | 100 (icall)   | Per-function probability. Only indirect call consumes it today; unset means full coverage. |
 
 ### BCF / Flattening
 
@@ -142,13 +142,14 @@ few passes without copying the whole file.
 | `heapDecrypt`      | bool         | `false` | Decrypt into a per-use heap buffer.                  |
 | `reencryptAfterUse`| bool         | `false` | Scrub the plaintext after the consuming call.        |
 | `volatileSeed`     | bool         | `false` | Use a volatile load as the runtime nonce seed.       |
-| `decryptorMba`     | bool         | `false` | L3: rewrite decryptor arithmetic with MBA identities.|
-| `stringDecryptorFlattening` | bool | `false` | L3: flatten the decryptor body.                |
-| `stringDecryptorIndirectCall`| bool| `false` | L3: route decryptor calls through an opaque slot.|
-| `stringShardedPool`| bool         | `false` | L3: split the encrypted pool across multiple globals.|
-| `stringFakePools`  | bool         | `false` | L3: emit decoy pools alongside the real one.         |
-| `stringPageTableAccess`| bool     | `false` | L3: resolve pool base through a page table.          |
-| `stringDelayedDecrypt`| bool      | `false` | L3: per-use alloca + scrub before function return.   |
+| `decryptorMba`     | bool         | `false` | CIE/CFE key: binds `ConstDecryptorMBA` and is a silent no-op under `cse`. |
+| `stringDecryptorMBA`| bool        | `false` | L3: MBA identities in the shared decryptor loop. Auto-fired at `cse.level >= 3`. |
+| `stringDecryptorFlattening` | bool | `false` | L3: flatten the decryptor body. Auto-fired at `cse.level >= 3`. |
+| `stringDecryptorIndirectCall`| bool| `false` | L3: route decryptor calls through an opaque slot. Auto-fired at `cse.level >= 3`. |
+| `stringShardedPool`| bool         | `false` | L3: split the encrypted pool across multiple globals. Auto-fired at `cse.level >= 3`. |
+| `stringFakePools`  | bool         | `false` | L3: emit decoy pools alongside the real one. Auto-fired at `cse.level >= 3`. |
+| `stringPageTableAccess`| bool     | `false` | L3: resolve pool base through a page table. Auto-fired at `cse.level >= 3`. |
+| `stringDelayedDecrypt`| bool      | `false` | L3: per-use alloca + scrub before function return. Auto-fired at `cse.level >= 3`. |
 
 ### Metadata / RTTI
 
@@ -180,16 +181,21 @@ few passes without copying the whole file.
     "enable": true,
     "level": 3,
     "minStringLength": 4,
-    "decryptorMba": true,
-    "decryptorFlattening": true,
-    "decryptorIndirectCall": true,
-    "shardedPool": true,
-    "fakePools": true,
-    "pageTableAccess": true,
-    "delayedDecrypt": true
+    "stringDecryptorMBA": true,
+    "stringDecryptorFlattening": true,
+    "stringDecryptorIndirectCall": true,
+    "stringShardedPool": true,
+    "stringFakePools": true,
+    "stringPageTableAccess": true,
+    "stringDelayedDecrypt": true
   }
 }
 ```
+
+`cse.level >= 3` fires the entire fortress tier even with no explicit knob keys
+(mirroring the `cie` pool auto-enable). Knob bits are plain booleans, so an
+explicit `false` is indistinguishable from unset and is overridden at
+level >= 3; explicit keys opting a knob in below level 3 are honored as-is.
 
 ### Per-function opt-in via annotation
 

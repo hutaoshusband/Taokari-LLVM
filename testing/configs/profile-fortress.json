@@ -42,7 +42,7 @@
     "enable": true,
     "level": 3,
     "minStringLength": 4,
-    "decryptorMba": true,
+    "stringDecryptorMBA": true,
     "stringDecryptorFlattening": true,
     "stringDecryptorIndirectCall": true,
     "stringShardedPool": true,

@@ -350,19 +350,22 @@ static bool isNulPaddedCharArray(const ConstantDataSequential *CDS) {
 bool StringEncryption::runOnModule(Module &M) {
   SmallPtrSet<GlobalVariable *, 16> ConstantStringUsers;
 
-  // Resolve Fortress knobs once. They only take effect at cse level >= 3 so
-  // lower levels keep the proven L2 behavior byte-for-byte.
+  // Resolve Fortress knobs once. Level >= 3 fires the whole tier (matching
+  // the CIE pool auto-enable); explicit keys also compose at lower levels.
+  // A knob bit cannot distinguish explicit false from unset, so level >= 3
+  // overrides it.
   const bool Fortress = ArgsOptions->cseOpt()->level() >= 3;
-  UseDecryptorMBA = Fortress && ArgsOptions->cseOpt()->stringDecryptorMBA();
+  UseDecryptorMBA = ArgsOptions->cseOpt()->stringDecryptorMBA() || Fortress;
   UseDecryptorFlattening =
-      Fortress && ArgsOptions->cseOpt()->stringDecryptorFlattening();
+      ArgsOptions->cseOpt()->stringDecryptorFlattening() || Fortress;
   UseDecryptorIndirectCall =
-      Fortress && ArgsOptions->cseOpt()->stringDecryptorIndirectCall();
-  UseShardedPool = Fortress && ArgsOptions->cseOpt()->stringShardedPool();
-  UseFakePools = Fortress && ArgsOptions->cseOpt()->stringFakePools();
+      ArgsOptions->cseOpt()->stringDecryptorIndirectCall() || Fortress;
+  UseShardedPool = ArgsOptions->cseOpt()->stringShardedPool() || Fortress;
+  UseFakePools = ArgsOptions->cseOpt()->stringFakePools() || Fortress;
   UsePageTableAccess =
-      Fortress && ArgsOptions->cseOpt()->stringPageTableAccess();
-  UseDelayedDecrypt = Fortress && ArgsOptions->cseOpt()->stringDelayedDecrypt();
+      ArgsOptions->cseOpt()->stringPageTableAccess() || Fortress;
+  UseDelayedDecrypt =
+      ArgsOptions->cseOpt()->stringDelayedDecrypt() || Fortress;
 
   // collect all c strings
 

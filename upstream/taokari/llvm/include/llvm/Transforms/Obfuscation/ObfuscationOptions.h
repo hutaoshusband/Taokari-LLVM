@@ -63,7 +63,7 @@ protected:
   uint32_t RandomizeSections = 0;
   std::vector<std::string> ExportAllowlist;
   // StringEncryption Fortress (L3) knobs. Each is an independent bit so the
-  // JSON profile can compose them; the pass only fires them when cse.level>=3.
+  // JSON profile can compose them; cse.level>=3 fires the whole tier.
   uint32_t StringDecryptorMBA = 0;       // MBA in shared decrypt loop
   uint32_t StringDecryptorFlattening = 0;// flatten the shared decryptor body
   uint32_t StringDecryptorIndirectCall = 0; // route decryptor call via page tbl
