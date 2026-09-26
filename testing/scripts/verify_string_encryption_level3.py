@@ -151,7 +151,10 @@ def gate(cond: bool, label: str) -> None:
 
 def has_nonzero_pool_gap(ir: str) -> bool:
   for line in ir.splitlines():
-    if "call void @goron_decrypt_string_i" not in line:
+    # Fortress-tier call sites route through the strenc.deccallee slot
+    # (indirect decryptor knob), so accept both callee spellings.
+    if ("call void @goron_decrypt_string_i" not in line
+            and "call void %strenc.deccallee" not in line):
       continue
     ints = re.findall(r"\bi32 (-?\d+)", line)
     if len(ints) >= 3 and int(ints[2]) > 0:
@@ -179,19 +182,28 @@ def main() -> int:
     plain_run = run([str(plain)])
     must(plain_run, "plain run")
 
-    # 1. polymorphic decryptors: gather decryptor shapes across 8 builds with
-    #    only level=3 (no extra L3 knobs) so variant selection is purely
-    #    nonce-driven.
+    # 1. polymorphic decryptors: nonce-driven variant shapes (0..3: volatile
+    #    status load, inverted branch). Since TK-044 a bare level-3 config
+    #    fires the whole fortress tier including flattening, whose dispatcher
+    #    folds the per-build junk cases away, so gather variant shapes from
+    #    level-2 builds and assert the level-3 tier flattens instead.
     shapes: set[tuple[str, str]] = set()
     for i in range(8):
       cfg = tmp / f"variant_{i}.json"
-      write_cfg(cfg)
+      write_cfg(cfg, level=2)
       ir = emit_ir(src, tmp / f"variant_{i}.ll", cfg)
       bodies = decryptor_bodies(ir)
       shapes.add((bodies["i8"], bodies["i16"]))
       if len(shapes) >= 2:
         break
     gate(len(shapes) >= 2, "polymorphic decryptors: >=2 distinct body shapes")
+    bare3_cfg = tmp / "bare_l3.json"
+    write_cfg(bare3_cfg)
+    bare3_ir = emit_ir(src, tmp / "bare_l3.ll", bare3_cfg)
+    bare3_bodies = decryptor_bodies(bare3_ir)
+    gate(all("unreachabledefault" in bodies for bodies in bare3_bodies.values()
+             if bodies),
+         "bare level-3 decryptors flattened (fortress tier auto-fired)")
 
     # 2-9. each L3 knob in isolation: prove it fires in IR AND keeps stdout
     # identical. Knobs compose at level>=3, so each single-knob config also
