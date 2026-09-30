@@ -111,7 +111,9 @@ def compile_cmd(clang: Path, src: Path, out: Path, opt: str,
                 extra: list[str], emit_ir: bool = False) -> list[str]:
   cmd = [str(clang), str(src), opt, "-o", str(out)]
   if emit_ir:
-    cmd += ["-S", "-emit-llvm"]
+    # Marker gates key on value names; non-asserts builds discard them at
+    # -O2 unless retention is forced.
+    cmd += ["-S", "-emit-llvm", "-fno-discard-value-names"]
   cmd += extra
   return cmd
 
@@ -127,6 +129,70 @@ def fortress_cfg(path: Path, level: int) -> None:
       encoding="utf-8")
 
 
+def split_blocks(ir: str, func_name: str) -> dict[str, list[str]]:
+  """Return {label: [instruction lines]} for one function's body."""
+  m = re.search(rf"define\s+[^{{]*@{re.escape(func_name)}\s*\(", ir)
+  if not m:
+    raise ValueError(f"function @{func_name} not found in IR")
+  body_start = ir.index("{", m.start()) + 1
+  body_end = ir.index("\n}", body_start)
+  blocks: dict[str, list[str]] = {}
+  label = "__entry__"
+  for line in ir[body_start:body_end].splitlines():
+    head = line.strip()
+    m = re.match(r"^([-_a-zA-Z0-9.$]+):\s*(?:;.*)?$", head)
+    if m:
+      label = m.group(1)
+      blocks.setdefault(label, [])
+    elif head and not head.startswith(";"):
+      blocks.setdefault(label, []).append(head)
+  return blocks
+
+
+def preds_of(blocks: dict[str, list[str]], label: str) -> set[str]:
+  preds = set()
+  for pred, lines in blocks.items():
+    for ln in lines:
+      for m in re.finditer(r"label\s+%([-_a-zA-Z0-9.$]+)", ln):
+        if m.group(1) == label:
+          preds.add(pred)
+  return preds
+
+
+def deferred_flush_reaches_ret(blocks: dict[str, list[str]]) -> bool:
+  """True when a flag-guarded deferred scrub sits on a path into a ret.
+
+  Full-coverage flush shape: some block S calls a shared scrub function and
+  branches into a block that returns; S is entered from a conditional branch
+  that loads an entry-placed strenc.scrublive flag. The pre-TK-046 narrowing
+  emitted no scrub at all on non-dominated join returns.
+  """
+  scrub_blocks = {lbl for lbl, lines in blocks.items()
+                  if any("call void @goron_scrub_string_i" in ln
+                         for ln in lines)}
+  ret_blocks = {lbl for lbl, lines in blocks.items()
+                if any(re.search(r"\bret\b", ln) for ln in lines)}
+  for scrub in scrub_blocks:
+    targets = set()
+    for ln in blocks[scrub]:
+      targets.update(m.group(1) for m in
+                     re.finditer(r"label\s+%([-_a-zA-Z0-9.$]+)", ln))
+    if not (targets & ret_blocks):
+      continue
+    for pred in preds_of(blocks, scrub):
+      plines = blocks[pred]
+      if not any(re.search(r"br\s+i1", ln) for ln in plines):
+        continue
+      if not any(re.search(r"load\s+i8,\s+ptr\s+%strenc\.scrublive", ln)
+                 for ln in plines):
+        continue
+      return True
+  return False
+
+
+# TK-046 gates additionally lock the full-coverage deferred flush: an
+# entry-placed strenc.scrublive flag, the use-site live mark, and a
+# flag-guarded scrub chain reaching the non-dominated join return.
 def main() -> int:
   parser = argparse.ArgumentParser()
   parser.add_argument("--clang", default=str(tp.CLANG),
@@ -205,6 +271,28 @@ def main() -> int:
       fort_run = run([str(fort_exe)])
       gate(fort_run.returncode == 0 and fort_run.stdout == expected,
            "cse L3 stdout byte-identical to plain")
+
+    print("fix-lock gates (cse L4 full-coverage deferred flush on the "
+          "non-dominated join return -- TK-046):")
+    l4cfg = tmp / "l4.json"
+    fortress_cfg(l4cfg, 4)
+    l4_ir_path = tmp / "l4.ll"
+    l4_ir_build = run_vs(compile_cmd(
+        clang, src, l4_ir_path, "-O2",
+        ["-mllvm", "-taokari", "-mllvm", "-taokari-cse",
+         f"-mllvm", f"-taokari-cfg={l4cfg}"], emit_ir=True), src.parent)
+    gate(l4_ir_build.returncode == 0, "cse L4 build of the fixture succeeds")
+    l4_ir = l4_ir_path.read_text(encoding="utf-8", errors="ignore")
+    main_blocks = split_blocks(l4_ir, "main")
+    gate(any("strenc.scrublive" in ln and "alloca i8" in ln
+             for lines in main_blocks.values() for ln in lines),
+         "entry-placed strenc.scrublive flag alloca present in main")
+    gate(any(re.search(r"store\s+i8\s+1,\s+ptr\s+%strenc\.scrublive", ln)
+             for lines in main_blocks.values() for ln in lines),
+         "use site marks the temp live (store i8 1 to the flag)")
+    gate(deferred_flush_reaches_ret(main_blocks),
+         "flag-guarded scrub call sits on a path into the join return "
+         "(parent narrowing emits no scrub there)")
 
     print(f"\nPASS ({clang.name})")
     return 0
