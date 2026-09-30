@@ -3,7 +3,6 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/IR/Dominators.h"
 #include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/IRBuilder.h"
@@ -1291,9 +1290,6 @@ bool StringEncryption::processConstantStringUse(Function *F) {
   Type *I32Ty = Type::getInt32Ty(Ctx);
   Type *I64Ty = Type::getInt64Ty(Ctx);
   PointerType *PtrTy = PointerType::getUnqual(Ctx);
-  // L3: delayed-decrypt forces every use onto a scratch buffer that is
-  // scrubbed on dominating exits; conditional use sites reachable past a
-  // non-dominated return leave the buffer unscrubbed there.
   const bool UnsafeNLJ = functionParticipatesInNonLocalJump(*F);
   std::optional<DenseMap<BasicBlock *, ColorVector>> EHColors;
   if (F->hasPersonalityFn() && isScopedEHPersonality(
@@ -1342,7 +1338,14 @@ bool StringEncryption::processConstantStringUse(Function *F) {
         OutBuf = EntryIRB.CreateCall(MallocFn, {EntryIRB.getInt64(Bytes)});
         HeapAllocs.push_back(OutBuf);
       } else {
-        OutBuf = IRB.CreateAlloca(Entry->DecGV->getValueType());
+        IRBuilder<> EntryIRB(&*F->getEntryBlock().getFirstInsertionPt());
+        AllocaInst *Tmp =
+            EntryIRB.CreateAlloca(Entry->DecGV->getValueType());
+        Align A = Entry->SrcGV->getAlign().valueOrOne();
+        if (auto Dec = Entry->DecGV->getAlign())
+          A = std::max(A, *Dec);
+        Tmp->setAlignment(A);
+        OutBuf = Tmp;
       }
     }
     Value *Callee = resolveDecryptorCallee(IRB, DecFunc, UnsafeNLJ);
@@ -1360,8 +1363,7 @@ bool StringEncryption::processConstantStringUse(Function *F) {
   struct DeferredScrub {
     CSPEntry *Entry;
     Value *OutBuf;
-    Value *Data;
-    BasicBlock *UseBlock;
+    AllocaInst *LiveFlag;
   };
   SmallVector<DeferredScrub, 8> DeferredScrubs;
 
@@ -1392,7 +1394,20 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                           Value *Data, bool Temporary) {
     if (Temporary && UseDelayedDecrypt &&
         !canScrubImmediatelyAfter(Inst, OutBuf)) {
-      DeferredScrubs.push_back({Entry, OutBuf, Data, Inst.getParent()});
+      // The buffer holds plaintext only on paths through this use site, so
+      // the per-return flush tests an entry-block live flag: zero-initialized
+      // before any use, set here once the decrypt ran. The flag load and the
+      // scrub's OutBuf (entry-placed alloca) dominate every return
+      // unconditionally and the flush recomputes the pool GEP at the scrub
+      // site, so no dominance reasoning is needed; paths that skipped the
+      // site read zero and never touch the uncreated buffer.
+      IRBuilder<> EntryIRB(&*F->getEntryBlock().getFirstInsertionPt());
+      AllocaInst *LiveFlag = EntryIRB.CreateAlloca(
+          EntryIRB.getInt8Ty(), nullptr, "strenc.scrublive");
+      EntryIRB.CreateStore(EntryIRB.getInt8(0), LiveFlag);
+      IRBuilder<> SiteIRB(&Inst);
+      SiteIRB.CreateStore(SiteIRB.getInt8(1), LiveFlag);
+      DeferredScrubs.push_back({Entry, OutBuf, LiveFlag});
       return;
     }
     Instruction *Next = Inst.getNextNode();
@@ -1544,26 +1559,46 @@ bool StringEncryption::processConstantStringUse(Function *F) {
     }
   }
   if (!DeferredScrubs.empty() || UseHeap) {
-    // Deferred scrubs reference values defined at the (possibly conditional)
-    // use site, so only exit blocks dominated by that site may scrub them.
-    // Exits reachable from the site without passing through it (use inside an
-    // if, return at the join) leave the buffer unscrubbed on those paths -
-    // traded for SSA validity; a dominance-valid full-coverage flag is the
-    // planned follow-up.
-    DominatorTree DT(*F);
-    for (BasicBlock &BB : *F) {
-      auto *Ret = dyn_cast<ReturnInst>(BB.getTerminator());
-      if (!Ret)
-        continue;
-      IRBuilder<> IRB(Ret);
-      for (const DeferredScrub &S : DeferredScrubs) {
-        if (DT.dominates(S.UseBlock, &BB))
-          emitScrubCall(IRB, S.Entry, S.OutBuf, S.Data, true);
-      }
-      if (UseHeap) {
+    SmallVector<ReturnInst *, 8> Rets;
+    for (BasicBlock &BB : *F)
+      if (auto *Ret = dyn_cast<ReturnInst>(BB.getTerminator()))
+        Rets.push_back(Ret);
+    for (ReturnInst *Ret : Rets) {
+      BasicBlock &BB = *Ret->getParent();
+      if (DeferredScrubs.empty()) {
+        IRBuilder<> IRB(Ret);
         for (Value *HeapAlloc : HeapAllocs)
           IRB.CreateCall(FreeFn, {HeapAlloc});
+        continue;
       }
+      BasicBlock *Tail =
+          BasicBlock::Create(Ctx, "strenc.exit", F, BB.getNextNode());
+      Ret->removeFromParent();
+      Ret->insertBefore(*Tail, Tail->end());
+      IRBuilder<> TailIRB(Ret);
+      for (Value *HeapAlloc : HeapAllocs)
+        TailIRB.CreateCall(FreeFn, {HeapAlloc});
+      BasicBlock *Next = Tail;
+      for (auto It = DeferredScrubs.rbegin(); It != DeferredScrubs.rend();
+           ++It) {
+        const DeferredScrub &S = *It;
+        BasicBlock *Check = BasicBlock::Create(Ctx, "strenc.chk", F, Next);
+        BasicBlock *ScrubBB = BasicBlock::Create(Ctx, "strenc.scrub", F, Next);
+        IRBuilder<> ScrubIRB(ScrubBB);
+        ScrubIRB.CreateBr(Next);
+        ScrubIRB.SetInsertPoint(ScrubBB->getFirstInsertionPt());
+        Value *Data = ScrubIRB.CreateInBoundsGEP(
+            ScrubIRB.getInt8Ty(),
+            resolvePoolBase(ScrubIRB, S.Entry->PoolIndex, UnsafeNLJ),
+            ScrubIRB.getInt32(S.Entry->Offset));
+        emitScrubCall(ScrubIRB, S.Entry, S.OutBuf, Data, true);
+        IRBuilder<> CheckIRB(Check);
+        Value *Live = CheckIRB.CreateLoad(CheckIRB.getInt8Ty(), S.LiveFlag);
+        CheckIRB.CreateCondBr(
+            CheckIRB.CreateICmpNE(Live, CheckIRB.getInt8(0)), ScrubBB, Next);
+        Next = Check;
+      }
+      IRBuilder<>(&BB).CreateBr(Next);
     }
   }
   if (Changed)
