@@ -421,6 +421,39 @@ void collectConstantStringUser(GlobalVariable *CString,
   }
 }
 
+bool isNulPaddedCharArray(const ConstantDataSequential *CDS) {
+  if (!CDS->getType()->isArrayTy() || !CDS->getElementType()->isIntegerTy(8))
+    return false;
+  const unsigned N = CDS->getNumElements();
+  if (N < 2 || CDS->getElementAsInteger(N - 1) != 0)
+    return false;
+  unsigned FirstNul = N;
+  for (unsigned I = 0; I < N; ++I) {
+    if (CDS->getElementAsInteger(I) == 0) {
+      FirstNul = I;
+      break;
+    }
+  }
+  if (FirstNul >= N - 1)
+    return false;
+  for (unsigned I = FirstNul; I < N; ++I) {
+    if (CDS->getElementAsInteger(I) != 0)
+      return false;
+  }
+  return true;
+}
+
+bool isStringEncryptionCandidate(const GlobalVariable &GV) {
+  if (!GV.isConstant() || !GV.hasInitializer() ||
+      GV.hasDLLExportStorageClass() || GV.isDLLImportDependent())
+    return false;
+  auto *CDS = dyn_cast<ConstantDataSequential>(GV.getInitializer());
+  if (!CDS)
+    return false;
+  return CDS->isCString() || isNulPaddedCharArray(CDS) ||
+         CDS->getElementType()->isIntegerTy(16);
+}
+
 bool expandConstantExpr(Function &F) {
   bool                Changed = false;
   LLVMContext &       Ctx = F.getContext();

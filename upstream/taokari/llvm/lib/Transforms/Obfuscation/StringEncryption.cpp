@@ -3,6 +3,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/IRBuilder.h"
@@ -320,32 +321,6 @@ struct StringEncryption : public ModulePass {
 } // anonymous namespace
 
 char StringEncryption::ID = 0;
-
-// isCString() rejects arrays with interior NULs, which silently leaves
-// NUL-padded fixed-size char arrays (strncpy expansion, char a[N] = "str")
-// plaintext. The encrypt/decrypt round-trip is byte-exact, so the padding
-// needs no special treatment.
-static bool isNulPaddedCharArray(const ConstantDataSequential *CDS) {
-  if (!CDS->getType()->isArrayTy() || !CDS->getElementType()->isIntegerTy(8))
-    return false;
-  const unsigned N = CDS->getNumElements();
-  if (N < 2 || CDS->getElementAsInteger(N - 1) != 0)
-    return false;
-  unsigned FirstNul = N;
-  for (unsigned I = 0; I < N; ++I) {
-    if (CDS->getElementAsInteger(I) == 0) {
-      FirstNul = I;
-      break;
-    }
-  }
-  if (FirstNul >= N - 1)
-    return false;
-  for (unsigned I = FirstNul; I < N; ++I) {
-    if (CDS->getElementAsInteger(I) != 0)
-      return false;
-  }
-  return true;
-}
 
 bool StringEncryption::runOnModule(Module &M) {
   SmallPtrSet<GlobalVariable *, 16> ConstantStringUsers;
@@ -1317,7 +1292,8 @@ bool StringEncryption::processConstantStringUse(Function *F) {
   Type *I64Ty = Type::getInt64Ty(Ctx);
   PointerType *PtrTy = PointerType::getUnqual(Ctx);
   // L3: delayed-decrypt forces every use onto a scratch buffer that is
-  // scrubbed before the function returns, regardless of the cache path.
+  // scrubbed on dominating exits; conditional use sites reachable past a
+  // non-dominated return leave the buffer unscrubbed there.
   const bool UnsafeNLJ = functionParticipatesInNonLocalJump(*F);
   std::optional<DenseMap<BasicBlock *, ColorVector>> EHColors;
   if (F->hasPersonalityFn() && isScopedEHPersonality(
@@ -1385,6 +1361,7 @@ bool StringEncryption::processConstantStringUse(Function *F) {
     CSPEntry *Entry;
     Value *OutBuf;
     Value *Data;
+    BasicBlock *UseBlock;
   };
   SmallVector<DeferredScrub, 8> DeferredScrubs;
 
@@ -1415,7 +1392,7 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                           Value *Data, bool Temporary) {
     if (Temporary && UseDelayedDecrypt &&
         !canScrubImmediatelyAfter(Inst, OutBuf)) {
-      DeferredScrubs.push_back({Entry, OutBuf, Data});
+      DeferredScrubs.push_back({Entry, OutBuf, Data, Inst.getParent()});
       return;
     }
     Instruction *Next = Inst.getNextNode();
@@ -1567,13 +1544,22 @@ bool StringEncryption::processConstantStringUse(Function *F) {
     }
   }
   if (!DeferredScrubs.empty() || UseHeap) {
+    // Deferred scrubs reference values defined at the (possibly conditional)
+    // use site, so only exit blocks dominated by that site may scrub them.
+    // Exits reachable from the site without passing through it (use inside an
+    // if, return at the join) leave the buffer unscrubbed on those paths -
+    // traded for SSA validity; a dominance-valid full-coverage flag is the
+    // planned follow-up.
+    DominatorTree DT(*F);
     for (BasicBlock &BB : *F) {
       auto *Ret = dyn_cast<ReturnInst>(BB.getTerminator());
       if (!Ret)
         continue;
       IRBuilder<> IRB(Ret);
-      for (const DeferredScrub &S : DeferredScrubs)
-        emitScrubCall(IRB, S.Entry, S.OutBuf, S.Data, true);
+      for (const DeferredScrub &S : DeferredScrubs) {
+        if (DT.dominates(S.UseBlock, &BB))
+          emitScrubCall(IRB, S.Entry, S.OutBuf, S.Data, true);
+      }
       if (UseHeap) {
         for (Value *HeapAlloc : HeapAllocs)
           IRB.CreateCall(FreeFn, {HeapAlloc});

@@ -13,6 +13,10 @@
 #include <random>
 #include <vector>
 
+namespace llvm {
+class ConstantDataSequential;
+}
+
 using namespace llvm;
 
 struct CreatePageTableArgs {
@@ -60,6 +64,11 @@ CallBase *fixEH(CallBase *CB,
 void LowerConstantExpr(Function &F);
 void collectConstantStringUser(GlobalVariable *CString,
                                SmallPtrSetImpl<GlobalVariable *> &Users);
+bool isNulPaddedCharArray(const ConstantDataSequential *CDS);
+// Shape test matching StringEncryption's collection (cstrings, NUL-padded
+// char arrays, UTF-16 arrays). IndirectGlobalVariable must skip exactly this
+// set so cse stays the single owner of string globals.
+bool isStringEncryptionCandidate(const GlobalVariable &GV);
 bool expandConstantExpr(Function &F);
 AllocaInst *createConstantSeedCache(Function &F, std::mt19937_64 &rng,
                                     bool volatileSeed);

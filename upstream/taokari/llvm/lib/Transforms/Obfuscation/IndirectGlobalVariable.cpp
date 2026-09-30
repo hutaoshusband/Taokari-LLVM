@@ -146,15 +146,8 @@ struct IndirectGlobalVariable : public FunctionPass {
 
     if (ArgsOptions->cseOpt()->isEnabled()) {
       for (GlobalVariable &GV : M.globals()) {
-        if (!GV.isConstant() || !GV.hasInitializer() ||
-            GV.hasDLLExportStorageClass() || GV.isDLLImportDependent()) {
+        if (!isStringEncryptionCandidate(GV))
           continue;
-        }
-        auto *CDS = dyn_cast<ConstantDataSequential>(GV.getInitializer());
-        if (!CDS || !(CDS->isCString() ||
-                      CDS->getElementType()->isIntegerTy(16))) {
-          continue;
-        }
         CseStringGVs.insert(&GV);
         collectConstantStringUser(&GV, CseStringGVs);
       }
