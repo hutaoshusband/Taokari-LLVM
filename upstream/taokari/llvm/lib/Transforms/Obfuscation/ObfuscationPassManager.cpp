@@ -352,6 +352,13 @@ static cl::opt<bool> TaokariReport(
              "after -taokari-max / -taokari-cfg / command-line flags are "
              "all merged. No effect on output."));
 
+static cl::opt<std::string> TaokariCoverageReport(
+    "taokari-coverage-report", cl::init(std::string{}), cl::NotHidden,
+    cl::desc("Write a TSV per-pass coverage report to this path. "
+             "DIAGNOSTICS: one row per Taokari pass with scanned, eligible, "
+             "skip-reason and rewritten function counts. Use this to verify "
+             "a pass actually rewrites the functions you expect."));
+
 static cl::opt<std::string>
     ArkariConfigPath("arkari-cfg", cl::init(std::string{}), cl::NotHidden,
                      cl::desc("Arkari config path compatibility alias."));
@@ -616,6 +623,31 @@ struct ObfuscationPassManager : public ModulePass {
       add(llvm::createMetadataHygienePass(Options.get()));
     }
     bool Changed = run(M);
+
+    if (TaokariReport) {
+      taokariForEachPassCoverage([](StringRef Name,
+                                    const TaokariPassCounters &C) {
+        errs() << "taokari-report: " << Name
+               << " scanned=" << C.Scanned
+               << " eligible=" << C.Eligible
+               << " skipped_eh=" << C.SkippedEH
+               << " skipped_annotation=" << C.SkippedAnnotation
+               << " skipped_nlj=" << C.SkippedNLJ
+               << " skipped_std=" << C.SkippedStd
+               << " skipped_noobf=" << C.SkippedNoobf
+               << " rewritten=" << C.Rewritten << "\n";
+      });
+    }
+    if (!TaokariCoverageReport.empty()) {
+      std::error_code EC;
+      raw_fd_ostream OS(TaokariCoverageReport, EC, sys::fs::OF_Text);
+      if (EC) {
+        errs() << "taokari-coverage: failed to write report '"
+               << TaokariCoverageReport << "': " << EC.message() << "\n";
+      } else {
+        taokariWritePassCoverageReport(OS);
+      }
+    }
 
     // Helpers can receive MIR stack-pushing guards; a real frame keeps their
     // spills out of the SysV red zone the guards push over. COFF (Win64) has

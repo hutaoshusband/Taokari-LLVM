@@ -74,13 +74,25 @@ struct OpaqueConstant : public FunctionPass {
   }
 
   bool runOnFunction(Function &F) override {
-    if (F.isDeclaration() || F.isIntrinsic() || F.hasPersonalityFn() ||
-        isTaokariGeneratedHelper(F))
+    auto &Counters = taokariPassCounters("OpaqueConstant");
+    ++Counters.Scanned;
+    if (F.isDeclaration() || F.isIntrinsic())
       return false;
+    if (isTaokariGeneratedHelper(F)) {
+      ++Counters.SkippedNoobf;
+      return false;
+    }
+    // No personality gate: the site filter below skips every terminator, so
+    // no invoke/callbr operand is rewritten, and every inserted chain is
+    // defined and consumed inside a single block. EH functions therefore
+    // gain no cross-block values: WinEHPrepare never spills across funclets
+    // and the .xdata layout is unchanged.
 
     auto Opt = ArgsOptions->toObfuscate(ArgsOptions->ocnstOpt(), &F);
-    if (!Opt.isEnabled())
+    if (!Opt.isEnabled()) {
+      ++Counters.SkippedAnnotation;
       return false;
+    }
 
     const uint32_t Probability =
         OcnstProbability.getNumOccurrences()
@@ -88,8 +100,12 @@ struct OpaqueConstant : public FunctionPass {
             : (Opt.probability() <= 100 ? Opt.probability() : 35);
     const unsigned MinBits =
         OcnstMinBits.getNumOccurrences() ? OcnstMinBits : 16;
-    if (!Probability)
+    if (!Probability) {
+      ++Counters.SkippedAnnotation;
       return false;
+    }
+
+    ++Counters.Eligible;
 
     std::mt19937_64 FuncRNG(RNG());
     auto *Int64 = Type::getInt64Ty(F.getContext());
@@ -147,6 +163,8 @@ struct OpaqueConstant : public FunctionPass {
         Changed = true;
       }
     }
+    if (Changed)
+      ++Counters.Rewritten;
     return Changed;
   }
 };

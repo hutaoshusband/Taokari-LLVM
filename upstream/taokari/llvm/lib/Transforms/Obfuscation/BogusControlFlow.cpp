@@ -56,14 +56,32 @@ struct BogusControlFlow : public FunctionPass {
   StringRef getPassName() const override { return "BogusControlFlow"; }
 
   bool runOnFunction(Function &F) override {
-    if (F.isDeclaration() || F.isIntrinsic() || F.hasPersonalityFn() ||
-        F.getName().starts_with("__taokari_bcf_") ||
-        functionIsStdOrEhRuntime(F) || functionParticipatesInNonLocalJump(F))
+    auto &Counters = taokariPassCounters("BogusControlFlow");
+    ++Counters.Scanned;
+    if (F.isDeclaration() || F.isIntrinsic())
       return false;
+    if (F.hasPersonalityFn()) {
+      ++Counters.SkippedEH;
+      return false;
+    }
+    if (F.getName().starts_with("__taokari_bcf_")) {
+      ++Counters.SkippedNoobf;
+      return false;
+    }
+    if (functionIsStdOrEhRuntime(F)) {
+      ++Counters.SkippedStd;
+      return false;
+    }
+    if (functionParticipatesInNonLocalJump(F)) {
+      ++Counters.SkippedNLJ;
+      return false;
+    }
 
     auto Opt = ArgsOptions->toObfuscate(ArgsOptions->bcfOpt(), &F);
-    if (!Opt.isEnabled())
+    if (!Opt.isEnabled()) {
+      ++Counters.SkippedAnnotation;
       return false;
+    }
 
     const uint32_t Probability =
         BCFProbability.getNumOccurrences()
@@ -74,11 +92,15 @@ struct BogusControlFlow : public FunctionPass {
             ? BCFLoopCount
             : (Opt.loopCount() ? Opt.loopCount()
                                : std::max(1u, Opt.level() + 1));
-    if (!Probability)
+    if (!Probability) {
+      ++Counters.SkippedAnnotation;
       return false;
+    }
 
     if (F.getInstructionCount() > BCFMaxInsts || F.size() > BCFMaxBlocks)
       return false;
+
+    ++Counters.Eligible;
 
     SmallVector<BasicBlock *, 32> Blocks;
     for (BasicBlock &BB : F) {
@@ -97,6 +119,8 @@ struct BogusControlFlow : public FunctionPass {
       Changed |= obfuscateBlock(F, *BB, Opt.level(), Loops, FuncRNG,
                                 *JunkSlot);
     }
+    if (Changed)
+      ++Counters.Rewritten;
     return Changed;
   }
 

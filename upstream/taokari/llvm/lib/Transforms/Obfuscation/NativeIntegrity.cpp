@@ -124,10 +124,14 @@ struct NativeIntegrity : public FunctionPass {
   }
 
   bool runOnFunction(Function &F) override {
+    auto &Counters = taokariPassCounters("NativeIntegrity");
+    ++Counters.Scanned;
     if (F.isDeclaration())
       return false;
-    if (F.getName().starts_with("__taokari_nativeint_"))
+    if (F.getName().starts_with("__taokari_nativeint_")) {
+      ++Counters.SkippedNoobf;
       return false;
+    }
 
     Module &M = *F.getParent();
 
@@ -135,8 +139,10 @@ struct NativeIntegrity : public FunctionPass {
       ModuleHasNonLocalJump = moduleUsesNonLocalJumps(M);
       CheckedModule = &M;
     }
-    if (ModuleHasNonLocalJump)
+    if (ModuleHasNonLocalJump) {
+      ++Counters.SkippedNLJ;
       return false;
+    }
 
     // The prototype runs on functions explicitly marked `+nativeint`,
     // OR (when Taokari Max Protection is enabled) on every non-trivial
@@ -152,18 +158,29 @@ struct NativeIntegrity : public FunctionPass {
         Annotated = true;
         break;
       }
-      if (Annotation.find("-nativeint") != std::string::npos)
+      if (Annotation.find("-nativeint") != std::string::npos) {
+        ++Counters.SkippedAnnotation;
         return false;
+      }
     }
-    if (!Annotated && !MaxMode)
+    if (!Annotated && !MaxMode) {
+      ++Counters.SkippedAnnotation;
       return false;
+    }
     // Skip functions we generated ourselves (the trap exit shim, our
     // own pool globals). AlwaysInline callees would inline the check
     // into every caller, blowing up code size, so skip them too.
     if (F.hasFnAttribute(Attribute::AlwaysInline))
       return false;
-    if (F.hasPersonalityFn() || isTaokariGeneratedHelper(F))
+    if (F.hasPersonalityFn()) {
+      ++Counters.SkippedEH;
       return false;
+    }
+    if (isTaokariGeneratedHelper(F)) {
+      ++Counters.SkippedNoobf;
+      return false;
+    }
+    ++Counters.Eligible;
 
     LLVMContext &Ctx = M.getContext();
     Type *I64 = Type::getInt64Ty(Ctx);
@@ -256,6 +273,7 @@ struct NativeIntegrity : public FunctionPass {
     B.CreateUnreachable();
 
     F.addMetadata("noobf", *MDNode::get(Ctx, {}));
+    ++Counters.Rewritten;
     return true;
   }
 };

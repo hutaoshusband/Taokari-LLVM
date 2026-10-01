@@ -117,6 +117,8 @@ struct Flattening : public FunctionPass {
 } // namespace
 
 bool Flattening::runOnFunction(Function &F) {
+  auto &Counters = taokariPassCounters("Flattening");
+  ++Counters.Scanned;
   if (F.isIntrinsic()) {
     return false;
   }
@@ -125,6 +127,7 @@ bool Flattening::runOnFunction(Function &F) {
 
   for (const auto &annotation : readAnnotate(&F)) {
     if (annotation.find("tao-noobf-fla") != std::string::npos) {
+      ++Counters.SkippedNoobf;
       return result;
     }
   }
@@ -132,10 +135,12 @@ bool Flattening::runOnFunction(Function &F) {
   // Do we obfuscate
   const auto opt = ArgsOptions->toObfuscate(ArgsOptions->flaOpt(), &F);
   if (!opt.isEnabled()) {
+    ++Counters.SkippedAnnotation;
     return result;
   }
   if (flatten(tmp)) {
     ++Flattened;
+    ++Counters.Rewritten;
     F.addFnAttr("taokari-flattened"); //verifier tripwire only; no pass reads it
     result = true;
   }
@@ -144,6 +149,7 @@ bool Flattening::runOnFunction(Function &F) {
 }
 
 bool Flattening::flatten(Function *f) {
+  auto &Counters = taokariPassCounters("Flattening");
   SmallVector<BasicBlock *, 32> origBB;
   const auto flaOpt = ArgsOptions->flaOpt();
   const uint32_t maxInsts =
@@ -168,8 +174,19 @@ bool Flattening::flatten(Function *f) {
   const uint32_t Scale = bcfNoise ? 16 : 1;
 
   if (f->getInstructionCount() > maxInsts * Scale ||
-      f->size() > maxBlocks * Scale || f->hasPersonalityFn() ||
-      functionIsStdOrEhRuntime(*f) || functionParticipatesInNonLocalJump(*f)) {
+      f->size() > maxBlocks * Scale) {
+    return false;
+  }
+  if (f->hasPersonalityFn()) {
+    ++Counters.SkippedEH;
+    return false;
+  }
+  if (functionIsStdOrEhRuntime(*f)) {
+    ++Counters.SkippedStd;
+    return false;
+  }
+  if (functionParticipatesInNonLocalJump(*f)) {
+    ++Counters.SkippedNLJ;
     return false;
   }
 
@@ -235,6 +252,8 @@ bool Flattening::flatten(Function *f) {
   if (origBB.size() <= 1) {
     return false;
   }
+
+  ++Counters.Eligible;
 
   // Remove first BB
   origBB.erase(origBB.begin());

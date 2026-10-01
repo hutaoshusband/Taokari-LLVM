@@ -9,12 +9,15 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/StringRef.h"
 
 #include <random>
 #include <vector>
 
 namespace llvm {
 class ConstantDataSequential;
+class raw_ostream;
 }
 
 using namespace llvm;
@@ -55,6 +58,22 @@ struct BuildDecryptArgs {
   int PtrAuthKey; // -1 = no PAC, 0 = IA (code), 2 = DA (data)
   uint64_t PtrAuthDisc; // ptrauth discriminator
 };
+
+struct TaokariPassCounters {
+  unsigned Scanned = 0;
+  unsigned Eligible = 0;
+  unsigned SkippedEH = 0;
+  unsigned SkippedAnnotation = 0;
+  unsigned SkippedNLJ = 0;
+  unsigned SkippedStd = 0;
+  unsigned SkippedNoobf = 0;
+  unsigned Rewritten = 0;
+};
+
+TaokariPassCounters &taokariPassCounters(StringRef PassName);
+void taokariForEachPassCoverage(
+    function_ref<void(StringRef, const TaokariPassCounters &)> Fn);
+void taokariWritePassCoverageReport(raw_ostream &OS);
 
 IntegerType *getPageTableIntTy(Module &M);
 bool valueEscapes(Instruction *Inst);

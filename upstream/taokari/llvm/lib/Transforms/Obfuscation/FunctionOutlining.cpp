@@ -87,28 +87,44 @@ struct FunctionOutlining : public FunctionPass {
   }
 
   bool runOnFunction(Function &F) override {
+    auto &Counters = taokariPassCounters("FunctionOutlining");
+    ++Counters.Scanned;
     if (F.isDeclaration() || F.isIntrinsic())
       return false;
     if (F.getName().starts_with("__taokari_sh_") ||
-        F.getName().contains(".shard"))
+        F.getName().contains(".shard")) {
+      ++Counters.SkippedNoobf;
       return false;
-    if (F.hasPersonalityFn())
+    }
+    if (F.hasPersonalityFn()) {
+      ++Counters.SkippedEH;
       return false;
+    }
     if (F.isVarArg())
       return false;
-    if (functionIsStdOrEhRuntime(F) || functionParticipatesInNonLocalJump(F))
+    if (functionIsStdOrEhRuntime(F)) {
+      ++Counters.SkippedStd;
       return false;
+    }
+    if (functionParticipatesInNonLocalJump(F)) {
+      ++Counters.SkippedNLJ;
+      return false;
+    }
 
     auto Opt = ArgsOptions->toObfuscate(ArgsOptions->outlineOpt(), &F);
-    if (!Opt.isEnabled())
+    if (!Opt.isEnabled()) {
+      ++Counters.SkippedAnnotation;
       return false;
+    }
 
     const uint32_t Probability =
         OutlineProbability.getNumOccurrences()
             ? OutlineProbability.getValue()
             : (Opt.probability() <= 100 ? Opt.probability() : 35);
-    if (!Probability)
+    if (!Probability) {
+      ++Counters.SkippedAnnotation;
       return false;
+    }
 
     const uint32_t MaxShards = Opt.maxBlocks()
                                    ? Opt.maxBlocks()
@@ -122,6 +138,8 @@ struct FunctionOutlining : public FunctionPass {
     DominatorTree DT(F);
     AssumptionCache AC(F);
     CodeExtractorAnalysisCache CEAC(F);
+
+    ++Counters.Eligible;
 
     SmallVector<BasicBlock *, 32> Candidates;
     for (BasicBlock &BB : F) {
@@ -151,6 +169,8 @@ struct FunctionOutlining : public FunctionPass {
       buildCrossShardPool(F, FuncRNG);
       buildCrossShardStringPool(F, FuncRNG);
     }
+    if (Changed)
+      ++Counters.Rewritten;
     return Changed;
   }
 

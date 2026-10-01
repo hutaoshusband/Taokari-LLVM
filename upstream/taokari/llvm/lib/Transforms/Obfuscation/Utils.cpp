@@ -10,7 +10,9 @@
 #include "llvm/IR/IntrinsicsAArch64.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/IR/CFG.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
@@ -205,6 +207,36 @@ bool functionIsStdOrEhRuntime(const Function &F) {
       N.starts_with("_ZTSNSt"))
     return true;
   return false;
+}
+
+// The legacy PM drives these passes single-threaded per module.
+static StringMap<TaokariPassCounters> TaokariPassCoverage;
+
+TaokariPassCounters &taokariPassCounters(StringRef PassName) {
+  return TaokariPassCoverage[PassName];
+}
+
+void taokariForEachPassCoverage(
+    function_ref<void(StringRef, const TaokariPassCounters &)> Fn) {
+  for (auto &KV : TaokariPassCoverage)
+    Fn(KV.getKey(), KV.getValue());
+}
+
+void taokariWritePassCoverageReport(raw_ostream &OS) {
+  OS << "pass\tscanned\teligible\tskipped_eh\tskipped_annotation\t"
+        "skipped_nlj\tskipped_std\tskipped_noobf\trewritten\n";
+  SmallVector<std::pair<StringRef, const TaokariPassCounters *>, 16> Rows;
+  for (auto &KV : TaokariPassCoverage)
+    Rows.emplace_back(KV.getKey(), &KV.getValue());
+  std::sort(Rows.begin(), Rows.end(),
+            [](const auto &A, const auto &B) { return A.first < B.first; });
+  for (const auto &Row : Rows) {
+    const TaokariPassCounters &C = *Row.second;
+    OS << Row.first << '\t' << C.Scanned << '\t' << C.Eligible << '\t'
+       << C.SkippedEH << '\t' << C.SkippedAnnotation << '\t' << C.SkippedNLJ
+       << '\t' << C.SkippedStd << '\t' << C.SkippedNoobf << '\t'
+       << C.Rewritten << '\n';
+  }
 }
 
 static void emitIntegrityTrap(IRBuilder<> &IRB, Module *M,

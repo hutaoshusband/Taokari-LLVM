@@ -47,11 +47,20 @@ struct ConstantFPEncryption : public FunctionPass {
 
   bool doInitialization(Module &M) override {
     bool Changed = false;
+    auto &Counters = taokariPassCounters("ConstantFPEncryption");
     for (auto &F : M) {
-      if (F.hasPersonalityFn() || isTaokariGeneratedHelper(F))
+      ++Counters.Scanned;
+      if (F.hasPersonalityFn()) {
+        ++Counters.SkippedEH;
         continue;
+      }
+      if (isTaokariGeneratedHelper(F)) {
+        ++Counters.SkippedNoobf;
+        continue;
+      }
       const auto opt = ArgsOptions->toObfuscate(ArgsOptions->cfeOpt(), &F);
       if (!opt.isEnabled()) {
+        ++Counters.SkippedAnnotation;
         continue;
       }
       Changed |= expandConstantExpr(F);
@@ -95,6 +104,7 @@ struct ConstantFPEncryption : public FunctionPass {
   }
 
   bool runOnFunction(Function &F) override {
+    auto &Counters = taokariPassCounters("ConstantFPEncryption");
     const auto opt = ArgsOptions->toObfuscate(ArgsOptions->cfeOpt(), &F);
     if (!opt.isEnabled()) {
       return false;
@@ -103,6 +113,7 @@ struct ConstantFPEncryption : public FunctionPass {
     if (FuncModifyIRs.empty()) {
       return false;
     }
+    ++Counters.Eligible;
     // Effective minimum constant width: built-in floor (8 bits) raised by
     // the user-configured minConstSize. Narrower FP types are skipped.
     const unsigned MinBits = std::max(8u, opt.minConstSize());
@@ -217,6 +228,7 @@ struct ConstantFPEncryption : public FunctionPass {
         }
       }
     }
+    ++Counters.Rewritten;
     return true;
   }
 };

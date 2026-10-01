@@ -1,5 +1,6 @@
 #include "llvm/Transforms/Obfuscation/MBA.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
+#include "llvm/Transforms/Obfuscation/Utils.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -46,19 +47,27 @@ struct MBA : public FunctionPass {
   StringRef getPassName() const override { return "MBA"; }
 
   bool runOnFunction(Function &F) override {
+    auto &Counters = taokariPassCounters("MBA");
+    ++Counters.Scanned;
     if (F.isDeclaration() || F.isIntrinsic())
       return false;
 
     auto Opt = ArgsOptions->toObfuscate(ArgsOptions->mbaOpt(), &F);
-    if (!Opt.isEnabled())
+    if (!Opt.isEnabled()) {
+      ++Counters.SkippedAnnotation;
       return false;
+    }
 
     const uint32_t Probability =
         MBAProbability.getNumOccurrences()
             ? MBAProbability
             : (Opt.probability() <= 100 ? Opt.probability() : 40);
-    if (!Probability)
+    if (!Probability) {
+      ++Counters.SkippedAnnotation;
       return false;
+    }
+
+    ++Counters.Eligible;
 
     SmallVector<BinaryOperator *, 16> Candidates;
     for (BasicBlock &BB : F) {
@@ -129,6 +138,8 @@ struct MBA : public FunctionPass {
         break;
       }
     }
+    if (Changed)
+      ++Counters.Rewritten;
     return Changed;
   }
 

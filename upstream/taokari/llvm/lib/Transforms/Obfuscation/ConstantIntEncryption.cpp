@@ -53,11 +53,20 @@ struct ConstantIntEncryption : public FunctionPass {
 
   bool doInitialization(Module &M) override {
     bool Changed = false;
+    auto &Counters = taokariPassCounters("ConstantIntEncryption");
     for (auto &F : M) {
-      if (F.hasPersonalityFn() || isTaokariGeneratedHelper(F))
+      ++Counters.Scanned;
+      if (F.hasPersonalityFn()) {
+        ++Counters.SkippedEH;
         continue;
+      }
+      if (isTaokariGeneratedHelper(F)) {
+        ++Counters.SkippedNoobf;
+        continue;
+      }
       const auto opt = ArgsOptions->toObfuscate(ArgsOptions->cieOpt(), &F);
       if (!opt.isEnabled()) {
+        ++Counters.SkippedAnnotation;
         continue;
       }
       // Effective minimum constant width: built-in floor (8 bits) raised by
@@ -105,6 +114,7 @@ struct ConstantIntEncryption : public FunctionPass {
   }
 
   bool runOnFunction(Function &F) override {
+    auto &Counters = taokariPassCounters("ConstantIntEncryption");
     const auto opt = ArgsOptions->toObfuscate(ArgsOptions->cieOpt(), &F);
     if (!opt.isEnabled()) {
       return false;
@@ -113,6 +123,7 @@ struct ConstantIntEncryption : public FunctionPass {
     if (FuncModifyIRs.empty()) {
       return false;
     }
+    ++Counters.Eligible;
     const unsigned MinBits = std::max(8u, opt.minConstSize());
     // The runtime (volatile) seed is read into a stack-local nonce each call.
     // Across a setjmp/longjmp boundary the nonce can change, so a constant
@@ -508,6 +519,7 @@ struct ConstantIntEncryption : public FunctionPass {
         }
       }
     }
+    ++Counters.Rewritten;
     return true;
   }
 };
