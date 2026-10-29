@@ -1,8 +1,10 @@
 #include "llvm/Transforms/Obfuscation/StringEncryption.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/IRBuilder.h"
@@ -15,6 +17,8 @@
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/Obfuscation/ObfuscationOptions.h"
 #include "llvm/Transforms/Obfuscation/Utils.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/CodeExtractor.h"
 #include "llvm/Transforms/Utils/GlobalStatus.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <algorithm>
@@ -60,6 +64,279 @@ static CallInst *createDecryptorCall(IRBuilder<> &IRB, Value *Callee,
   if (Callee == DecFunc)
     return IRB.CreateCall(DecFunc, Args);
   return IRB.CreateCall(DecFunc->getFunctionType(), Callee, Args);
+}
+
+// CSE helper fortification: the pipeline skip-net exempts the cse helpers by
+// name for every FunctionPass, so their only body coverage is what is baked
+// here at creation. The transforms are FunctionOutlining's fortress trio
+// (layer split + token dispatcher, token-integrity gate, fake call edge)
+// adapted to the helper shapes. Decoration markers per helper: an
+// <name>.ic.tok token global, an <name>.ic.junk unreachable guard block plus
+// an <name>.ic.real body block, and a decoy call edge into an opaque
+// __taokari_sh_ function. Helper names stay untouched (the L1 verifier and
+// the decslot resolution match them).
+static std::string fortShardName(std::mt19937_64 &RNG) {
+  std::string S;
+  raw_string_ostream OS(S);
+  OS << "__taokari_sh_" << format_hex_no_prefix(RNG(), 12, false);
+  OS.flush();
+  return S;
+}
+
+static uint64_t fortNextNonZero(std::mt19937_64 &RNG) {
+  uint64_t K = RNG();
+  while (!K)
+    K = RNG();
+  return K;
+}
+
+static bool helperIsFortified(const Function &F) {
+  for (const BasicBlock &BB : F)
+    if (BB.getName().contains(".ic.junk"))
+      return true;
+  return false;
+}
+
+static Function *fortEmitDecoy(Module &M, FunctionType *FTy,
+                               std::mt19937_64 &RNG) {
+  auto *Fake = Function::Create(FTy, GlobalValue::InternalLinkage,
+                                fortShardName(RNG), M);
+  Fake->addFnAttr(Attribute::NoInline);
+  Fake->addFnAttr(
+      Attribute::getWithUWTableKind(M.getContext(), UWTableKind::Sync));
+  BasicBlock *BB = BasicBlock::Create(M.getContext(), "entry", Fake);
+  IRBuilder<> B(BB);
+  Type *RetTy = FTy->getReturnType();
+  if (RetTy->isVoidTy())
+    B.CreateRetVoid();
+  else
+    B.CreateRet(Constant::getNullValue(RetTy));
+  appendToCompilerUsed(M, {Fake});
+  return Fake;
+}
+
+static void fortAddIntegrityGate(Function &F, std::mt19937_64 &RNG) {
+  Module &M = *F.getParent();
+  auto &Ctx = F.getContext();
+  auto *I64 = Type::getInt64Ty(Ctx);
+  uint64_t Token = fortNextNonZero(RNG);
+  uint64_t Salt = fortNextNonZero(RNG);
+
+  auto *TokenGV = new GlobalVariable(M, I64, false,
+                                     GlobalValue::PrivateLinkage,
+                                     ConstantInt::get(I64, Token),
+                                     F.getName() + ".ic.tok");
+  TokenGV->setAlignment(Align(8));
+
+  BasicBlock &Entry = F.getEntryBlock();
+  Instruction *RealStart = &Entry.front();
+  for (Instruction &I : Entry) {
+    if (isa<AllocaInst>(&I) || I.isDebugOrPseudoInst())
+      continue;
+    RealStart = &I;
+    break;
+  }
+  BasicBlock *Real =
+      Entry.splitBasicBlock(RealStart->getIterator(), F.getName() + ".ic.real");
+  BasicBlock *Junk =
+      BasicBlock::Create(Ctx, F.getName() + ".ic.junk", &F, Real);
+
+  Instruction *OldTerm = Entry.getTerminator();
+  IRBuilder<> B(OldTerm);
+  Value *A = B.CreateAlignedLoad(I64, TokenGV, Align(8), true, "ic.a");
+  Value *Bv = B.CreateAlignedLoad(I64, TokenGV, Align(8), true, "ic.b");
+  auto *SaltC = ConstantInt::get(I64, Salt);
+  Value *L = B.CreateXor(A, SaltC, "ic.l");
+  Value *R = B.CreateXor(Bv, SaltC, "ic.r");
+  Value *Pred = B.CreateICmpEQ(L, R, "ic.p");
+  B.CreateCondBr(Pred, Real, Junk);
+  OldTerm->eraseFromParent();
+
+  IRBuilder<> J(Junk);
+  // A side-effecting re-arm keeps the junk block alive: the post-pipeline
+  // SimplifyCFG cleanup folds an empty unreachable successor into an assume.
+  Value *Rearm = J.CreateAlignedLoad(I64, TokenGV, Align(8), true, "ic.rl");
+  J.CreateAlignedStore(Rearm, TokenGV, Align(8), true);
+  J.CreateUnreachable();
+  appendToCompilerUsed(M, {TokenGV});
+}
+
+static void fortAddFakeCallEdge(Module &M, Function &F,
+                                std::mt19937_64 &RNG) {
+  Function *Fake = fortEmitDecoy(M, F.getFunctionType(), RNG);
+  BasicBlock &Entry = F.getEntryBlock();
+  IRBuilder<> B(&Entry, Entry.getFirstInsertionPt());
+  SmallVector<Value *, 8> Args;
+  for (Argument &A : F.args())
+    Args.push_back(&A);
+  B.CreateCall(Fake, Args);
+}
+
+static bool fortHasOutlinableTail(BasicBlock &BB) {
+  if (BB.empty() || BB.isEHPad())
+    return false;
+  if (isa<PHINode>(BB.begin()))
+    return false;
+  auto *Term = BB.getTerminator();
+  if (!Term)
+    return false;
+  if (auto *Br = dyn_cast<BranchInst>(Term)) {
+    if (!Br->isUnconditional())
+      return false;
+  } else if (!isa<ReturnInst>(Term)) {
+    return false;
+  }
+  uint32_t Size = 0;
+  for (Instruction &I : BB) {
+    if (I.isTerminator() || I.isDebugOrPseudoInst())
+      continue;
+    ++Size;
+  }
+  return Size >= 4;
+}
+
+static void fortWrapWithDispatcher(Module &M, Function &Parent,
+                                   Function *Sub, std::mt19937_64 &RNG) {
+  CallInst *CallToSub = nullptr;
+  for (BasicBlock &BB : Parent)
+    for (Instruction &I : BB)
+      if (auto *CI = dyn_cast<CallInst>(&I))
+        if (CI->getCalledFunction() == Sub && !CallToSub)
+          CallToSub = CI;
+  if (!CallToSub)
+    return;
+
+  auto &Ctx = M.getContext();
+  auto *I32 = Type::getInt32Ty(Ctx);
+  auto *FTy = Sub->getFunctionType();
+  Function *Fake = fortEmitDecoy(M, FTy, RNG);
+
+  SmallVector<Type *, 8> DispArgTys;
+  DispArgTys.push_back(I32);
+  for (Type *Ty : FTy->params())
+    DispArgTys.push_back(Ty);
+  auto *DispFTy =
+      FunctionType::get(FTy->getReturnType(), DispArgTys, false);
+  auto *Disp = Function::Create(DispFTy, GlobalValue::InternalLinkage,
+                                fortShardName(RNG), M);
+  Disp->addFnAttr(Attribute::NoInline);
+  Disp->addFnAttr(Attribute::getWithUWTableKind(Ctx, UWTableKind::Sync));
+  BasicBlock *DispEntry = BasicBlock::Create(Ctx, "entry", Disp);
+  BasicBlock *RealBB = BasicBlock::Create(Ctx, "real", Disp);
+  BasicBlock *FakeBB = BasicBlock::Create(Ctx, "fake", Disp);
+
+  Argument *TokenArg = Disp->getArg(0);
+  uint32_t RealToken = RNG() & 0xffff;
+  IRBuilder<> DE(DispEntry);
+  Value *DPred =
+      DE.CreateICmpEQ(TokenArg, ConstantInt::get(I32, RealToken), "disp.tok");
+  DE.CreateCondBr(DPred, RealBB, FakeBB);
+
+  IRBuilder<> RB(RealBB);
+  SmallVector<Value *, 8> RealArgs;
+  for (unsigned A = 1; A < Disp->arg_size(); ++A)
+    RealArgs.push_back(Disp->getArg(A));
+  Value *RealRes = RB.CreateCall(Sub, RealArgs);
+  if (FTy->getReturnType()->isVoidTy())
+    RB.CreateRetVoid();
+  else
+    RB.CreateRet(RealRes);
+
+  IRBuilder<> FKB(FakeBB);
+  SmallVector<Value *, 8> FakeArgs(RealArgs);
+  Value *FakeRes = FKB.CreateCall(Fake, FakeArgs);
+  if (FTy->getReturnType()->isVoidTy())
+    FKB.CreateRetVoid();
+  else
+    FKB.CreateRet(FakeRes);
+  appendToCompilerUsed(M, {Disp});
+
+  SmallVector<Value *, 8> NewArgs;
+  NewArgs.push_back(ConstantInt::get(I32, RealToken));
+  for (unsigned A = 0; A < CallToSub->arg_size(); ++A)
+    NewArgs.push_back(CallToSub->getArgOperand(A));
+  IRBuilder<> CB(CallToSub);
+  CallInst *NewCall = CB.CreateCall(Disp, NewArgs, CallToSub->getName());
+  NewCall->setCallingConv(CallToSub->getCallingConv());
+  CallToSub->replaceAllUsesWith(NewCall);
+  CallToSub->eraseFromParent();
+}
+
+static void fortSplitIntoLayers(Function &F, std::mt19937_64 &RNG) {
+  BasicBlock *Best = nullptr;
+  uint32_t BestSize = 0;
+  for (BasicBlock &BB : F) {
+    if (!fortHasOutlinableTail(BB))
+      continue;
+    uint32_t S = 0;
+    for (Instruction &I : BB) {
+      if (I.isTerminator() || I.isDebugOrPseudoInst())
+        continue;
+      ++S;
+    }
+    if (S > BestSize) {
+      BestSize = S;
+      Best = &BB;
+    }
+  }
+  if (!Best)
+    return;
+  BasicBlock *BB = Best;
+
+  Instruction *Anchor = nullptr;
+  Instruction *SplitPt = nullptr;
+  for (Instruction &I : *BB) {
+    if (I.isTerminator() || I.isDebugOrPseudoInst() || isa<AllocaInst>(&I))
+      continue;
+    if (!Anchor) {
+      Anchor = &I;
+      continue;
+    }
+    SplitPt = &I;
+    break;
+  }
+  if (!SplitPt)
+    return;
+
+  DominatorTree DT(F);
+  AssumptionCache AC(F);
+  CodeExtractorAnalysisCache CEAC(F);
+  BasicBlock *Tail =
+      SplitBlock(BB, SplitPt, &DT, nullptr, nullptr,
+                 BB->getName() + ".layer.tail");
+  if (!Tail)
+    return;
+
+  SmallVector<BasicBlock *, 1> Blocks{Tail};
+  CodeExtractor Ext(Blocks, &DT, false, nullptr, nullptr, &AC, false, false,
+                    nullptr, ".layer", false);
+  if (!Ext.isEligible()) {
+    MergeBlockIntoPredecessor(Tail, nullptr, nullptr, nullptr, nullptr, false,
+                              &DT);
+    return;
+  }
+  Function *Sub = Ext.extractCodeRegion(CEAC);
+  if (!Sub) {
+    if (Tail->getParent())
+      MergeBlockIntoPredecessor(Tail, nullptr, nullptr, nullptr, nullptr,
+                                false, &DT);
+    return;
+  }
+  Sub->setLinkage(GlobalValue::InternalLinkage);
+  Sub->addFnAttr(Attribute::NoInline);
+  Sub->addFnAttr(
+      Attribute::getWithUWTableKind(Sub->getContext(), UWTableKind::Sync));
+  Sub->setName(fortShardName(RNG));
+
+  fortWrapWithDispatcher(*F.getParent(), F, Sub, RNG);
+}
+
+static void fortifyCseHelper(Module &M, Function &F, std::mt19937_64 &RNG) {
+  if (F.isDeclaration() || F.empty() || helperIsFortified(F))
+    return;
+  fortSplitIntoLayers(F, RNG);
+  fortAddIntegrityGate(F, RNG);
+  fortAddFakeCallEdge(M, F, RNG);
 }
 
 static uint32_t deriveStringMix(uint32_t BuildNonce, unsigned Shift,
@@ -457,18 +734,27 @@ bool StringEncryption::runOnModule(Module &M) {
       UseDecryptorFlattening
           ? (DecryptorVariantCount + (BuildNonce >> 6) % 2)
           : ((BuildNonce >> 6) % DecryptorVariantCount);
-  if (hasI8Strings)
+  if (hasI8Strings) {
     SharedDecFuncI8 = buildSharedDecryptFunction(
-        &M, false, I8Variant, UseDecryptorMBA, UseDecryptorFlattening, BuildNonce);
-  if (hasI16Strings)
+        &M, false, I8Variant, UseDecryptorMBA, UseDecryptorFlattening,
+        BuildNonce);
+    fortifyCseHelper(M, *SharedDecFuncI8, RNG);
+  }
+  if (hasI16Strings) {
     SharedDecFuncI16 =
         buildSharedDecryptFunction(&M, true, I16Variant, UseDecryptorMBA,
                                    UseDecryptorFlattening, BuildNonce);
+    fortifyCseHelper(M, *SharedDecFuncI16, RNG);
+  }
   if (ArgsOptions->cseOpt()->stringReencryptAfterUse() || UseDelayedDecrypt) {
-    if (hasI8Strings)
+    if (hasI8Strings) {
       SharedScrubFuncI8 = buildSharedScrubFunction(&M, false);
-    if (hasI16Strings)
+      fortifyCseHelper(M, *SharedScrubFuncI8, RNG);
+    }
+    if (hasI16Strings) {
       SharedScrubFuncI16 = buildSharedScrubFunction(&M, true);
+      fortifyCseHelper(M, *SharedScrubFuncI16, RNG);
+    }
   }
 
   for (CSPEntry *Entry : ConstantStringPool) {
@@ -1823,6 +2109,7 @@ void StringEncryption::emitAnchorInitCtor(Module &M) {
                     IRB.getInt32(Entry->DoneStatus), IRB.getInt32(Entry->ID),
                     IRB.getInt32(BuildNonce)});
   }
+  fortifyCseHelper(M, *Ctor, RNG);
   appendToGlobalCtors(M, Ctor, 0);
 }
 

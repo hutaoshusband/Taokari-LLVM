@@ -203,6 +203,7 @@ RELEASE_GATES = [
     ReleaseGate("fla_bcf_noise_exemption", TESTING / "scripts" / "verify_fla_bcf_noise_exemption.py"),
     ReleaseGate("bcf_junk_dominance", TESTING / "scripts" / "verify_bcf_junk_dominance.py"),
     ReleaseGate("ra_basic_flag", TESTING / "scripts" / "verify_ra_basic_flag.py"),
+    ReleaseGate("cse_helper_fortification", TESTING / "scripts" / "verify_cse_helper_fortification.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
