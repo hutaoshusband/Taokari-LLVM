@@ -16,6 +16,7 @@ REM __attribute__((noinline, annotate("+vmp"))) and re-running this
 REM script (the Phase 1 budget caps refuse runaway functions for you).
 REM
 REM Set TAOKARI_SKIP_CLANG_REFRESH=1 to reuse the existing local clang.
+REM Set TAOKARI_FAST_CODEGEN=1 for faster iteration with larger binaries.
 
 set "ROOT=%~dp0"
 set "ROOT=%ROOT:~0,-1%"
@@ -26,6 +27,8 @@ set "JOBS=%NUMBER_OF_PROCESSORS%"
 set "OUTDIR=%ROOT%\build\strong"
 set "SRC=%~1"
 set "CFG=%OUTDIR%\strong_config.json"
+set "CODEGEN_FLAGS="
+if "%TAOKARI_FAST_CODEGEN%"=="1" set "CODEGEN_FLAGS=-mllvm -optimize-regalloc=0 -mllvm -disable-peephole -mllvm -disable-branch-fold -mllvm -disable-block-placement -Wl,/STACK:16777216"
 
 if "%JOBS%"=="" set "JOBS=24"
 
@@ -88,7 +91,7 @@ set "T0=%TIME%"
 echo.
 echo Building Strong blanket binary (Tier B)...
 echo Source: %SRC%
-"%CLANG%" -O2 "%SRC%" -o "%EXE%" ^
+"%CLANG%" -O2 %CODEGEN_FLAGS% "%SRC%" -o "%EXE%" ^
   -fno-ident ^
   -ffile-prefix-map="%ROOT%"=. ^
   -fdebug-prefix-map="%ROOT%"=. ^
@@ -123,7 +126,7 @@ echo Compile time: %ELAPSED% seconds (budget %BUDGET%s)
 if %ELAPSED% GTR %BUDGET% (
   echo build_strong.bat: COMPILE BUDGET EXCEEDED. %ELAPSED%s ^> %BUDGET%s budget.
   echo Re-running with -mllvm -time-passes to isolate the slow pass...
-  "%CLANG%" -O2 "%SRC%" -o "%EXE%" ^
+  "%CLANG%" -O2 %CODEGEN_FLAGS% "%SRC%" -o "%EXE%" ^
     -fno-ident ^
     -ffile-prefix-map="%ROOT%"=. ^
     -fdebug-prefix-map="%ROOT%"=. ^

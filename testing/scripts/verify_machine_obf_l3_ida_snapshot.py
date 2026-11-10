@@ -245,6 +245,12 @@ def compile_pair(fix: Fixture, tmp: Path) -> tuple[Path, Path]:
                 "-mllvm", "-verify-machineinstrs",
                 "-o", str(obf)]
     must(run_vs(obf_cmd, tmp), f"{fix.name} obfuscated compile")
+    plain_run = run([str(plain)], cwd=tmp, timeout=15)
+    obf_run = run([str(obf)], cwd=tmp, timeout=15)
+    must(plain_run, f"{fix.name} plain runtime")
+    must(obf_run, f"{fix.name} obfuscated runtime")
+    if (plain_run.stdout, plain_run.stderr) != (obf_run.stdout, obf_run.stderr):
+        raise SystemExit(f"[{fix.name}] runtime output differs from native")
     return plain, obf
 
 

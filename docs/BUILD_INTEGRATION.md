@@ -70,8 +70,10 @@ Two reference `.bat` recipes ship in the repo root:
 `build_fortress.bat` is **not** a separate script: "Fortress" is the Tier D
 shape — `build_max_protection.bat` with more `+vmp` annotations and higher
 per-function VMP budgets. Use `profile-fortress.json` (via `-taokari-cfg`)
-for the all-on config. Each script enforces compile-time + size budget caps
-and refuses runaway functions, so they cannot freeze the engine.
+for the all-on config. `build_strong.bat` enforces its compile-time budget;
+the VMP passes enforce per-function bytecode and back-edge budgets. The max
+script reports elapsed time. These controls do not guarantee a whole-project
+compile-time or binary-size ceiling.
 
 ## `+vmp` / `-vmp` annotation examples
 
@@ -90,13 +92,14 @@ __attribute__((noinline, annotate("-vmp")))
 int fast_path(int x) { return x + 1; }
 
 // Set a per-function VMP bytecode-word budget override:
-__attribute__((noinline, annotate("+vmp ^vmp=8192")))
+__attribute__((noinline, annotate("+vmp vmp-budget=8192")))
 int big_secret(int x) { /* ... */ }
 ```
 
-Combine with `-mllvm -taokari -mllvm -taokari-vmp` (or
-`profile-vmp-spear.json`) so the VM is armed but only `+vmp`-annotated
-functions are virtualized.
+Combine with `-mllvm -taokari` or `profile-vmp-spear.json` for annotation-based
+selection. `-taokari-vmp` enables VMP globally for eligible functions; it does
+not restrict virtualization to `+vmp` annotations. Under `-taokari-max`, use
+`-taokari-max-no-vmp` plus selected `+vmp` annotations for targeted coverage.
 
 See `docs/CONFIGURATION.md` for the full flag reference and the
 `testing/configs/profile-*.json` files for ready-made profiles.

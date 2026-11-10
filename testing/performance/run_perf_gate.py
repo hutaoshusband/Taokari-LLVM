@@ -104,6 +104,11 @@ def measure(harness, clang, case, level: int, rounds: int, samples: int) -> dict
         o_sizes.append(obf_exe.stat().st_size)
         if i == 0:
             o_best, _ = run_best(harness, obf_exe, rounds, ref)
+        else:
+            # Fresh RNG keys can expose failures in any sample. Validate it
+            # before the next compile overwrites this executable; keep the
+            # first sample's runtime measurement for baseline compatibility.
+            run_best(harness, obf_exe, 1, ref)
     o_compile = statistics.median(o_compiles)
     o_size = statistics.median(o_sizes)
     return {
@@ -115,6 +120,22 @@ def measure(harness, clang, case, level: int, rounds: int, samples: int) -> dict
 
 
 def self_test() -> int:
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    # A bad later RNG sample must fail before a benchmark can accept it.
+    good = subprocess.CompletedProcess([], 0, "same\n", "")
+    bad = subprocess.CompletedProcess([], 7, "wrong\n", "")
+    harness = SimpleNamespace(run=Mock(side_effect=[good, good, bad]))
+    with patch.object(sys.modules[__name__], "compile_case",
+                      return_value=(Path(__file__), 1.0)):
+        try:
+            measure(harness, None, None, 4, rounds=1, samples=2)
+        except RuntimeError as exc:
+            assert "output mismatch" in str(exc)
+        else:
+            raise AssertionError("later randomized sample was not checked")
+
     assert norm("ptr 0x7ff61234ab90 end") == "ptr 0xADDR end"
     assert norm("no addresses here")
     assert within(1.30, 1.0, 0.30) and not within(1.31, 1.0, 0.30)

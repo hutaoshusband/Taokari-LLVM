@@ -95,6 +95,7 @@ def main() -> int:
         # the allocator.
         objs = {}
         for tag, extra in (("obf_def1", OBF), ("obf_def2", OBF),
+                           ("annotation_only", ["-mllvm", "-taokari"]),
                            ("obf_off", [*OBF, *OFF]),
                            ("obf_greedy", [*OBF, *GREEDY]),
                            ("plain_def", []), ("plain_off", OFF),
@@ -103,6 +104,7 @@ def main() -> int:
 
         for a, b, must_differ, why in (
             ("obf_def1", "obf_def2", False, "backend not self-consistent (default objects differ)"),
+            ("obf_def1", "annotation_only", False, "annotation-only master switch lost the basic allocator"),
             ("obf_def1", "obf_off", True, "obfuscated default object identical to ra-basic=0 (allocator unchanged?)"),
             ("obf_off", "obf_greedy", False, "-regalloc=greedy object differs from ra-basic=0 (override lost?)"),
             ("plain_def", "plain_off", False, "plain default object differs from plain ra-basic=0"),

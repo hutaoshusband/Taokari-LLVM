@@ -29,6 +29,7 @@ REM     codegen pass.
 REM   - Set TAOKARI_SKIP_CLANG_REFRESH=1 to skip the local clang rebuild
 REM     step and reuse the existing local clang. Useful when the obfuscator
 REM     source has not changed.
+REM   - Set TAOKARI_FAST_CODEGEN=1 for faster iteration with larger binaries.
 REM   - `-Wl,/DEBUG:NONE` strips CodeView/PDB so the binary carries no debug
 REM     info that would defeat obfuscation.
 
@@ -41,6 +42,8 @@ set "JOBS=%NUMBER_OF_PROCESSORS%"
 set "OUTDIR=%ROOT%\build\max-protection"
 set "SRC=%~1"
 set "CFG=%OUTDIR%\max_protection_config.json"
+set "CODEGEN_FLAGS="
+if "%TAOKARI_FAST_CODEGEN%"=="1" set "CODEGEN_FLAGS=-mllvm -optimize-regalloc=0 -mllvm -disable-peephole -mllvm -disable-branch-fold -mllvm -disable-block-placement -Wl,/STACK:16777216"
 
 if "%JOBS%"=="" set "JOBS=24"
 
@@ -102,7 +105,7 @@ echo.
 echo Building Max protection binary...
 echo Source: %SRC%
 set "T0=%TIME%"
-"%CLANG%" -O2 "%SRC%" -o "%EXE%" ^
+"%CLANG%" -O2 %CODEGEN_FLAGS% "%SRC%" -o "%EXE%" ^
   -fno-ident ^
   -ffile-prefix-map="%ROOT%"=. ^
   -fdebug-prefix-map="%ROOT%"=. ^

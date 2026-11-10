@@ -9,10 +9,14 @@ roadmap's "Definition of Done" is falsifiable rather than aspirational:
     budget system (dashboard computes per-tier compile + size budgets).
   * The roadmap stays bounded (open-checkbox count under a ceiling).
 
-Exit: 0 ok | 1 contract failure.
+The private, git-ignored roadmap is optional in a clean checkout. Public tier
+contracts are still checked when it is absent; roadmap checks report a skip.
+
+Exit: 0 ok | 1 contract failure | 2 roadmap absent.
 """
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import sys
 from pathlib import Path
@@ -34,7 +38,9 @@ def _load(path: Path):
 
 
 def main() -> int:
-    text = TODO.read_text(encoding="utf-8")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--roadmap", type=Path, default=TODO)
+    args = parser.parse_args()
 
     recipe = _load(RECIPE)
     if not getattr(recipe, "TIERS", None):
@@ -55,6 +61,12 @@ def main() -> int:
     if len(profiles) < 4:
         print(f"FAIL: only {len(profiles)} profiles (need >=4)", file=sys.stderr)
         return 1
+
+    if not args.roadmap.is_file():
+        print("definition-of-done: public tier contracts checked; "
+              f"roadmap checks skipped (missing {args.roadmap})")
+        return 2
+    text = args.roadmap.read_text(encoding="utf-8")
 
     open_count = sum(1 for line in text.splitlines()
                      if line.strip().startswith("- [ ]"))

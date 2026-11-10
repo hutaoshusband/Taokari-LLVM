@@ -370,7 +370,10 @@ static bool isTaokariHelper(const Function &F) {
 }
 
 bool taokariObfuscationRequested() {
-  return EnableIndirectBr || EnableIndirectCall || EnableIndirectGV ||
+  // The master switch also covers annotation-only recipes. Codegen and late
+  // cleanup must recognize them even without a global per-pass enable flag.
+  return EnableIRObfuscation || EnableIndirectBr || EnableIndirectCall ||
+         EnableIndirectGV ||
          EnableIRFlattening || EnableIRStringEncryption ||
          EnableIRConstantIntEncryption || EnableIRConstantFPEncryption ||
          EnableBogusControlFlow || EnableMBA || EnableOutline || EnableDyn ||

@@ -38,6 +38,7 @@ or by `noobf`.
 | `-mllvm -taokari-ocnst`           | Enable opaque-constant substitution. Rewrites plain integer constants as opaque XOR-of-runtime-values expressions (distinct from `-taokari-cie`, which encrypts via a global pool). The XOR nonce is derived per function from the function identity mixed with a per-build seed, so an identical constant encrypts differently across functions. |
 | `-mllvm -taokari-dyn`             | Enable dynamic anti-reversing checks (off by default; NOT part of `-taokari-max`). |
 | `-mllvm -taokari-ra-basic`        | Register allocator for obfuscated optimized codegen. DEFAULT ON: when Taokari obfuscation is active, optimized codegen uses the basic (priority-based) allocator instead of greedy; plain non-obfuscated builds keep greedy. Disable with `-mllvm -taokari-ra-basic=0`. Measured trade on obfuscated builds: big compile-time win (mba_basic 67s→25s, arith_logic DNF→84s), outputs unchanged, +3..18% binary size, no runtime regression observed (single-run samples, worst +4ms). An explicit `-regalloc=<ra>` override still takes precedence over this flag; `-O0` codegen always uses fast RA as upstream. Under LTO, the linker drives codegen in its own process: forward the flag to the linker (or set `-regalloc=basic` there) or link-time codegen uses greedy. |
+| `-mllvm -taokari-cleanup-max-insts=N` | Budget the final post-obfuscation InstCombine invocation. Functions above N instructions keep their transformed IR and still receive SimplifyCFG/ADCE/GlobalDCE cleanup. Default 4096; 0 restores unlimited combining. Earlier optimization passes and builds without obfuscation options retain their normal pipeline. |
 
 ## Per-function annotations
 
@@ -151,6 +152,13 @@ few passes without copying the whole file.
 | `stringPageTableAccess`| bool     | `false` | L3: resolve pool base through a page table. Auto-fired at `cse.level >= 3`. |
 | `stringDelayedDecrypt`| bool      | `false` | L3: per-use alloca + scrub before function return. Auto-fired at `cse.level >= 3`. |
 
+Temporary string decryption preserves lifetime and pointer identity: escaping
+derived pointers, direct address observations, and parsing calls that capture
+an end pointer (such as `strtol`) retain shared decrypted global storage.
+The strings remain encrypted in the binary. Fortress decryption defers
+scrubbing of safe local pointer aliases until the function exits, so an alias
+can finish reading the plaintext before cleanup.
+
 ### Metadata / RTTI
 
 | Key                | Type         | Default | Notes                                            |
@@ -254,6 +262,43 @@ defaults lives at
 Copy it as a starting point and edit per build.
 
 ## Compile-time cost reference
+
+The final cleanup has its own budget: `-taokari-cleanup-max-insts=4096`
+skips only the post-obfuscation InstCombine invocation on expanded functions
+above that size. BCF + FLA can turn a tiny function into more than 25,000 IR
+instructions; repeatedly simplifying that synthetic CFG caused the UI
+animation stress build to exceed a 180-second limit. With the budget, the
+same protection flags compiled in 30.59 seconds and passed all eight native
+versus protected seed comparisons. CFG and dead-code cleanup still run.
+Set the limit to 0 for diagnostic comparisons with unlimited combining.
+
+For faster local iteration, set `TAOKARI_FAST_CODEGEN=1` before running
+`build_strong.bat` or `build_max_protection.bat`. This adds
+`-mllvm -optimize-regalloc=0`, disables machine peephole, branch folding and
+block placement, and reserves a 16 MiB Windows stack. LLVM keeps the selected
+IR/MIR obfuscation recipe. These optional backend speed settings can produce
+larger binaries and spill frames; the stack reserve covers the observed
+1.13 MiB frame that overflowed the default 1 MiB executable stack. The normal
+build remains unchanged when the variable is unset.
+
+On a frozen post-LTO arithmetic stress module, fast allocation without
+peephole optimization still took 117.76 s, with 85% of backend time in the
+control-flow optimizer. Disabling branch folding moved most remaining time
+into block placement. The complete fast recipe compiled the identical IR in
+17.82 s and matched native output with the larger stack reserve. Its binary
+grew from 8.95 MB to 19.74 MB. These are single Windows samples under concurrent
+validation load, not a production runtime or size recommendation.
+
+A Windows x64 experiment on 2026-11-10 compiled the same frozen, obfuscated
+`arith_logic` IR with all three backends. Basic allocation took 8.21 s
+(718,336-byte EXE), greedy 16.97 s (679,936 bytes), and the fast pipeline
+5.06 s (881,152 bytes). All outputs matched the native fixture. These are
+single samples with other validation jobs running, not universal speed or
+runtime guarantees. The earlier full-compile timing attributed 40% of backend
+pass time to live-interval analysis. The fast pipeline avoids that work, at
+the cost of more spills, larger binaries, and potentially slower execution.
+Use the normal pipeline for release measurements unless the fast option is
+validated against the application's runtime and size budgets.
 
 This section is the authoritative answer to *"which flags cost compile
 time, and which don't?"* All numbers are wall-clock on a representative

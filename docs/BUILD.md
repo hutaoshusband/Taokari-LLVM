@@ -51,8 +51,8 @@ build tree.
 
 ## Build
 
-The driver scripts call Ninja with a focused target list (clang, opt,
-llvm-config) so incremental builds are fast:
+The driver script builds clang, opt, llvm-config, lld and the binary utilities
+needed by the release gates, keeping incremental builds focused:
 
 ```cmd
 scripts\build-clang.cmd
@@ -62,7 +62,7 @@ This runs, in a `VsDevCmd.bat -arch=x64 -host_arch=x64` shell:
 
 ```cmd
 cd /d <repo>\build\taokari-local
-ninja clang opt llvm-config
+ninja clang opt llvm-config lld llvm-ar llvm-nm llvm-objdump llvm-readobj
 ```
 
 The freshly built toolchain lands at:
@@ -74,9 +74,10 @@ build\taokari-local\bin\opt.exe
 build\taokari-local\bin\llvm-config.exe
 ```
 
-Dev builds used for gate verification should also build the LLVM bin
-tools the release gates invoke: `ninja llvm-nm llvm-objdump
-llvm-readobj` (they land in the same `bin\`).
+The archive and inspection tools (`llvm-ar`, `llvm-nm`, `llvm-objdump`,
+`llvm-readobj`) land in the same `bin\`; the driver builds these so static
+library and binary-inspection gates can run instead of skipping or failing
+on missing tools.
 
 ## Verifying the build
 

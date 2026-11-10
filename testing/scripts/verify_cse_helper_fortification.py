@@ -24,8 +24,8 @@ Contract (same source):
   * Runtime parity byte-exact at -O2 (L3 and L1+reencrypt), and no secret
     survives into the -O2 binary in ASCII/UTF-16LE/UTF-16BE.
 
-Inspection levels: block labels need no name flag at -O0; the -O2 gate emits
-IR with -fno-discard-value-names so the same labels are greppable.
+Emit IR with -fno-discard-value-names at every optimization level: release
+clang builds can discard block labels at -O0 too.
 
 pre-fix teeth: gate 1 fails on a pre-TK-048 clang (bare helper bodies).
 Exit: 0 ok | 1 contract failure | 2 missing clang.
@@ -154,11 +154,10 @@ def write_cfg(path: Path, **extra) -> None:
 def emit_ir(src: Path, out: Path, cfg: Path, opt: str) -> str:
   cmd = [
       str(CLANG), str(src), "-std=c++17", opt, "-S", "-emit-llvm",
+      "-fno-discard-value-names",
       "-mllvm", "-taokari", "-mllvm", "-taokari-cse",
       "-mllvm", f"-taokari-cfg={cfg}", "-o", str(out),
   ]
-  if opt != "-O0":
-    cmd.append("-fno-discard-value-names")
   if not tp.IS_WINDOWS:
     cmd += ["-fdeclspec", "-D_GNU_SOURCE"]
   must(run_vs(cmd, src.parent), f"emit IR {out.name}")

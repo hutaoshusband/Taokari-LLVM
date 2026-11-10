@@ -384,6 +384,28 @@ void PassBuilder::invokeOptimizerEarlyEPCallbacks(ModulePassManager &MPM,
   for (auto &C : OptimizerEarlyEPCallbacks)
     C(MPM, Level, Phase);
 }
+
+static cl::opt<unsigned> TaokariCleanupMaxInsts(
+    "taokari-cleanup-max-insts", cl::init(4096),
+    cl::desc("Skip late InstCombine on larger obfuscated functions (0 = unlimited)"));
+
+namespace {
+class TaokariCleanupInstCombinePass
+    : public PassInfoMixin<TaokariCleanupInstCombinePass> {
+public:
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
+    // The ordinary optimization pipeline already combined the original IR.
+    // BCF + flattening can expand a tiny source function into tens of thousands
+    // of instructions; combining that synthetic CFG again can take minutes.
+    // Keep the protection and bound only this optional, post-obfuscation work.
+    if (TaokariCleanupMaxInsts &&
+        F.getInstructionCount() > TaokariCleanupMaxInsts)
+      return PreservedAnalyses::all();
+    return InstCombinePass().run(F, AM);
+  }
+};
+} // namespace
+
 void PassBuilder::invokeOptimizerLastEPCallbacks(ModulePassManager &MPM,
                                                  OptimizationLevel Level,
                                                  ThinOrFullLTOPhase Phase) {
@@ -392,7 +414,10 @@ void PassBuilder::invokeOptimizerLastEPCallbacks(ModulePassManager &MPM,
   MPM.addPass(ObfuscationPassManagerPass());
   FunctionPassManager CleanupFPM;
   CleanupFPM.addPass(SimplifyCFGPass());
-  CleanupFPM.addPass(InstCombinePass());
+  if (taokariObfuscationRequested())
+    CleanupFPM.addPass(TaokariCleanupInstCombinePass());
+  else
+    CleanupFPM.addPass(InstCombinePass());
   CleanupFPM.addPass(ADCEPass());
 
   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(CleanupFPM)));

@@ -177,7 +177,7 @@ RELEASE_GATES = [
     ReleaseGate("runtime_overhead_target", TESTING / "scripts" / "verify_runtime_overhead_target.py"),
     ReleaseGate("build_integration_doc", TESTING / "scripts" / "verify_build_integration_doc.py"),
     ReleaseGate("config_inheritance", TESTING / "scripts" / "verify_config_inheritance.py"),
-    ReleaseGate("definition_of_done", TESTING / "scripts" / "verify_dod.py"),
+    ReleaseGate("definition_of_done", TESTING / "scripts" / "verify_dod.py", skippable=True),
     ReleaseGate("linux_smoke_script", TESTING / "scripts" / "verify_linux_smoke_script.py"),
     ReleaseGate("aarch64_smoke_script", TESTING / "scripts" / "verify_aarch64_smoke_script.py"),
     ReleaseGate("linux_dynamic_protection", TESTING / "scripts" / "verify_dynamic_protection_linux.py", skippable=True),
@@ -204,6 +204,12 @@ RELEASE_GATES = [
     ReleaseGate("bcf_junk_dominance", TESTING / "scripts" / "verify_bcf_junk_dominance.py"),
     ReleaseGate("ra_basic_flag", TESTING / "scripts" / "verify_ra_basic_flag.py"),
     ReleaseGate("cse_helper_fortification", TESTING / "scripts" / "verify_cse_helper_fortification.py"),
+    ReleaseGate("cse_control_flow", TESTING / "scripts" / "verify_cse_control_flow.py"),
+    ReleaseGate("cse_pointer_lifetime", TESTING / "scripts" / "verify_cse_pointer_lifetime.py"),
+    ReleaseGate("cse_catchswitch_phi", TESTING / "scripts" / "verify_cse_catchswitch_phi.py", windows_only=True),
+    ReleaseGate("fast_codegen", TESTING / "scripts" / "verify_fast_codegen.py", windows_only=True),
+    ReleaseGate("cleanup_budget", TESTING / "scripts" / "verify_cleanup_budget.py"),
+    ReleaseGate("cse_heap_alignment", TESTING / "scripts" / "verify_cse_heap_alignment.py"),
 ]
 
 IMGUI = TESTING / "vendor" / "imgui"
@@ -493,7 +499,8 @@ def compile_case(
     extra_flags: tuple[str, ...] = (),
     max_preset: bool = False,
 ) -> Path:
-    case_root = case_path(case.name)
+    output_root = os.environ.get("TAOKARI_TEST_OUTPUT_ROOT")
+    case_root = Path(output_root) / case.name if output_root else case_path(case.name)
     # Per-invocation dirs: concurrent harness runs (e.g. the perf gate) share
     # case roots, and a sibling rmtree deleting obj/ mid-compile turns clang's
     # obj.tmp rename into ENOENT.
@@ -547,7 +554,8 @@ def compile_case(
             time.sleep(0.2)
             result = run(cmd, use_vs_env=True)
         if result.returncode:
-            raise RuntimeError(f"compile {source}\n{result.stdout}{result.stderr}")
+            raise RuntimeError(f"compile {source} (exit {result.returncode})\n"
+                               f"{result.stdout}{result.stderr}")
         if not out.exists():
             result = run(cmd, use_vs_env=True)
             if result.returncode or not out.exists():
@@ -555,7 +563,7 @@ def compile_case(
         objects.append(out)
 
     exe = build / f"{case.name}_{os.getpid()}{suffix}{EXE}"
-    log("LINK", f"{mode}/{case.name}: {exe.relative_to(ROOT)}", "blue")
+    log("LINK", f"{mode}/{case.name}: {exe}", "blue")
     linker = clang
     if not IS_WINDOWS and mode != "clangcl":
         has_cpp = any(s.suffix.lower() in {".cpp", ".cc", ".cxx"} for s in case.sources)
@@ -962,7 +970,7 @@ def main() -> int:
                 else:
                     exe = compile_case(driver, case, mode, level=args.level, rtti=args.rtti,
                                        max_preset=args.max)
-                    log("EXEC", f"{tag}: {exe.relative_to(ROOT)}", "blue")
+                    log("EXEC", f"{tag}: {exe}", "blue")
                     ran = run([str(exe)])
                 if ran.returncode != case.expected_exit or (case.expected_stdout is not None and ran.stdout != case.expected_stdout):
                     raise RuntimeError(

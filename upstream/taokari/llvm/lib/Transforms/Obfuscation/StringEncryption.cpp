@@ -2,6 +2,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/CaptureTracking.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
@@ -361,6 +362,7 @@ static bool isKnownNonCapturingStringFn(Function *F) {
   if (N.starts_with("llvm.memcpy") || N.starts_with("llvm.memmove") ||
       N.starts_with("llvm.memset") || N.starts_with("llvm.memcmp"))
     return true;
+  // strtol/strtoul are intentionally absent: endptr may retain an input alias.
   return N == "printf" || N == "puts" || N == "fputs" || N == "fprintf" ||
          N == "sprintf" || N == "snprintf" || N == "vprintf" ||
          N == "strlen" || N == "strcmp" || N == "strncmp" ||
@@ -368,7 +370,7 @@ static bool isKnownNonCapturingStringFn(Function *F) {
          N == "strcat" || N == "strncat" || N == "strchr" || N == "strrchr" ||
          N == "strstr" || N == "strpbrk" || N == "memcmp" || N == "memcpy" ||
          N == "memmove" || N == "memset" || N == "memchr" || N == "atoi" ||
-         N == "atol" || N == "atoll" || N == "strtol" || N == "strtoul" ||
+         N == "atol" || N == "atoll" ||
          N == "sscanf" || N == "perror" || N == "fopen" || N == "freopen" ||
          N == "stdio_common_vfprintf" || N == "stdio_common_vsprintf";
 }
@@ -388,6 +390,10 @@ static bool callAllowsTemporary(CallBase &CB, Value *GV) {
 }
 
 static bool resultMayEscapeFunction(Instruction &Inst) {
+  // Follow derived pointers as well as direct returns/stores. A GEP feeding
+  // another GEP or a capturing call must retain the global's lifetime.
+  if (Inst.getType()->isPointerTy())
+    return PointerMayBeCaptured(&Inst, /*ReturnCaptures=*/true);
   for (User *U : Inst.users()) {
     if (isa<ReturnInst>(U))
       return true;
@@ -405,13 +411,14 @@ static bool useAllowsFunctionLocalTemporary(Instruction &Inst, Value *GV) {
     return false;
   if (resultMayEscapeFunction(Inst))
     return false;
-  if (auto *SI = dyn_cast<StoreInst>(&Inst)) {
-    Value *Obj = getUnderlyingObject(SI->getPointerOperand());
-    return isa<AllocaInst>(Obj);
-  }
-  if (isa<LoadInst>(&Inst) || isa<CmpInst>(&Inst) ||
-      isa<GetElementPtrInst>(&Inst) || isa<SelectInst>(&Inst) ||
-      isa<PHINode>(&Inst) || isa<PtrToIntInst>(&Inst) ||
+  // Even a local pointer slot may be loaded and returned or captured later.
+  // A store alone does not prove the literal's lifetime is function-local.
+  if (isa<StoreInst>(&Inst))
+    return false;
+  // Address observations must keep the original shared storage identity.
+  // Separate temporary buffers would make repeated ptrtoint/comparison uses
+  // of the same literal disagree even while every buffer is still live.
+  if (isa<LoadInst>(&Inst) || isa<GetElementPtrInst>(&Inst) ||
       isa<BitCastInst>(&Inst) || isa<AddrSpaceCastInst>(&Inst))
     return true;
   if (auto *CB = dyn_cast<CallBase>(&Inst))
@@ -420,6 +427,11 @@ static bool useAllowsFunctionLocalTemporary(Instruction &Inst, Value *GV) {
 }
 
 static bool canScrubImmediatelyAfter(Instruction &Inst, Value *OutBuf) {
+  // Non-capturing calls can still return an alias (strchr, memchr, or a
+  // captures(ret: ...) argument). Its scalar users may encode a pointer,
+  // rather than finish reading it. Keep it live through the deferred scrub.
+  if (Inst.getType()->isPointerTy())
+    return false;
   if (isa<LoadInst>(&Inst) || isa<CmpInst>(&Inst) ||
       isa<AtomicRMWInst>(&Inst) || isa<AtomicCmpXchgInst>(&Inst))
     return true;
@@ -1582,12 +1594,21 @@ bool StringEncryption::processConstantStringUse(Function *F) {
           classifyEHPersonality(F->getPersonalityFn())))
     EHColors.emplace(colorEHFunclets(*F));
   const auto *EHColorMap = EHColors ? &*EHColors : nullptr;
-  const bool UseHeap = opt.stringHeapDecrypt() && !UnsafeNLJ;
+  // A musttail callee runs after this frame is gone. Local plaintext buffers
+  // cannot be passed to it, and cleanup cannot be inserted between its call
+  // and return. Keep encrypted-at-rest globals for these functions instead.
+  const bool HasMustTail = llvm::any_of(instructions(F), [](Instruction &I) {
+    auto *CI = dyn_cast<CallInst>(&I);
+    return CI && CI->isMustTailCall();
+  });
+  const bool UnsafeLocalLifetime = UnsafeNLJ || HasMustTail;
+  const bool UseHeap = opt.stringHeapDecrypt() && !UnsafeLocalLifetime;
   const bool UseStack =
-      !UnsafeNLJ &&
+      !UnsafeLocalLifetime &&
       ((opt.stringLocalStackDecrypt() && !UseHeap) || UseDelayedDecrypt);
   const bool ReencryptAfterUse =
-      !UnsafeNLJ && (opt.stringReencryptAfterUse() || UseDelayedDecrypt);
+      !UnsafeLocalLifetime &&
+      (opt.stringReencryptAfterUse() || UseDelayedDecrypt);
   FunctionCallee MallocFn;
   FunctionCallee FreeFn;
   SmallVector<Value *, 16> HeapAllocs;
@@ -1616,13 +1637,31 @@ bool StringEncryption::processConstantStringUse(Function *F) {
     Value *OutBuf = Entry->DecGV;
     Value *StatusPtr = Entry->DecStatus;
     if (Temporary) {
-      StatusPtr = IRB.CreateAlloca(I32Ty);
+      // The use may be inside a loop. Allocate once per invocation, then
+      // reset at the use site; a non-entry alloca grows the stack each trip.
+      IRBuilder<> EntryIRB(&*F->getEntryBlock().getFirstInsertionPt());
+      StatusPtr = EntryIRB.CreateAlloca(I32Ty, nullptr, "strenc.status");
       IRB.CreateStore(IRB.getInt32(Entry->PendingStatus), StatusPtr);
       if (UseHeap) {
         uint64_t Bytes = DataSize * (Entry->IsUTF16 ? 2ull : 1ull);
+        Align BufferAlign = Entry->SrcGV->getAlign().valueOrOne();
+        if (auto DecAlign = Entry->DecGV->getAlign())
+          BufferAlign = std::max(BufferAlign, *DecAlign);
         IRBuilder<> EntryIRB(&*F->getEntryBlock().getFirstInsertionPt());
-        OutBuf = EntryIRB.CreateCall(MallocFn, {EntryIRB.getInt64(Bytes)});
-        HeapAllocs.push_back(OutBuf);
+        // malloc need not satisfy an explicitly over-aligned source global.
+        // Reserve room to align the plaintext view, but free the raw pointer.
+        Value *Raw = EntryIRB.CreateCall(
+            MallocFn, {EntryIRB.getInt64(Bytes + BufferAlign.value() - 1)});
+        HeapAllocs.push_back(Raw);
+        OutBuf = Raw;
+        if (BufferAlign > Align(1)) {
+          Value *Address = EntryIRB.CreatePtrToInt(Raw, I64Ty);
+          Address = EntryIRB.CreateAdd(
+              Address, EntryIRB.getInt64(BufferAlign.value() - 1));
+          Address = EntryIRB.CreateAnd(
+              Address, EntryIRB.getInt64(~(BufferAlign.value() - 1)));
+          OutBuf = EntryIRB.CreateIntToPtr(Address, PtrTy);
+        }
       } else {
         IRBuilder<> EntryIRB(&*F->getEntryBlock().getFirstInsertionPt());
         AllocaInst *Tmp =
@@ -1665,7 +1704,8 @@ bool StringEncryption::processConstantStringUse(Function *F) {
         Entry->IsUTF16 ? SharedScrubFuncI16 : SharedScrubFuncI8;
     Value *StatusPtr = Temporary ? nullptr : static_cast<Value *>(Entry->DecStatus);
     if (Temporary) {
-      StatusPtr = IRB.CreateAlloca(I32Ty);
+      IRBuilder<> EntryIRB(&*F->getEntryBlock().getFirstInsertionPt());
+      StatusPtr = EntryIRB.CreateAlloca(I32Ty, nullptr, "strenc.scrubstatus");
       IRB.CreateStore(IRB.getInt32(Entry->PendingStatus), StatusPtr);
     }
     fixEH(IRB.CreateCall(ScrubFunc,
@@ -1734,59 +1774,30 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                   dyn_cast<GlobalVariable>(PHI->getIncomingValue(i))) {
             auto Iter1 = CSPEntryMap.find(GV);
             auto Iter2 = CSUserMap.find(GV);
+            // A PHI operand is used on its incoming edge, not in the PHI's
+            // block. Never share the block-local decrypt cache across edges,
+            // or replace all equal incoming operands after initializing just
+            // one predecessor: the other path would read an untouched buffer.
+            Instruction *InsertPoint =
+                PHI->getIncomingBlock(i)->getTerminator();
+            // A catchswitch is both an EH pad and a terminator: no call can
+            // precede it. Initialize the shared buffer in the function entry
+            // instead, where it dominates the edge without a funclet bundle.
+            if (isa<CatchSwitchInst>(InsertPoint))
+              InsertPoint = &*F->getEntryBlock().getFirstInsertionPt();
+            IRBuilder<> IRB(InsertPoint);
             if (Iter2 != CSUserMap.end()) {
-              // GV is a constant string user
               CSUser *User = Iter2->second;
-              if (DecryptedGV.count(GV) > 0) {
-                Inst.replaceUsesOfWith(GV, User->DecGV);
-              } else {
-                Instruction *InsertPoint =
-                    PHI->getIncomingBlock(i)->getTerminator();
-                IRBuilder<> IRB(InsertPoint);
-                fixEH(IRB.CreateCall(User->InitFunc, {User->DecGV}),
-                      EHColorMap);
-                Inst.replaceUsesOfWith(GV, User->DecGV);
-                MaybeDeadGlobalVars.insert(GV);
-                DecryptedGV.insert(GV);
-              }
+              fixEH(IRB.CreateCall(User->InitFunc, {User->DecGV}), EHColorMap);
+              PHI->setIncomingValue(i, User->DecGV);
+              MaybeDeadGlobalVars.insert(GV);
               Changed = true;
             } else if (Iter1 != CSPEntryMap.end()) {
-              // GV is a constant string
               CSPEntry *Entry = Iter1->second;
-              if (DecryptedGV.count(GV) > 0) {
-                Inst.replaceUsesOfWith(GV, Entry->DecGV);
-              } else {
-                Instruction *InsertPoint =
-                    PHI->getIncomingBlock(i)->getTerminator();
-                IRBuilder<> IRB(InsertPoint);
-
-                Value *OutBuf = Entry->DecGV;
-                Value *PoolBase = resolvePoolBase(IRB, Entry->PoolIndex, UnsafeNLJ);
-                Value *Data = IRB.CreateInBoundsGEP(
-                    IRB.getInt8Ty(), PoolBase, IRB.getInt32(Entry->Offset));
-                Function *DecFunc =
-                    Entry->IsUTF16 ? SharedDecFuncI16 : SharedDecFuncI8;
-                uint32_t KeyElemSize =
-                    Entry->IsUTF16
-                        ? static_cast<uint32_t>(Entry->EncKey16.size())
-                        : static_cast<uint32_t>(Entry->EncKey.size());
-                uint32_t DataSize =
-                    Entry->IsUTF16 ? static_cast<uint32_t>(Entry->Data16.size())
-                                   : static_cast<uint32_t>(Entry->Data.size());
-                Value *Callee = resolveDecryptorCallee(IRB, DecFunc, UnsafeNLJ);
-                fixEH(createDecryptorCall(
-                          IRB, Callee, DecFunc,
-                          {OutBuf, Data, IRB.getInt32(KeyElemSize),
-                           IRB.getInt32(DataSize), IRB.getInt32(Entry->EncGapBytes),
-                           Entry->DecStatus,
-                           IRB.getInt32(Entry->DoneStatus), IRB.getInt32(Entry->ID),
-                           IRB.getInt32(BuildNonce)}),
-                      EHColorMap);
-
-                Inst.replaceUsesOfWith(GV, Entry->DecGV);
-                MaybeDeadGlobalVars.insert(GV);
-                DecryptedGV.insert(GV);
-              }
+              Value *Data = nullptr;
+              Value *OutBuf = emitDecrypt(IRB, Entry, Data, false);
+              PHI->setIncomingValue(i, OutBuf);
+              MaybeDeadGlobalVars.insert(GV);
               Changed = true;
             }
           }
@@ -1803,10 +1814,11 @@ bool StringEncryption::processConstantStringUse(Function *F) {
                 Inst.replaceUsesOfWith(GV, User->DecGV);
               } else {
 
-                IRBuilder<> IRB(Inst.isEHPad() ? &*Inst.getParent()
-                                                       ->getPrevNode()
-                                                       ->getFirstInsertionPt()
-                                               : &Inst);
+                Instruction *InsertPoint =
+                    Inst.isEHPad()
+                        ? &*F->getEntryBlock().getFirstInsertionPt()
+                        : &Inst;
+                IRBuilder<> IRB(InsertPoint);
                 fixEH(IRB.CreateCall(User->InitFunc, {User->DecGV}),
                       EHColorMap);
                 Inst.replaceUsesOfWith(GV, User->DecGV);
@@ -1823,10 +1835,11 @@ bool StringEncryption::processConstantStringUse(Function *F) {
               if (CacheGlobal && DecryptedGV.count(GV) > 0) {
                 Inst.replaceUsesOfWith(GV, Entry->DecGV);
               } else {
-                IRBuilder<> IRB(Inst.isEHPad() ? &*Inst.getParent()
-                                                       ->getPrevNode()
-                                                       ->getFirstInsertionPt()
-                                               : &Inst);
+                Instruction *InsertPoint =
+                    Inst.isEHPad()
+                        ? &*F->getEntryBlock().getFirstInsertionPt()
+                        : &Inst;
+                IRBuilder<> IRB(InsertPoint);
 
                 Value *Data = nullptr;
                 Value *OutBuf = emitDecrypt(IRB, Entry, Data, Temporary);

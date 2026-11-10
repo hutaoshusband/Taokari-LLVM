@@ -14,6 +14,10 @@ Each case owns:
 
 The ImGui test uses the vendored source in `testing/vendor/imgui`.
 
+Set `TAOKARI_TEST_OUTPUT_ROOT` to put generated case directories on another
+drive. Set `TEMP` and `TMP` there too to move compiler and release-gate temporary
+files. Source fixtures stay in the repository.
+
 ## Matrix axes
 
 The harness runs every selected case across independent obfuscation axes:
@@ -61,6 +65,11 @@ the +40% tolerance edge; if `--quick` flakes on it, re-run with `--samples 5`.
 `--benchmark-out report.csv` compiles each case plain and obfuscated and records
 compile time, runtime and binary-size overhead.
 
+The performance gate executes every randomized compilation sample before
+accepting its compile-time and size measurements. A correct first sample does
+not mask a miscompile in a later sample. `--self-test` also checks this failure
+path without invoking the compiler.
+
 ## Differential mode
 
 `--diff` compiles a fresh plain baseline per case and compares stdout/stderr/exit
@@ -103,11 +112,30 @@ hardening properties end-to-end. Each runs the locally built clang and exits
   sensitive function.
 - `verify_max_build_no_vmp_hang.py` / `verify_max_build_vmp_budgeted.py` —
   `-taokari-max` builds do not hang (VMP budget caps).
+- `verify_cleanup_budget.py` — verifies large BCF/FLA-expanded atomic-update
+  functions after the budgeted late cleanup, including native-output parity.
+- `verify_cse_control_flow.py` — covers repeated string/aggregate PHI edges,
+  uses after a join, `musttail` exits, and stack growth inside decrypt/scrub
+  loops across randomized builds and both backend optimization levels.
+- `verify_cse_heap_alignment.py` — checks that heap-decrypted strings retain
+  explicit 64-byte alignment and are freed safely across fresh processes.
+- `verify_cse_pointer_lifetime.py` — checks returned/encoded string aliases,
+  repeated literal address observations, `strtol` end pointers, and deferred
+  scrubbing of safe local aliases across fresh builds and both backends.
+- `verify_cse_catchswitch_phi.py` — Windows string/aggregate PHIs on
+  `catchswitch` edges remain verifier-clean and execute real C++ throw/catch
+  paths correctly. This catches invalid EH-pad insertion before codegen.
+- `verify_fast_codegen.py` — the opt-in fast recipes match native output on a
+  frame larger than the default Windows stack, retain encrypted strings and
+  MIR byte signatures, and reserve the configured 16 MiB PE stack.
 - `verify_vmp_full_virtualization.py` / `verify_vmp_dll_load.py` — VMP coverage.
 
 Skippable gate scripts exit 2 when their precondition is absent, so they sit
 harmlessly in CI until the toolchain is ready; the runner treats that as a
 skip. `--gates-only` runs the gate suite without the case-matrix pass.
+The roadmap Definition-of-Done gate checks the public tier contracts, then
+skips the private-roadmap checks if the git-ignored `todo.md` is absent.
+Use `verify_dod.py --roadmap <path>` to validate a separately stored roadmap.
 
 ## MIR Budget
 
